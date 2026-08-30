@@ -15,7 +15,9 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import Engine
 
 from station_api.config import LOOPBACK_HOST, Settings
+from station_api.identity.service import IdentityService
 from station_api.routes import api as api_routes
+from station_api.routes import identity as identity_routes
 from station_api.routes import session as session_routes
 from station_api.security.middleware import (
     CsrfMiddleware,
@@ -122,8 +124,18 @@ def create_app(
     app.state.allowed_hosts = _allowed_hosts(port, settings)
     app.state.allowed_origins = _allowed_origins(port, settings)
 
+    # The identity service needs a database. Without one the identity routes
+    # answer 503 rather than pretending to work.
+    app.state.identity_service = (
+        IdentityService(engine=engine, data_dir=settings.data_dir)
+        if engine is not None
+        else None
+    )
+
     app.include_router(session_routes.router)
     app.include_router(api_routes.router)
+    app.include_router(identity_routes.router)
+    app.include_router(identity_routes.gate_router)
 
     # Registered last so it cannot shadow /api or /session.
     if web_dist is not None:

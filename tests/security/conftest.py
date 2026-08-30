@@ -9,7 +9,6 @@ ever ship in a release (IMP-108).
 from __future__ import annotations
 
 from collections.abc import Iterator
-from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -17,13 +16,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine
 from station_api.app import create_app
 from station_api.config import Settings
-from station_api.db.migrations_runner import initialise_database
 from station_api.logging_setup import clear_secret_registry
 from station_api.security.tokens import BootstrapTokenStore
 
-#: A fixed, plausible ephemeral port. The app only ever compares it against
-#: the Host header; nothing binds it during these tests.
-TEST_PORT = 49731
+from tests.conftest import TEST_PORT
 
 FOREIGN_ORIGIN = "http://evil.example"
 DEV_ORIGIN = "http://127.0.0.1:5173"
@@ -35,32 +31,6 @@ def _reset_secret_registry() -> Iterator[None]:
     clear_secret_registry()
     yield
     clear_secret_registry()
-
-
-@pytest.fixture
-def data_dir(tmp_path: Path) -> Path:
-    return tmp_path / "station-data"
-
-
-@pytest.fixture
-def settings(data_dir: Path) -> Settings:
-    """Production settings. Development mode is off, as it is by default."""
-    return Settings(dev_mode=False, data_dir=data_dir)
-
-
-@pytest.fixture
-def dev_settings(data_dir: Path) -> Settings:
-    return Settings(dev_mode=True, data_dir=data_dir)
-
-
-@pytest.fixture
-def engine(settings: Settings) -> Engine:
-    return initialise_database(settings.database_path, stage=1)
-
-
-@pytest.fixture
-def base_url() -> str:
-    return f"http://127.0.0.1:{TEST_PORT}"
 
 
 @pytest.fixture

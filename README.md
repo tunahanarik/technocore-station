@@ -9,8 +9,9 @@ geçici kayıtlarını yerelde yeniden doğrulanabilir biçimde saklayan
 > Technocore imzayı doğrular; Station canonical metni, alınan kaydı ve
 > kaynağı doğrular.
 
-**Durum: Aşama 1 — güvenli yerel iskelet.** Kimlik, imzalama, Technocore
-bağlantısı ve Evidence özellikleri **henüz yoktur**. Güncel durum:
+**Durum: Aşama 2 — Identity & Recovery.** Kimlik, DPAPI kasası ve `.tcrec`
+recovery çalışıyor. İmzalama, Technocore bağlantısı ve Evidence özellikleri
+**henüz yoktur**; recovery doğrulanmadan dış yazma açılmaz. Güncel durum:
 [`PROJECT_STATUS.md`](PROJECT_STATUS.md).
 
 Ürün bir wallet, token claim uygulaması, airdrop puanlayıcısı, otomatik mesaj
@@ -30,6 +31,9 @@ botu veya kimlik sağlayıcısı **değildir**.
 | [`docs/protocol-contract.md`](docs/protocol-contract.md) | Canonical/sweep/imza sözleşmesi |
 | [`docs/security-invariants.md`](docs/security-invariants.md) | Test edilebilir değişmezler (SI-01…SI-56) |
 | [`docs/evidence-model.md`](docs/evidence-model.md) | Dört seviyeli kanıt modeli |
+| [`docs/identity-lifecycle.md`](docs/identity-lifecycle.md) | Kimlik durum makinesi ve akışlar |
+| [`docs/recovery-format-v1.md`](docs/recovery-format-v1.md) | `.tcrec` biçimi ve AAD sözleşmesi |
+| [`docs/threat-model.md`](docs/threat-model.md) | Savunulan ve **savunulmayan** tehditler |
 | [`docs/decisions/README.md`](docs/decisions/README.md) | ADR indeksi |
 
 ---
@@ -89,6 +93,20 @@ npm --prefix apps/station-web run dev
 `STATION_DEV` **varsayılan olarak kapalıdır ve fail-closed'dur**: yalnız
 `1`, `true`, `yes` veya `on` değerleri açar. Production build dev origin'i
 **kabul etmez**.
+
+## Mevcut resmî seed'i içe aktarma (yalnız yerel CLI)
+
+Web arayüzünde raw seed alanı **yoktur**. Import yalnız kendi terminalinizde
+yapılır; seed ve parola komut satırı argümanı değildir, parolalar `getpass`
+ile alınır.
+
+```bash
+uv run --project apps/station-api python -m station_api.cli import-seed --file C:\yol\seed.txt
+```
+
+Kabul edilen tek biçim: **64 hex karakter** (bare, veya `sign.py keygen`
+çıktısındaki `seed: <hex>` satırı). Paroladan seed türetme **desteklenmez**.
+Kaynak dosya değiştirilmez veya silinmez.
 
 ## Geliştirme komutları
 

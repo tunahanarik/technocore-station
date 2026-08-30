@@ -3,8 +3,23 @@
 > Ana karar kaynağı: [`../Technocore-Station-Proje-Kunyesi.md`](../Technocore-Station-Proje-Kunyesi.md) §11–12.
 > Bu belge künyeyi tekrar etmez; **uygulanan** mimariyi ve paket sınırlarını tarif eder.
 
-Durum: **Aşama 1 — Güvenli yerel iskelet** uygulandı. Identity, conformance,
-Technocore istemcisi ve Evidence katmanları henüz **yoktur**.
+Durum: **Aşama 2 — Identity & Recovery** uygulandı. Conformance (sweep,
+canonical, imza), Technocore istemcisi ve Evidence katmanları henüz
+**yoktur**.
+
+Aşama 2 ile eklenen paketler:
+
+| Paket | Sorumluluk |
+|---|---|
+| `station_api/vault/` | DPAPI kasası, Windows ACL, Argon2id+ChaCha20 iç katman |
+| `station_api/recovery/` | `.tcrec` v1 biçimi |
+| `station_api/identity/` | Yaşam döngüsü servisi ve merkezî write gate |
+| `station_api/cli/` | Yerel seed import (HTTP dışı) |
+| `technocore_conform/did.py` | seed -> public key -> `did:key` ve tersi |
+
+**Secret sınırı:** `station_api/vault/` paketini yalnız `identity` servisi ve
+CLI import eder. Gelecekteki bir LLM/model adaptörü bu paketi import
+edemez; sınır paket sınırıdır.
 
 ---
 

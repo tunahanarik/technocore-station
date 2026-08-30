@@ -1,17 +1,18 @@
 [project]
 name = "technocore-conform"
-version = "0.0.1"
-description = "Technocore canonicalization and signature conformance (Stage 2B - not implemented yet)"
+version = "0.2.0"
+description = "Technocore did:key conformance (signing and canonicalization arrive in Stage 2B)"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = { text = "MIT" }
 
-# Deliberately zero dependencies in Stage 1.
+# Exactly one runtime dependency: cryptography, for Ed25519 key derivation.
 #
 # This package must stay importable without FastAPI, SQLAlchemy, SQLite or any
-# Windows module: station-api depends on it, never the reverse. Stage 2B adds
-# exactly one runtime dependency, cryptography, for Ed25519.
-dependencies = []
+# Windows module: station-api depends on it, never the reverse.
+dependencies = [
+    "cryptography>=44,<47",
+]
 
 [build-system]
 requires = ["hatchling"]

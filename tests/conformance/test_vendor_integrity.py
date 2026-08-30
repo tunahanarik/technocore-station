@@ -126,11 +126,35 @@ def test_no_runtime_module_imports_the_vendor_reference(repo_root: Path) -> None
 
 
 def test_conform_package_has_no_heavy_dependencies(repo_root: Path) -> None:
-    """The package must stay importable without FastAPI, SQLAlchemy or Windows."""
+    """The package must stay importable without FastAPI, SQLAlchemy or Windows.
+
+    Stage 2 added exactly one runtime dependency, ``cryptography``, for
+    Ed25519. Anything that would drag in the application or the platform is
+    still forbidden, which is what keeps this package portable and cheap to
+    differential-test.
+    """
     manifest = (repo_root / "packages" / "technocore-conform" / "pyproject.toml").read_text(
         encoding="utf-8"
     )
-    assert "dependencies = []" in manifest
+    dependencies = manifest.split("dependencies = [", 1)[1].split("]", 1)[0]
+
+    for forbidden in ("fastapi", "sqlalchemy", "alembic", "uvicorn", "pywin32", "station-api"):
+        assert forbidden not in dependencies.lower(), (
+            f"technocore-conform must not depend on {forbidden}"
+        )
+    assert "cryptography" in dependencies
+
+
+def test_conform_package_does_not_import_the_application(repo_root: Path) -> None:
+    """The dependency arrow points one way: station-api -> technocore-conform."""
+    package = repo_root / "packages" / "technocore-conform" / "src"
+    offenders: list[str] = []
+    for path in package.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for forbidden in ("import station_api", "from station_api", "import fastapi", "import sqlalchemy"):
+            if forbidden in text:
+                offenders.append(f"{path.name}: {forbidden}")
+    assert offenders == [], f"conform package reaches into the application: {offenders}"
 
 
 def test_conform_package_is_a_placeholder_in_this_stage() -> None:
