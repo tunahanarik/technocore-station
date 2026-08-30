@@ -1,0 +1,23 @@
+# Line-ending policy for byte-exact artifacts.
+#
+# Two kinds of file in this repository are verified by SHA-256 at runtime, so
+# a single changed byte is a failure by design:
+#
+#   * the pinned official reference, whose exact bytes are recorded in
+#     vendor/technocore-reference/SHA256SUMS;
+#   * the conformance vector bundle, whose digest is pinned in
+#     technocore_conform/selftest.py and checked by the runtime self-test.
+#
+# Git's `core.autocrlf` is `true` by default on Windows - this product's only
+# supported platform - which rewrites LF to CRLF *on checkout*. The blobs in
+# the repository stay correct, but every working tree gets different bytes,
+# and both integrity checks then fail on a fresh clone. The conformance
+# self-test fails closed, so the write gate shuts and the whole feature is
+# dead on a machine that did nothing wrong.
+#
+# `-text` disables all line-ending conversion for these paths. It is scoped
+# deliberately narrowly: everything else keeps the repository's existing
+# behaviour, because only these files have their bytes pinned.
+
+vendor/technocore-reference/** -text
+packages/technocore-conform/src/technocore_conform/vectors/*.json -text
