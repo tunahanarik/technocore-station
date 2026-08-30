@@ -157,14 +157,60 @@ def test_conform_package_does_not_import_the_application(repo_root: Path) -> Non
     assert offenders == [], f"conform package reaches into the application: {offenders}"
 
 
-def test_conform_package_is_a_placeholder_in_this_stage() -> None:
-    """Stage 1 ships the boundary only; no protocol code yet."""
+def test_conform_package_exposes_the_stage_2b_surface() -> None:
+    """Stage 2B delivers the protocol surface this package existed to hold.
+
+    Until Stage 2B this asserted the *absence* of sweep, sign and verify,
+    which was the honest statement while they did not exist. Implementing
+    them is what this stage is; the assertion is inverted rather than
+    dropped, so the surface stays pinned by a test.
+    """
     import technocore_conform
 
     assert technocore_conform.IMPLEMENTED_IN_STAGE == "2B"
     assert technocore_conform.CANONICAL_SEPARATOR == "|"
 
-    for forbidden in ("sweep", "sign", "verify", "did_key", "canonical_message"):
+    for expected in (
+        "sweep",
+        "sweep_message",
+        "sweep_note_value",
+        "canonical_message",
+        "canonical_note",
+        "sign_payload",
+        "verify_payload",
+        "did_key_from_seed",
+        "run_self_test",
+    ):
+        assert hasattr(technocore_conform, expected), f"{expected} is missing"
+        assert expected in technocore_conform.__all__, f"{expected} is not exported"
+
+
+def test_conform_package_exposes_no_arbitrary_signing_shortcut() -> None:
+    """Signing takes a payload, never a bare string.
+
+    A convenience like ``sign_arbitrary_string`` would let a caller sign raw
+    text, which the server refuses and which cannot be re-verified against
+    the bytes on disk.
+    """
+    import technocore_conform
+
+    for forbidden in (
+        "sign_arbitrary_string",
+        "sign_string",
+        "sign_raw",
+        "sign_text",
+        "sign_message",
+    ):
         assert not hasattr(technocore_conform, forbidden), (
-            f"{forbidden} implemented early; it belongs to Stage 2B"
+            f"{forbidden} would allow signing text that was never swept"
+        )
+
+
+def test_conform_package_holds_no_nonce_state() -> None:
+    """Nonce allocation and replay defence are Stage 4, not this package."""
+    import technocore_conform
+
+    for forbidden in ("next_nonce", "allocate_nonce", "reserve_nonce", "NonceCounter"):
+        assert not hasattr(technocore_conform, forbidden), (
+            f"{forbidden} is Stage 4 scope; this package keeps no state"
         )

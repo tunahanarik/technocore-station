@@ -6,12 +6,14 @@ import type { IdentityStatus } from "../api/types";
 import { StatusPill, type StatusTone } from "../components/StatusPill";
 
 /**
- * Compose & Verify, Stage 2: still locked, but now locked by the *real*
+ * Compose & Verify, Stage 2B: still locked, and still locked by the *real*
  * write gate rather than by a hardcoded list.
  *
- * The lock is not decorative. There is no text field and no send control,
- * because there is no verified canonicalization engine and no network client
- * yet. Signing without those would produce a record that cannot be
+ * Stage 2B built the canonicalization engine, so that half of the lock has
+ * lifted. The surface stays closed anyway, and deliberately: there is no
+ * network client, and nothing yet detects the live server drifting off the
+ * pinned protocol. There is no text field and no send control, because
+ * signing without drift detection would produce a record that cannot be
  * re-verified against the bytes the server stores.
  */
 
@@ -75,6 +77,7 @@ export function ComposeVerifyPage() {
               imzalama ve gonderme yollari acilmaz. Bu bilincli bir fail-closed
               davranistir: dogrulanmamis bir uygunluk motoruyla imza uretmek,
               sunucunun sakladigi baytlarla eslesmeyen bir kayit olusturabilir.
+              Uygunluk self-test'i basarisiz olursa bu yuzey yine kilitli kalir.
             </Alert.Description>
           </Alert.Content>
         </Alert>
@@ -116,6 +119,19 @@ export function ComposeVerifyPage() {
             </ul>
           )}
         </section>
+
+        <Alert status="default">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>Uygunluk ile guncellik ayni sey degildir</Alert.Title>
+            <Alert.Description>
+              Uygunluk kontrolu, bu yapinin <strong>pinlenmis referans commit</strong>{" "}
+              ile ayni davrandigini gosterir. Canli Technocore sunucusunun hala
+              ayni protokolde oldugunu gostermez. Manifest surukleme kontrolu
+              Asama 3'te gelir ve o gelene kadar dis yazma kapisi kapali kalir.
+            </Alert.Description>
+          </Alert.Content>
+        </Alert>
 
         <Alert status="default">
           <Alert.Indicator />

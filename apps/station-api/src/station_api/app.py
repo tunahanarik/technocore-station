@@ -15,8 +15,10 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import Engine
 
 from station_api.config import LOOPBACK_HOST, Settings
+from station_api.conformance import ConformanceService, default_conformance_service
 from station_api.identity.service import IdentityService
 from station_api.routes import api as api_routes
+from station_api.routes import conformance as conformance_routes
 from station_api.routes import identity as identity_routes
 from station_api.routes import session as session_routes
 from station_api.security.middleware import (
@@ -100,6 +102,7 @@ def create_app(
     engine: Engine | None = None,
     web_dist: Path | None = DEFAULT_WEB_DIST,
     token_store: BootstrapTokenStore | None = None,
+    conformance: ConformanceService | None = None,
 ) -> FastAPI:
     """Build the application.
 
@@ -124,10 +127,16 @@ def create_app(
     app.state.allowed_hosts = _allowed_hosts(port, settings)
     app.state.allowed_origins = _allowed_origins(port, settings)
 
+    # One conformance verdict, shared by the status route and the write gate,
+    # so the two can never disagree about whether this build is conformant.
+    app.state.conformance = conformance or default_conformance_service()
+
     # The identity service needs a database. Without one the identity routes
     # answer 503 rather than pretending to work.
     app.state.identity_service = (
-        IdentityService(engine=engine, data_dir=settings.data_dir)
+        IdentityService(
+            engine=engine, data_dir=settings.data_dir, conformance=app.state.conformance
+        )
         if engine is not None
         else None
     )
@@ -136,6 +145,7 @@ def create_app(
     app.include_router(api_routes.router)
     app.include_router(identity_routes.router)
     app.include_router(identity_routes.gate_router)
+    app.include_router(conformance_routes.router)
 
     # Registered last so it cannot shadow /api or /session.
     if web_dist is not None:

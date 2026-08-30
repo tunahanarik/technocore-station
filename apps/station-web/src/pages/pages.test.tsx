@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { resetSessionState } from "../api/client";
-import type { IdentityStatus } from "../api/types";
+import type { ConformanceStatus, IdentityStatus } from "../api/types";
 import { ComposeVerifyPage } from "./ComposeVerifyPage";
 import { EvidencePage } from "./EvidencePage";
 import { IdentityPage } from "./IdentityPage";
@@ -36,7 +36,9 @@ const NO_IDENTITY: IdentityStatus = {
   gate: {
     allowed: false,
     identity_ready: false,
-    blocking_reasons: ["identity_present", "conformance_verified", "manifest_current"],
+    // Stage 2B: conformance is a real check and passes on a healthy build.
+    // Manifest drift is still unbuilt, so the gate stays shut on that alone.
+    blocking_reasons: ["identity_present", "manifest_current"],
     checks: [
       { key: "identity_present", state: "blocked", detail: "Aktif bir kimlik gerekli.", stage: "2" },
       {
@@ -47,8 +49,8 @@ const NO_IDENTITY: IdentityStatus = {
       },
       {
         key: "conformance_verified",
-        state: "not_implemented",
-        detail: "Sweep/canonical/imza uygunlugu Asama 2B ile gelir.",
+        state: "passed",
+        detail: "Sweep/canonical/imza uygunlugu self-test ile dogrulanmali.",
         stage: "2B",
       },
       {
@@ -83,15 +85,83 @@ const READY: IdentityStatus = {
   gate: { ...NO_IDENTITY.gate, identity_ready: true },
 };
 
-function stubIdentity(status: IdentityStatus): void {
+//: TEST-ONLY conformance fixture. The digest is deliberately short: the full
+//: 64-hex value must never reach the DOM, and a fixture that carried one
+//: would hide a real leak from the assertion below.
+const CONFORMANT: ConformanceStatus = {
+  passed: true,
+  checks: [
+    { name: "sweep", passed: true, vectors: 32, detail: "swept text matches the reference" },
+    { name: "did", passed: true, vectors: 4, detail: "did:key matches the reference" },
+    { name: "canonical", passed: true, vectors: 15, detail: "canonical bytes match" },
+    { name: "signing", passed: true, vectors: 15, detail: "signatures match the reference" },
+    { name: "verification", passed: true, vectors: 15, detail: "reference signatures verify" },
+    { name: "encoding", passed: true, vectors: 15, detail: "canonical base64url" },
+    { name: "tamper", passed: true, vectors: 8, detail: "tampered payloads refused" },
+    { name: "unicode_database", passed: true, vectors: 0, detail: "Unicode 15.0.0" },
+  ],
+  failures: [],
+  capabilities: ["sweep", "did", "canonical", "signing", "verification", "encoding", "tamper"],
+  bundle_digest: "688c6e4dcf14eeed",
+  bundle_digest_short: "688c6e4dcf14",
+  bundle_vectors: 104,
+  upstream_commit: "7707cb63ebf638e8ef0cf59d1364818b9fef7d24",
+  upstream_commit_short: "7707cb6",
+  package_version: "0.3.0",
+  python_version: "3.12.11",
+  unicode_version: "15.0.0",
+  bundle_unicode_version: "15.0.0",
+  unicode_version_matches: true,
+};
+
+const NOT_CONFORMANT: ConformanceStatus = {
+  ...CONFORMANT,
+  passed: false,
+  checks: CONFORMANT.checks.map((check) =>
+    check.name === "sweep" ? { ...check, passed: false } : check,
+  ),
+  failures: ["sweep: vector ascii-plain swept differently"],
+  capabilities: CONFORMANT.capabilities.filter((name) => name !== "sweep"),
+};
+
+/**
+ * Route the stub by URL.
+ *
+ * The Identity surface now reads two endpoints. A stub that answered every
+ * request with the identity payload would make the conformance panel render
+ * from the wrong shape and quietly pass.
+ */
+function stubIdentity(
+  status: IdentityStatus,
+  conformance: ConformanceStatus | null = CONFORMANT,
+): void {
   vi.stubGlobal(
     "fetch",
-    vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(status), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    ),
+    vi.fn((input: RequestInfo | URL) => {
+      // Each shape carries its URL differently; stringifying a Request would
+      // yield "[object Object]" and route every call to the identity branch.
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+
+      if (url.includes("/api/conformance/status")) {
+        if (conformance === null) {
+          return Promise.resolve(new Response("nope", { status: 500 }));
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(conformance), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+
+      return Promise.resolve(
+        new Response(JSON.stringify(status), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }),
   );
 }
 
@@ -160,13 +230,95 @@ describe("Identity surface", () => {
   it("labels unbuilt gate requirements with the correct stage", async () => {
     // The same badges render on Identity and on Compose & Verify, both driven
     // by check.stage. Regression: both read "Asama 4".
+    //
+    // Since Stage 2B, conformance is a real check rather than an unbuilt one,
+    // so manifest is the only requirement still badged with a stage.
     stubIdentity(NO_IDENTITY);
     const { container } = render(<IdentityPage />);
     await screen.findByText("Kimlik olusturulmadi");
 
-    expect(screen.getByText("Asama 2B")).toBeInTheDocument();
     expect(screen.getByText("Asama 3")).toBeInTheDocument();
     expect(container.textContent).not.toContain("Asama 4");
+  });
+
+  it("shows the conformance verdict from the backend, not a hardcoded one", async () => {
+    stubIdentity(NO_IDENTITY);
+    render(<IdentityPage />);
+    await screen.findByText("Kimlik olusturulmadi");
+
+    expect(await screen.findByText("Asama 2B · Hazir")).toBeInTheDocument();
+    expect(screen.getByText("7707cb6")).toBeInTheDocument();
+    expect(screen.getByText("688c6e4dcf14")).toBeInTheDocument();
+    expect(screen.getByText("15.0.0")).toBeInTheDocument();
+    expect(screen.getByText("3.12.11")).toBeInTheDocument();
+  });
+
+  it("names each verified capability with its vector count", async () => {
+    stubIdentity(NO_IDENTITY);
+    render(<IdentityPage />);
+    await screen.findByText("Asama 2B · Hazir");
+
+    for (const label of ["Sweep (32)", "Canonical (15)", "Imzalama (15)", "Dogrulama (15)"]) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+  });
+
+  it("ignores a check name that only exists on the prototype chain", async () => {
+    // Regression: `name in CAPABILITY_LABELS` also matched inherited keys, so
+    // a check called "toString" would have resolved to a function and been
+    // rendered as a label.
+    stubIdentity(NO_IDENTITY, {
+      ...CONFORMANT,
+      checks: [
+        ...CONFORMANT.checks,
+        { name: "toString", passed: true, vectors: 1, detail: "prototype key" },
+      ],
+    });
+    const { container } = render(<IdentityPage />);
+    await screen.findByText("Asama 2B · Hazir");
+
+    expect(container.textContent ?? "").not.toContain("function");
+    expect(screen.queryByText(/toString/)).toBeNull();
+  });
+
+  it("reports a failed self-test as failed, never as unknown", async () => {
+    stubIdentity(NO_IDENTITY, NOT_CONFORMANT);
+    render(<IdentityPage />);
+    await screen.findByText("Kimlik olusturulmadi");
+
+    expect(await screen.findByText("Asama 2B · Basarisiz")).toBeInTheDocument();
+    expect(
+      screen.getByText("sweep: vector ascii-plain swept differently"),
+    ).toBeInTheDocument();
+  });
+
+  it("does not claim conformance when the status cannot be read", async () => {
+    stubIdentity(NO_IDENTITY, null);
+    render(<IdentityPage />);
+    await screen.findByText("Kimlik olusturulmadi");
+
+    expect(await screen.findByText("Uygunluk durumu okunuyor...")).toBeInTheDocument();
+    expect(screen.queryByText("Asama 2B · Hazir")).toBeNull();
+  });
+
+  it("never renders the full vector bundle digest", async () => {
+    // A SHA-256 and a seed are both 64 hex characters. The panel shows the
+    // short form so the surface-wide "no 64-hex run" rule keeps its teeth.
+    stubIdentity(NO_IDENTITY);
+    const { container } = render(<IdentityPage />);
+    await screen.findByText("Asama 2B · Hazir");
+
+    expect(container.textContent ?? "").not.toMatch(/\b[0-9a-fA-F]{64}\b/);
+  });
+
+  it("separates conformance with the pinned reference from server currency", async () => {
+    stubIdentity(NO_IDENTITY);
+    const { container } = render(<IdentityPage />);
+    await screen.findByText("Asama 2B · Hazir");
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("pinlenmis referans commit");
+    expect(text).toContain("gostermez");
   });
 
   it("surfaces a capability error and blocks creation", async () => {
@@ -265,8 +417,30 @@ describe("Compose and Verify surface", () => {
     render(<ComposeVerifyPage />);
     await screen.findByText("Bu yuzey kilitli");
 
-    expect(await screen.findByText("Asama 2B")).toBeInTheDocument();
-    expect(screen.getByText("Asama 3")).toBeInTheDocument();
+    // Manifest drift is the requirement that remains unbuilt.
+    expect(await screen.findByText("Asama 3")).toBeInTheDocument();
+  });
+
+  it("stays locked even though conformance now passes", async () => {
+    // The point of the stage: building the conformance engine does not open
+    // the outward door, because drift detection is still missing.
+    stubIdentity(NO_IDENTITY);
+    const { container } = render(<ComposeVerifyPage />);
+    await screen.findByText("Bu yuzey kilitli");
+
+    expect(screen.getByText("Tamam")).toBeInTheDocument();
+    expect(container.querySelectorAll("textarea")).toHaveLength(0);
+    expect(container.querySelectorAll("button")).toHaveLength(0);
+  });
+
+  it("separates conformance with the pinned reference from server currency", async () => {
+    stubIdentity(NO_IDENTITY);
+    const { container } = render(<ComposeVerifyPage />);
+    await screen.findByText("Bu yuzey kilitli");
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("pinlenmis referans commit");
+    expect(text).toContain("Canli Technocore sunucusunun hala");
   });
 
   it("labels each unbuilt requirement with the stage that delivers it", async () => {

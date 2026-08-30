@@ -29,6 +29,7 @@ botu veya kimlik sağlayıcısı **değildir**.
 | [`SECURITY.md`](SECURITY.md) | Güvenlik duruşu ve **kalan riskler** |
 | [`docs/architecture.md`](docs/architecture.md) | Mimari ve paket sınırları |
 | [`docs/protocol-contract.md`](docs/protocol-contract.md) | Canonical/sweep/imza sözleşmesi |
+| [`docs/conformance.md`](docs/conformance.md) | Uygunluk motoru, self-test, CLI (Aşama 2B) |
 | [`docs/security-invariants.md`](docs/security-invariants.md) | Test edilebilir değişmezler (SI-01…SI-56) |
 | [`docs/evidence-model.md`](docs/evidence-model.md) | Dört seviyeli kanıt modeli |
 | [`docs/identity-lifecycle.md`](docs/identity-lifecycle.md) | Kimlik durum makinesi ve akışlar |
@@ -147,10 +148,15 @@ Bağımlılıklar minimumda tutulur. Her doğrudan bağımlılığın gerekçesi
 | `pydantic` | MIT | Response şeması sınırı; `extra="forbid"` ile beklenmeyen alan eklenemez |
 | `technocore-conform` | MIT (yerel) | Protokol uygunluk paketi — platformdan bağımsız sınır (ADR-018) |
 
-**Test ve geliştirme:** `pytest`, `hypothesis` (Aşama 2B property testleri için
-altyapı), `httpx` (gerçek loopback istemcisi), `ruff`, `mypy`.
+**Test ve geliştirme:** `pytest`, `hypothesis` (sweep property testleri),
+`httpx` (gerçek loopback istemcisi), `pynacl`, `ruff`, `mypy`.
 
-Aşama 2'de eklenecek: `cryptography` (Ed25519), `argon2-cffi` (recovery KDF).
+| Paket | Lisans | Gerekçe |
+|---|---|---|
+| `cryptography` | Apache-2.0 / BSD | Ed25519 imzalama ve doğrulama; recovery için AEAD (Aşama 2) |
+| `argon2-cffi` | MIT | Recovery ve kasa parolası KDF'i (Argon2id) (Aşama 2) |
+| `pynacl` | Apache-2.0 | **Yalnız test.** AC-05 için bağımsız bir Ed25519 uygulaması (libsodium): imzayı üreten kütüphanenin kendi çıktısını doğrulaması kanıt sayılmaz. Production import grafiğine girmediği testle doğrulanır. |
+
 Künye §11.2 gereği başka kripto kütüphanesi gerekçesiz eklenmez.
 
 ### Frontend (MIT)

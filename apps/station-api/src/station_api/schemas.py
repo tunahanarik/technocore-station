@@ -198,3 +198,47 @@ class RecoveryInspectResponse(StrictModel):
     did: str
     fingerprint: str
     fingerprint_short: str
+
+
+# ---------------------------------------------------------------------------
+# Conformance (Stage 2B)
+#
+# Everything here is public metadata about *this build*: which contract areas
+# were checked, how many vectors, and which pinned reference, Python and
+# Unicode database produced the verdict. The vectors themselves - and the
+# TEST-ONLY seeds inside them - are never serialised.
+# ---------------------------------------------------------------------------
+
+
+class ConformanceCheckStatus(StrictModel):
+    """One area of the write contract, and how much evidence backs it."""
+
+    name: str
+    passed: bool
+    vectors: int
+    detail: str
+
+
+class ConformanceStatusResponse(StrictModel):
+    """The runtime self-test verdict.
+
+    ``passed`` means this build reproduces the **pinned reference commit's**
+    behaviour. It is deliberately not a claim that the live Technocore server
+    still speaks that protocol; that is manifest drift, and it is a separate
+    check that stays closed until Stage 3.
+    """
+
+    passed: bool
+    checks: list[ConformanceCheckStatus]
+    failures: list[str]
+    capabilities: list[str]
+    bundle_digest: str
+    bundle_digest_short: str
+    bundle_vectors: int
+    upstream_commit: str
+    upstream_commit_short: str
+    package_version: str
+    python_version: str
+    unicode_version: str
+    bundle_unicode_version: str
+    unicode_version_matches: bool

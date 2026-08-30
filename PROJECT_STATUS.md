@@ -2,15 +2,15 @@
 
 > Ana karar kaynağı: [`Technocore-Station-Proje-Kunyesi.md`](Technocore-Station-Proje-Kunyesi.md)
 > Çalışma kuralları: [`AGENTS.md`](AGENTS.md) · [`CLAUDE.md`](CLAUDE.md)
-> Son güncelleme: **30 Ağustos 2026**
+> Son güncelleme: **30 Ağustos 2026** (Aşama 2B)
 
 ## Aşama checklist
 
 - [x] **Aşama 0 — Spesifikasyon** — tamamlandı
 - [x] **Aşama 1 — Güvenli iskelet** — tamamlandı
 - [x] **Aşama 2 — Identity & Recovery** — tamamlandı
-- [ ] **Aşama 2B — Conformance** — sıradaki
-- [ ] **Aşama 3 — Salt okunur Technocore**
+- [x] **Aşama 2B — Conformance** — tamamlandı
+- [ ] **Aşama 3 — Salt okunur Technocore** — sıradaki
 - [ ] **Aşama 4 — Composer & Participation**
 - [ ] **Aşama 5 — Evidence & Audit**
 - [ ] **Aşama 6 — Project Modules**
@@ -414,12 +414,124 @@ Dal: `stage-2-identity-recovery` (commit atılmadı).
 
 ---
 
-## Sonraki aşama: Aşama 2B — Conformance
+## Aşama 2B — Tamamlanan görevler
 
-Kapsam: bağımsız `technocore-conform` sweep, canonical string, sign ve verify
-yüzeyi ile CLI. Kabul kriterleri: **AC-02, AC-03, AC-04, AC-05**.
+> Ayrıntılı sözleşme: [`docs/conformance.md`](docs/conformance.md).
+> Dal: `stage-2b-conformance`. Bu turda commit/push/PR **yapılmadı**.
 
-Aşama 2B tamamlanmadan write gate'in `conformance_verified` kontrolü
+### `technocore-conform` protokol yüzeyi
+
+- [x] `sweep.py` — Cc/Cf/Cs/Co/Zl/Zp → tek boşluk, sonra `str.strip()`
+- [x] **Collapse yok, normalization yok, case folding yok** (property testli)
+- [x] Uzunluk sweep sonrası code point ile ölçülür; mesaj 4096, note 8192
+- [x] `SweepPolicy` + ayrı `sweep_message` / `sweep_note_value` yüzeyleri
+- [x] `names.py` — `[a-z0-9][a-z0-9_-]{0,47}`, `fullmatch`
+- [x] `nonce.py` — `[0-9]{1,19}`, Unicode rakam reddi, **leading zero korunur**
+- [x] `canonical.py` — immutable `CanonicalPayload`; `repr` içerik değil uzunluk yazar
+- [x] `signature.py` — Ed25519, 64 bayt, 86 karakter unpadded base64url, son karakter `[AQgw]`
+- [x] `selftest.py` — fail-closed runtime self-test, digest pinli vektör paketi
+- [x] `cli.py` — `sweep` / `canonical` / `verify` / `self-test` / `version`
+- [x] `did.py` **korundu**; Aşama 2 DID API'si kırılmadı
+- [x] Paket bağımsız build ediliyor (wheel + sdist, `py3-none-any`)
+- [x] Tek runtime bağımlılığı `cryptography`; vendor dizini artefaktlara girmiyor
+
+### Oracle ve vektörler
+
+- [x] Sweep oracle'ı pinlenmiş `store.py`'nin **AST'sinden** izole edilip çalıştırılıyor
+- [x] İmza oracle'ı pinlenmiş `scripts/sign.py` subprocess'i
+- [x] Her iki oracle da kullanılmadan önce vendor SHA-256'larını doğruluyor
+- [x] Vektör paketi oracle'dan **türetiliyor**; test her koşuda bayt-eşitliğini doğruluyor
+- [x] Vektör seed'leri, `test_seed_leakage.py` canary'sinden **farklı** (canary anlamlı kalıyor)
+
+### Write gate ve API
+
+- [x] `conformance_verified` artık **gerçek** self-test sonucuna bağlı
+- [x] `manifest_current` hâlâ `not_implemented` (Aşama 3)
+- [x] `WriteGateInput.conformance_verified` varsayılanı `False` — unutan çağıran kapalı kapı alır
+- [x] Başarılı self-test kapıyı **açmıyor**; dış yazma yolu yok
+- [x] `GET /api/conformance/status` — session korumalı, salt okunur, `no-store`
+- [x] Yanıt yalnız public metadata; vektör içeriği ve seed serialize edilmiyor
+- [x] Gate ile status endpoint'i **aynı** verdict nesnesini okuyor
+
+### UI
+
+- [x] Üç sekme korundu; genel tasarım değiştirilmedi
+- [x] Identity → "Teknik ayrıntılar" altında uygunluk paneli
+- [x] `Aşama 2B · Hazır` durumu, 7 capability + vektör sayıları
+- [x] Kısa pinlenmiş SHA (`7707cb6`), kısaltılmış bundle digest (`688c6e4dcf14`)
+- [x] Python/Unicode sürümleri yalnız "Teknik ayrıntılar" altında
+- [x] **Tam digest DOM'a girmiyor** (64-hex kuralı korunuyor)
+- [x] Compose & Verify kilitli; textarea/buton yok
+- [x] "Uygunluk ile güncellik aynı şey değildir" uyarısı eklendi
+
+---
+
+## Aşama 2B — Test sonuçları
+
+| Kapı | Komut | Sonuç |
+|---|---|---|
+| ruff (api) | `uv run --directory apps/station-api ruff check .` | **geçti** |
+| ruff (conform) | `uv run --directory apps/station-api ruff check ../../packages/technocore-conform` | **geçti** |
+| mypy strict (api) | `uv run --directory apps/station-api mypy src` | **geçti** (42 dosya) |
+| mypy strict (conform) | paket kökünde `mypy` | **geçti** (13 dosya) |
+| pytest | `uv run --directory apps/station-api pytest ../../tests -q` | **445 geçti** |
+| ESLint | `npm --prefix apps/station-web run lint` | **geçti** |
+| TypeScript + build | `npm --prefix apps/station-web run build` | **geçti** |
+| vitest | `npm --prefix apps/station-web run test` | **38 geçti** |
+| `npm audit` | — | **0 açık** |
+| `uv lock --check` | — | **güncel** (44 paket) |
+| vendor SHA256 | `sha256sum -c SHA256SUMS` | **4/4 OK** |
+| wheel/sdist build | `uv build packages/technocore-conform` | **geçti** |
+
+### Dağılım (toplam **445**)
+
+| Grup | Adet |
+|---|---:|
+| `tests/security/` | 196 |
+| `tests/conformance/` | 234 |
+| `tests/integration/` | 15 |
+
+### Kabul kriteri eşlemesi
+
+| ID | Kriter | Kanıt |
+|---|---|---|
+| **AC-01** | DID resmî script ile aynı | `test_did_differential.py` |
+| **AC-02** | 10.000+ Unicode girdide sweep aynı | `test_sweep_differential.py` — **13.616 girdi** |
+| **AC-03** | Sweep idempotent | korpus + Hypothesis property testi |
+| **AC-04** | 86 karakter unpadded base64url | `test_signature_differential.py` |
+| **AC-05** | Bağımsız doğrulayıcı | `test_independent_verifier.py` (PyNaCl, iki yön) |
+| **AC-12** | Restore-test olmadan write çalışmaz | korundu; `manifest_current` ayrıca kapalı |
+| **AC-19** | Vendor paketlere girmez | `test_package_build.py` |
+
+### Tarayıcı doğrulaması
+
+Gerçek `create_app` + gerçek middleware zinciri + gerçek SPA build ile
+`127.0.0.1` üzerinde denetlendi. **Console hatası yok, CSP ihlali yok.** Tüm
+istekler aynı-origin GET; dışarı hiçbir istek yok. Identity paneli ve kilitli
+Compose yüzeyi beklendiği gibi render edildi.
+
+---
+
+## Aşama 2B — Açık riskler
+
+| ID | Risk | Durum |
+|---|---|---|
+| B-R1 | Uygunluk **pinlenmiş referansa** göredir; canlı sunucu güncelliğini göstermez | Kod, UI ve belgede açıkça ayrıldı; `manifest_current` kapalı |
+| B-R2 | İmza oracle'ı metni `argv` ile geçirdiği için **lone surrogate** kapsamaz | Sweep oracle'ı in-process olduğu için surrogate'ları kapsıyor; sınır belgelendi |
+| B-R3 | Unicode veritabanı sürümü değişirse self-test başarısız olur | Bilinçli: kanıtsızlık uyumluluk sayılmaz. Vektörler yeni sürümde yeniden üretilmelidir |
+| B-R4 | Vektör paketi TEST-ONLY seed içerir ve wheel'de gelir | Fixture'lar public; canary'den farklı; endpoint'te serialize edilmiyor |
+| B-R5 | Upstream `main` pinden ileri (`5b6b8f88…`) | **Pin bilinçli olarak güncellenmedi** — ayrı ve açık bir karar adımıdır |
+| B-R6 | Zamanlama eşitliği iddia edilmiyor | Doğrulama sabit zamanlı değildir; imza ve DID public veridir |
+
+---
+
+## Sonraki aşama: Aşama 3 — Salt okunur Technocore
+
+Kapsam: host allow-list'li, TLS doğrulaması zorunlu, salt **okuma** yapan
+istemci; runtime manifest okuma ve **manifest drift** kontrolü. Kabul
+kriterleri: **AC-15** ve `manifest_current` kontrolünün gerçek hâle gelmesi.
+
+Aşama 3 tamamlanmadan write gate'in `manifest_current` kontrolü
 `not_implemented` kalır ve dış yazma açılmaz.
 
 Ön koşul: kullanıcı açıkça "başlayalım" demeden gerçek DID/seed üretilmez
@@ -427,16 +539,20 @@ Aşama 2B tamamlanmadan write gate'in `conformance_verified` kontrolü
 
 ---
 
-## Bu turda yapılmayanlar (Aşama 2 beyanı)
+## Bu turda yapılmayanlar (Aşama 2B beyanı)
 
 - **Gerçek kullanıcı DID'si oluşturulmadı.** UI'daki "Kimlik oluştur" butonuna
   basılmadı.
 - **Operasyonel seed veya private key üretilmedi.** Tüm anahtar materyali
-  `TEST-ONLY` etiketli fixture'lardır ve geçici dizinlerde kalmıştır.
+  `TEST-ONLY` etiketli, depoda yayımlanmış fixture'lardır.
 - **Gerçek `.tcrec` recovery dosyası bırakılmadı.**
+- **Identity vault açılmadı.**
 - **Technocore'a hiçbir okuma veya yazma isteği gönderilmedi.** Uygulamada
   giden bir HTTP istemcisi yoktur; bir test bunu kaynak taramasıyla doğrular.
-- Sweep, canonical, imzalama ve doğrulama yazılmadı (Aşama 2B).
+- **Vendor pini güncellenmedi.** Upstream `main` ilerlemiş olsa da pin
+  `7707cb63…` olarak bırakıldı.
+- Manifest okuma, drift kontrolü ve giden istemci yazılmadı (Aşama 3).
+- Nonce sayacı, rezervasyon, replay reddi ve gerçek imzalama yazılmadı (Aşama 4).
 - LLM/Agent Runtime, Evidence/HMAC zinciri, çoklu DID yazılmadı.
 - Commit, push, PR, tag, release veya deploy yapılmadı.
 - Telemetri, analytics veya bulut servisi eklenmedi.

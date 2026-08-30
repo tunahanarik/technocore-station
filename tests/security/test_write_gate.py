@@ -14,11 +14,24 @@ from station_api.identity.write_gate import CheckState, WriteGateInput, evaluate
 
 pytestmark = pytest.mark.security
 
+#: Everything Stage 2 can deliver: identity installed, vault present,
+#: recovery proven by a restore test. Conformance is deliberately left at its
+#: default of False here, so the Stage 2 assertions stay about Stage 2.
 _FULLY_RECOVERED = WriteGateInput(
     has_identity=True,
     identity_revoked=False,
     vault_present=True,
     recovery_verified=True,
+)
+
+#: Stage 2 plus a passing Stage 2B conformance self-test. Still not enough to
+#: write: manifest-drift detection does not exist yet.
+_RECOVERED_AND_CONFORMANT = WriteGateInput(
+    has_identity=True,
+    identity_revoked=False,
+    vault_present=True,
+    recovery_verified=True,
+    conformance_verified=True,
 )
 
 
@@ -116,25 +129,73 @@ def test_each_check_names_the_stage_that_delivers_it() -> None:
 def test_unimplemented_requirements_are_never_counted_as_passed() -> None:
     """The core honesty property of the gate.
 
-    Even a fully recovered identity cannot write, because conformance and
-    manifest-drift checking do not exist yet. Reporting them as passed would
-    be a lie that later becomes a signature over the wrong bytes.
+    Before Stage 2B this asserted that conformance *and* manifest-drift were
+    both unimplemented. Stage 2B built the conformance engine, so conformance
+    is now a real check and only manifest-drift remains unbuilt. The property
+    itself is unchanged and is what matters: an unbuilt requirement is never
+    reported as satisfied.
     """
-    status = evaluate(_FULLY_RECOVERED)
+    status = evaluate(_RECOVERED_AND_CONFORMANT)
 
     assert status.allowed is False
-    assert "conformance_verified" in status.blocking_reasons
     assert "manifest_current" in status.blocking_reasons
 
     unimplemented = [
         check for check in status.checks if check.state is CheckState.NOT_IMPLEMENTED
     ]
-    assert {check.key for check in unimplemented} == {
-        "conformance_verified",
-        "manifest_current",
-    }
+    assert {check.key for check in unimplemented} == {"manifest_current"}
     for check in unimplemented:
         assert check.satisfied is False
+
+
+def test_conformance_blocks_when_the_self_test_has_not_passed() -> None:
+    """Stage 2B's check is real: a failing self-test closes the gate.
+
+    This is the case that matters most. A build whose sweep or signature
+    encoding has drifted from the pinned reference would otherwise sign
+    bytes the server refuses, or worse, different bytes than it stores.
+    """
+    status = evaluate(_FULLY_RECOVERED)
+
+    assert status.allowed is False
+    assert "conformance_verified" in status.blocking_reasons
+
+    conformance = next(
+        check for check in status.checks if check.key == "conformance_verified"
+    )
+    assert conformance.state is CheckState.BLOCKED
+    assert conformance.satisfied is False
+
+
+def test_conformance_passes_when_the_self_test_passed() -> None:
+    status = evaluate(_RECOVERED_AND_CONFORMANT)
+    conformance = next(
+        check for check in status.checks if check.key == "conformance_verified"
+    )
+
+    assert conformance.state is CheckState.PASSED
+    assert conformance.satisfied is True
+    assert "conformance_verified" not in status.blocking_reasons
+
+
+def test_a_passing_self_test_alone_does_not_open_the_gate() -> None:
+    """Conformance with the pinned reference is not the same claim as
+    "the live server still speaks this protocol". Manifest drift is unbuilt,
+    so the outward door stays shut.
+    """
+    assert evaluate(_RECOVERED_AND_CONFORMANT).allowed is False
+
+
+def test_conformance_defaults_to_closed() -> None:
+    """A caller that forgets the field gets a shut gate, never an open one."""
+    default = WriteGateInput(
+        has_identity=True,
+        identity_revoked=False,
+        vault_present=True,
+        recovery_verified=True,
+    )
+    assert default.conformance_verified is False
+    assert "conformance_verified" in evaluate(default).blocking_reasons
 
 
 def test_no_check_can_be_bypassed_by_a_flag(api_source_root: Path) -> None:

@@ -99,6 +99,19 @@ fazlasını **kanıtlamaz**:
 
 ---
 
+## 4.1 Uygunluk ne kanıtlar, ne kanıtlamaz (Aşama 2B)
+
+| Kanıtlar | Kanıtlamaz |
+|---|---|
+| Bu yapının **pinlenmiş referans commit** ile aynı sweep/canonical/imza davranışını ürettiği | Canlı Technocore sunucusunun hâlâ aynı protokolde olduğu |
+| İmzanın canonical string'i kapsadığı | İmzanın JSON request gövdesinin tamamını kapsadığı |
+| Anahtar sahipliği (`did:key`) | Gerçek kimlik, dürüstlük, içerik doğruluğu, güvenilir zaman |
+| Çalışma zamanı Unicode veritabanının vektörlerle aynı sürümde olduğu | Kapsanmayan bir Unicode sürümünde davranışın aynı kalacağı |
+
+Sunucu güncelliği *manifest drift* kontrolüdür ve **Aşama 3**'e aittir. İki
+iddianın karıştırılması, write gate'in önlemek için var olduğu yanlışın ta
+kendisidir.
+
 ## 5. Aşama 2 kapsam beyanı
 
 - **Technocore'a hiçbir okuma veya yazma isteği gönderilmedi.** Üründe giden

@@ -123,3 +123,37 @@ export interface RecoveryInspectResult {
   readonly fingerprint: string;
   readonly fingerprint_short: string;
 }
+
+// --- Conformance (Stage 2B) ------------------------------------------------
+//
+// Public metadata about this build's conformance with the *pinned reference
+// commit*. It is deliberately not a statement about the live Technocore
+// server, which is manifest drift and arrives in Stage 3.
+
+export interface ConformanceCheck {
+  readonly name: string;
+  readonly passed: boolean;
+  /** How many vectors backed this check. Zero means it proved nothing. */
+  readonly vectors: number;
+  readonly detail: string;
+}
+
+export interface ConformanceStatus {
+  readonly passed: boolean;
+  readonly checks: readonly ConformanceCheck[];
+  readonly failures: readonly string[];
+  readonly capabilities: readonly string[];
+  /** Full SHA-256 of the vector bundle. Never rendered: it is 64 hex
+   *  characters, the same shape as a seed, and the UI has a standing rule
+   *  against rendering any such run. Use `bundle_digest_short`. */
+  readonly bundle_digest: string;
+  readonly bundle_digest_short: string;
+  readonly bundle_vectors: number;
+  readonly upstream_commit: string;
+  readonly upstream_commit_short: string;
+  readonly package_version: string;
+  readonly python_version: string;
+  readonly unicode_version: string;
+  readonly bundle_unicode_version: string;
+  readonly unicode_version_matches: boolean;
+}
