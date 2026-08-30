@@ -46,7 +46,12 @@ function ConformancePanel({ conformance }: { readonly conformance: ConformanceSt
     return <p className="text-sm text-muted">Uygunluk durumu okunuyor...</p>;
   }
 
-  const areas = conformance.checks.filter((check) => check.name in CAPABILITY_LABELS);
+  // Own-property check, not `in`: `in` also matches the prototype chain, so a
+  // backend check named "toString" would resolve to a function and render as
+  // a nonsense label.
+  const areas = conformance.checks.filter((check) =>
+    Object.hasOwn(CAPABILITY_LABELS, check.name),
+  );
 
   return (
     <div className="flex flex-col gap-3">

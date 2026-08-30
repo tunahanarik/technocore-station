@@ -16,16 +16,30 @@ into an apparent success.
 
 from __future__ import annotations
 
+import sys
+import unicodedata
 from collections.abc import Callable
 
 from technocore_conform import SelfTestResult, run_self_test
+from technocore_conform import __version__ as conform_version
 
 #: A callable that produces a verdict. Substituted in tests.
 SelfTestRunner = Callable[[], SelfTestResult]
 
 
 def _failed_result(reason: str) -> SelfTestResult:
-    """A verdict that cannot be mistaken for a pass."""
+    """A verdict that cannot be mistaken for a pass.
+
+    The runtime versions are real and ``bundle_unicode_version`` is left
+    empty, which is the honest description of a crash: we know what this
+    machine is, and we never got far enough to learn what the vectors expect.
+
+    That asymmetry is deliberate. Leaving *both* Unicode fields empty would
+    make ``unicode_version_matches`` compare "" with "" and report ``True``,
+    so a crashed run would advertise a matching Unicode database it never
+    checked - a small lie in exactly the fail-closed path this class exists
+    to keep honest.
+    """
     return SelfTestResult(
         passed=False,
         checks=(),
@@ -33,9 +47,11 @@ def _failed_result(reason: str) -> SelfTestResult:
         bundle_digest="",
         bundle_vectors=0,
         upstream_commit="",
-        package_version="",
-        python_version="",
-        unicode_version="",
+        package_version=conform_version,
+        python_version=(
+            f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+        ),
+        unicode_version=unicodedata.unidata_version,
         bundle_unicode_version="",
     )
 

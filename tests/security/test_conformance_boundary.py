@@ -236,6 +236,38 @@ def test_a_crashing_self_test_is_not_a_pass(settings: Settings, engine: Engine) 
     assert "conformance_verified" in gate.blocking_reasons
 
 
+def test_a_crashed_verdict_does_not_claim_a_matching_unicode_database(
+    settings: Settings, engine: Engine, base_url: str
+) -> None:
+    """Regression: a crash must not advertise a Unicode match it never checked.
+
+    Leaving both Unicode fields empty made ``unicode_version_matches``
+    compare "" with "" and report True, so ``/api/conformance/status`` said
+    the Unicode database matched on a run that never got far enough to read
+    the vectors.
+    """
+
+    def explode() -> SelfTestResult:
+        raise RuntimeError("simulated conformance crash")
+
+    app = create_app(
+        settings=settings,
+        port=TEST_PORT,
+        engine=engine,
+        web_dist=None,
+        conformance=ConformanceService(runner=explode),
+    )
+    with TestClient(app, base_url=base_url) as client:
+        assert establish_session(client, app)
+        payload = client.get(_CONFORMANCE_PATH).json()
+
+    assert payload["passed"] is False
+    assert payload["unicode_version_matches"] is False
+    # The runtime half is knowable and reported; the bundle half is not.
+    assert payload["unicode_version"]
+    assert payload["bundle_unicode_version"] == ""
+
+
 def test_no_technocore_write_endpoint_was_added(app: FastAPI) -> None:
     """Stage 2B adds a read-only status route and nothing outbound."""
     paths = {getattr(route, "path", "") for route in app.routes}

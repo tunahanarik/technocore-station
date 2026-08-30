@@ -263,6 +263,24 @@ describe("Identity surface", () => {
     }
   });
 
+  it("ignores a check name that only exists on the prototype chain", async () => {
+    // Regression: `name in CAPABILITY_LABELS` also matched inherited keys, so
+    // a check called "toString" would have resolved to a function and been
+    // rendered as a label.
+    stubIdentity(NO_IDENTITY, {
+      ...CONFORMANT,
+      checks: [
+        ...CONFORMANT.checks,
+        { name: "toString", passed: true, vectors: 1, detail: "prototype key" },
+      ],
+    });
+    const { container } = render(<IdentityPage />);
+    await screen.findByText("Asama 2B · Hazir");
+
+    expect(container.textContent ?? "").not.toContain("function");
+    expect(screen.queryByText(/toString/)).toBeNull();
+  });
+
   it("reports a failed self-test as failed, never as unknown", async () => {
     stubIdentity(NO_IDENTITY, NOT_CONFORMANT);
     render(<IdentityPage />);
