@@ -118,6 +118,29 @@ oturum/bootstrap yanıtlarında `Cache-Control: no-store`.
 - Doğrulama için kullanılan PyNaCl yalnız bir **test** bağımlılığıdır;
   production import grafiğinde bulunmadığı testle doğrulanır.
 
+## 6.2 Salt okunur dış yüzey (Aşama 3)
+
+- **Tek origin:** `https://technocore.chat`. Şema HTTPS, host tam eşleşme,
+  yalnız varsayılan port. Alt domain, trailing-dot, userinfo, fragment, farklı
+  port, IP adresi ve path traversal reddedilir.
+- **Kapalı registry:** istemci `SourceId` alır, URL almaz. Technocore'da bazı
+  **GET yolları yazma yapar** (`/r/{room}/say-signed/...`,
+  `/kv/{ns}/{key}/set/...`), bu yüzden "yalnız GET gönderiyoruz" bir güvenlik
+  özelliği değildir; registry o özelliğin kendisidir.
+- **TLS doğrulaması kapatılamaz.** `verify` parametresi hiçbir yerde
+  geçirilmez, dışarıya açılmaz ve bir bypass seçeneği yoktur.
+- **Redirect takip edilmez.** 3xx bir hatadır.
+- Faz bazlı timeout; decompress edilmiş bayt üzerinde boyut sınırı; sınırlı
+  retry; `Retry-After` üst sınırla ele alınır.
+- Giden isteğe cookie, authorization, DID, fingerprint, CSRF veya kullanıcıya
+  ait başka hiçbir veri eklenmez. Sabit ve kişisel bilgi içermeyen User-Agent.
+- Yanıttan yalnız `Content-Type`, `ETag`, `Last-Modified` saklanır; keyfi
+  header ve `Set-Cookie` istemci sınırında düşürülür.
+- Yanıt gövdesi **API'den dönmez**; sınırlandırılmış ve sweep edilmiş bir
+  alıntı yalnız veritabanında insan incelemesi için tutulur.
+- Uzak değerler UI'a girmeden önce sweep edilir ve kısaltılır; hiçbir uzak
+  metin HTML veya tıklanabilir link olarak render edilmez (AC-17).
+
 ## 7. Bilinen sınırlar (dürüst kapsam)
 
 Bu ürünün **savunmadığı** durumlar:

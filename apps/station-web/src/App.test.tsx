@@ -22,9 +22,11 @@ const HEALTHY_STATUS: AppStatus = {
     transport: "loopback-http",
   },
   technocore: {
-    state: "not_connected",
-    available_from_stage: 3,
-    detail: "Asama 3 kapsaminda.",
+    // Stage 3: a freshly launched Station has contacted nobody, so this is
+    // the honest opening state rather than a placeholder.
+    state: "never_checked",
+    write_available_from_stage: 4,
+    detail: "Resmi kaynaklar bu oturumda henuz denetlenmedi.",
   },
 };
 
@@ -115,12 +117,16 @@ describe("App shell", () => {
     expect(screen.getByRole("tab", { name: "Evidence & Sources" })).toBeInTheDocument();
   });
 
-  it("reports Technocore as not connected", async () => {
+  it("reports Technocore as not yet checked on a fresh launch", async () => {
+    // Stage 3 replaced the "Bagli degil" placeholder with the real four-way
+    // state. "Denetlenmedi" is the accurate opening value: Station contacts
+    // nobody until the user asks, so neither "connected" nor "disconnected"
+    // would be true.
     stubBackend();
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByText("Bagli degil")).toBeInTheDocument();
+      expect(screen.getByText("Denetlenmedi")).toBeInTheDocument();
     });
   });
 

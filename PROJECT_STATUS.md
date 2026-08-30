@@ -2,7 +2,7 @@
 
 > Ana karar kaynağı: [`Technocore-Station-Proje-Kunyesi.md`](Technocore-Station-Proje-Kunyesi.md)
 > Çalışma kuralları: [`AGENTS.md`](AGENTS.md) · [`CLAUDE.md`](CLAUDE.md)
-> Son güncelleme: **30 Ağustos 2026** (Aşama 2B)
+> Son güncelleme: **30 Ağustos 2026** (Aşama 3)
 
 ## Aşama checklist
 
@@ -10,8 +10,8 @@
 - [x] **Aşama 1 — Güvenli iskelet** — tamamlandı
 - [x] **Aşama 2 — Identity & Recovery** — tamamlandı
 - [x] **Aşama 2B — Conformance** — tamamlandı
-- [ ] **Aşama 3 — Salt okunur Technocore** — sıradaki
-- [ ] **Aşama 4 — Composer & Participation**
+- [x] **Aşama 3 — Salt okunur Technocore** — tamamlandı
+- [ ] **Aşama 4 — Composer & Participation** — sıradaki
 - [ ] **Aşama 5 — Evidence & Audit**
 - [ ] **Aşama 6 — Project Modules**
 - [ ] **Aşama 7 — Packaging**
@@ -525,24 +525,131 @@ Compose yüzeyi beklendiği gibi render edildi.
 
 ---
 
-## Sonraki aşama: Aşama 3 — Salt okunur Technocore
+## Aşama 3 — Tamamlanan görevler
 
-Kapsam: host allow-list'li, TLS doğrulaması zorunlu, salt **okuma** yapan
-istemci; runtime manifest okuma ve **manifest drift** kontrolü. Kabul
-kriterleri: **AC-15** ve `manifest_current` kontrolünün gerçek hâle gelmesi.
+> Ayrıntılı sözleşme: [`docs/read-only-technocore.md`](docs/read-only-technocore.md).
+> Dal: `stage-3-read-only-technocore`.
 
-Aşama 3 tamamlanmadan write gate'in `manifest_current` kontrolü
-`not_implemented` kalır ve dış yazma açılmaz.
+### Salt okunur istemci
 
-Ön koşul: kullanıcı açıkça "başlayalım" demeden gerçek DID/seed üretilmez
-(künye §20.2).
+- [x] `station_api/technocore/` — uygulamanın **tek** giden istek yüzeyi
+- [x] `sources.py` — kapalı registry; istemci `SourceId` alır, URL almaz
+- [x] Yalnız `https://technocore.chat`; alt domain/trailing-dot/userinfo/fragment/port/IP/traversal reddi
+- [x] Redirect takip edilmiyor; TLS doğrulaması kapatılamıyor (`verify` hiç geçirilmiyor)
+- [x] connect/read/write/pool timeout'ları ayrı ayrı sınırlı
+- [x] Boyut sınırı **decompress edilmiş** bayt üzerinde, streaming ile
+- [x] En çok 3 deneme; `Retry-After` üst sınırla
+- [x] Cookie/authorization/DID/CSRF yok; sabit, kişisel bilgi içermeyen User-Agent
+- [x] Yalnız `Content-Type`, `ETag`, `Last-Modified` saklanıyor
+
+### Kaynaklar ve drift
+
+- [x] Altı resmî belge; `openapi` + `agent.json` verdict için zorunlu
+- [x] 15 kritik + 3 uyarı alanından oluşan projeksiyon; alan yolları **canlı belgelerden doğrulandı**
+- [x] `exact` / `tokens` / `contains` karşılaştırma biçimleri
+- [x] Alan sırası ve prose değişikliği drift sayılmıyor
+- [x] Dört durum: `never_checked`, `current`, `drifted`, `unavailable`
+
+### Veri modeli ve API
+
+- [x] Migration `0003` — `manifest_check` + `official_source_snapshot`
+- [x] Exact response baytlarının SHA-256'sı; sınırlandırılmış, sweep edilmiş alıntı
+- [x] Tek transaction; retention son **50** koşu
+- [x] `GET /api/technocore/status` (session) — ağa çıkmaz
+- [x] `POST /api/technocore/refresh` (session + CSRF) — gövde almaz
+- [x] Raw gövde API'den dönmüyor
+
+### Write gate
+
+- [x] `manifest_current` artık gerçek — `not_implemented` değil
+- [x] Conformance ve manifest **ayrı** kontroller olarak kalıyor
+- [x] Verdict process içinde; her açılış `never_checked`
+- [x] Persist edilen snapshot kapıyı açamıyor
+- [x] API ve gate **aynı** verdict nesnesini okuyor
+- [x] Tüm ön koşullar geçse bile **yazma yolu yok** (route + kaynak testiyle doğrulandı)
+
+### UI
+
+- [x] Üç sekme korundu; yeni sekme veya sidebar yok
+- [x] Evidence & Sources → salt okunur durum, "Resmî kaynakları denetle" eylemi, kaynak listesi, hash/ETag/Last-Modified, kritik/uyarı ayrımı
+- [x] Uzak URL düz metin + kopyalama düğmesi; hiçbir yerde anchor veya HTML yok (AC-17)
+- [x] Üst Technocore kartı gerçek dört durumu gösteriyor
+- [x] **UI kusuru 1 düzeltildi:** restore-test dosya seçici artık görünür dropzone, adlandırılmış buton, `.tcrec` filtresi, seçildi durumu, yeniden seçme ve `aria-describedby` hata bağlantısı taşıyor; native input tab sırasından çıkarıldı
+- [x] **UI kusuru 2 düzeltildi:** Identity "sonraki adım" metni backend gate verisinden türetiliyor, hardcoded değil
 
 ---
 
-## Bu turda yapılmayanlar (Aşama 2B beyanı)
+## Aşama 3 — Test sonuçları
 
-- **Gerçek kullanıcı DID'si oluşturulmadı.** UI'daki "Kimlik oluştur" butonuna
-  basılmadı.
+| Kapı | Sonuç |
+|---|---|
+| ruff (station-api / technocore-conform) | geçti / geçti |
+| mypy strict (station-api / technocore-conform) | 51 dosya / 13 dosya |
+| pytest | **528 geçti**, 0 hata |
+| Unicode differential | 13.616 girdi, 0 uyuşmazlık |
+| ESLint | geçti |
+| TypeScript + production build | geçti |
+| Vitest | **54 geçti** |
+| `npm audit` | 0 açık |
+| `uv lock --check` | güncel |
+| vendor SHA-256 | 4/4 OK |
+| conformance self-test | PASS |
+| wheel + sdist içerik | geçti |
+| secret taraması | temiz |
+| temiz klon | geçti |
+
+**Toplam 582 test** (528 backend + 54 frontend). Taban 498'di.
+
+### Canlı salt-okuma smoke testi
+
+Yalnız şu altı istek yapıldı (redirect takip edilmedi):
+
+```
+GET https://technocore.chat/.well-known/agent.json
+GET https://technocore.chat/openapi.json
+GET https://technocore.chat/config
+GET https://technocore.chat/healthz
+GET https://technocore.chat/llms.txt
+GET https://technocore.chat/skill.md
+```
+
+Sonuç: **`current`**, 0 kritik fark, 0 uyarı. `/config` o koşuda 503 döndü;
+tamamlayıcı kaynak olduğu için verdict'i etkilemedi ve kullanıcıya gösterildi.
+
+---
+
+## Aşama 3 — Açık riskler
+
+| ID | Risk | Durum |
+|---|---|---|
+| C-R1 | `/healthz` ve `/config` **aralıklı 503** dönüyor | Tamamlayıcı sınıfa alındı; verdict zorunlu iki belgeye dayanıyor, durum dürüstçe gösteriliyor |
+| C-R2 | Projeksiyon canlı belgelerin **bugünkü** yapısına bağlı | Alan yolları koddan okunabilir ve testli; upstream yeniden yapılandırırsa `unavailable`/`drifted` üretir, sessizce geçmez |
+| C-R3 | Beklenen değerler pinlenmiş; canlıya uydurulmuyor | Bilinçli: canlıyı benimseyen bir kontrol sonsuza dek "current" der ve hiçbir şey tespit etmez |
+| C-R4 | Sunucu sertifikası/DNS ele geçirilirse okunan belge yanıltıcı olabilir | TLS doğrulaması zorunlu; kapsam dışı kalan durum `SECURITY.md` §7'de |
+| C-R5 | Rate limit altında art arda denetim `unavailable` üretebilir | Retry sınırlı ve `Retry-After` üst sınırlı; kullanıcı tekrar deneyebilir |
+| C-R6 | Vendor pini hâlâ `7707cb63…`; upstream `main` ilerledi | Bilinçli; yükseltme ayrı ve açık bir karar adımıdır |
+
+---
+
+## Sonraki aşama: Aşama 4 — Composer & Participation
+
+Kapsam: kullanıcı onaylı mesaj/note oluşturma, nonce rezervasyonu (transaction
+içinde, `(did, room)` başına monoton), vault üzerinden imzalama ve gönderim.
+Kabul kriterleri: **AC-13, AC-14, AC-16**.
+
+Aşama 4 gelene kadar Compose yüzeyi kilitli kalır ve üründe hiçbir giden
+yazma kodu bulunmaz.
+
+Ön koşul: kullanıcı açıkça "başlayalım" demeden gerçek gönderim yapılmaz.
+
+---
+
+## Bu turda yapılmayanlar (Aşama 3 beyanı)
+
+- **Gerçek kullanıcı kimlik durumu bu depo tarafından takip edilmez.**
+  Depoya hiçbir operasyonel DID, seed, vault veya recovery dosyası
+  eklenmemiştir; bir test bunu tarayarak doğrular. Bu aşamada geliştirme
+  sırasında kullanıcının kurulu kimliğine dokunulmamıştır.
 - **Operasyonel seed veya private key üretilmedi.** Tüm anahtar materyali
   `TEST-ONLY` etiketli, depoda yayımlanmış fixture'lardır.
 - **Gerçek `.tcrec` recovery dosyası bırakılmadı.**
@@ -551,7 +658,6 @@ Aşama 3 tamamlanmadan write gate'in `manifest_current` kontrolü
   giden bir HTTP istemcisi yoktur; bir test bunu kaynak taramasıyla doğrular.
 - **Vendor pini güncellenmedi.** Upstream `main` ilerlemiş olsa da pin
   `7707cb63…` olarak bırakıldı.
-- Manifest okuma, drift kontrolü ve giden istemci yazılmadı (Aşama 3).
 - Nonce sayacı, rezervasyon, replay reddi ve gerçek imzalama yazılmadı (Aşama 4).
 - LLM/Agent Runtime, Evidence/HMAC zinciri, çoklu DID yazılmadı.
 - Commit, push, PR, tag, release veya deploy yapılmadı.

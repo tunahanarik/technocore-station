@@ -124,7 +124,7 @@ def test_identity_lifecycle_over_http(api: tuple[TestClient, str, FastAPI]) -> N
 
     checks = {check["key"]: check for check in verified["gate"]["checks"]}
     assert checks["conformance_verified"]["state"] == "passed"
-    assert checks["manifest_current"]["state"] == "not_implemented"
+    assert checks["manifest_current"]["state"] == "blocked"
 
 
 @windows_only

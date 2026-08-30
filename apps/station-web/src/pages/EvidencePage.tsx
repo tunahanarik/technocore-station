@@ -1,6 +1,7 @@
 import { Alert, Card, Separator } from "@heroui/react";
 
 import { EmptyState } from "../components/EmptyState";
+import { TechnocoreSourcesPanel } from "../components/TechnocoreSourcesPanel";
 
 interface TrustLevel {
   readonly level: number;
@@ -48,6 +49,10 @@ export function EvidencePage() {
       </Card.Header>
 
       <Card.Content className="flex flex-col gap-4">
+        <TechnocoreSourcesPanel />
+
+        <Separator />
+
         <EmptyState
           description="Bu bilgisayarda henuz hicbir kanit kaydi yok. Kayitlar ancak kullanici onayli bir gonderim yapildiktan sonra olusur; gonderim yolu Asama 4 ile acilir."
           title="Henuz kanit kaydi yok"

@@ -16,6 +16,12 @@ dependencies = [
     "cryptography>=44,<47",
     "argon2-cffi>=23.1,<26",
     "python-multipart>=0.0.20,<1.0",
+    # Stage 3. The read-only Technocore client needs explicit control over the
+    # things that make an outbound request safe: per-phase timeouts, redirects
+    # off, and streaming so the body cap applies to decompressed bytes. httpx
+    # gives all three directly; urllib would need hand-rolled equivalents on
+    # the one code path where a mistake reaches the public internet.
+    "httpx>=0.28,<1.0",
     "technocore-conform",
 ]
 

@@ -88,7 +88,7 @@ def dev_settings(data_dir: Path) -> Settings:
 
 @pytest.fixture
 def engine(settings: Settings) -> Engine:
-    return initialise_database(settings.database_path, stage=2)
+    return initialise_database(settings.database_path, stage=3)
 
 
 @pytest.fixture

@@ -24,15 +24,29 @@ from station_api.schemas import (
     TechnocoreStatus,
 )
 from station_api.security.sessions import Session
+from station_api.technocore.projection import DriftState
+from station_api.technocore.service import TechnocoreService
 
 router = APIRouter(prefix="/api")
 
 CurrentSession = Annotated[Session, Depends(require_session)]
 
-_TECHNOCORE_DETAIL = (
-    "Technocore baglantisi Asama 3 kapsamindadir. Bu surumde hicbir "
-    "Technocore istegi gonderilmez."
-)
+_TECHNOCORE_DETAIL = {
+    "never_checked": (
+        "Resmi kaynaklar bu oturumda henuz denetlenmedi. Station kendiliginden "
+        "istek gondermez; denetimi Evidence & Sources sekmesinden siz baslatirsiniz."
+    ),
+    "current": (
+        "Resmi kaynaklar salt okunur denetlendi ve kritik protokol sozlesmesi "
+        "beklenenle ayni. Bu surumde hicbir yazma yolu yoktur."
+    ),
+    "drifted": (
+        "Kritik protokol alani degismis. Dis yazma kapisi kapali kalir."
+    ),
+    "unavailable": (
+        "Resmi kaynaklara ulasilamadi veya belge okunamadi. Kapi fail-closed."
+    ),
+}
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -74,6 +88,19 @@ def _read_database_status(engine: Engine | None) -> DatabaseStatus:
     )
 
 
+def _technocore_status(request: Request) -> TechnocoreStatus:
+    """The header card, driven by the same verdict the write gate reads.
+
+    Reading this never triggers a fetch: it reports what the last
+    user-initiated check found, or that none has run yet.
+    """
+    service: TechnocoreService | None = getattr(request.app.state, "technocore", None)
+    state: DriftState = (
+        DriftState.NEVER_CHECKED if service is None else service.status().state
+    )
+    return TechnocoreStatus(state=state.value, detail=_TECHNOCORE_DETAIL[state.value])
+
+
 @router.get("/app/status", response_model=AppStatusResponse)
 async def app_status(request: Request, session: CurrentSession) -> AppStatusResponse:
     """Protected status read.
@@ -84,7 +111,7 @@ async def app_status(request: Request, session: CurrentSession) -> AppStatusResp
     settings = request.app.state.settings
     return AppStatusResponse(
         service=ServiceStatus(
-            stage=2,
+            stage=3,
             mode="development" if settings.dev_mode else "production",
         ),
         database=_read_database_status(request.app.state.engine),
@@ -94,5 +121,5 @@ async def app_status(request: Request, session: CurrentSession) -> AppStatusResp
             cookie_secure=False,
             csrf_required=True,
         ),
-        technocore=TechnocoreStatus(detail=_TECHNOCORE_DETAIL),
+        technocore=_technocore_status(request),
     )

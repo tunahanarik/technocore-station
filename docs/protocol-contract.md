@@ -141,12 +141,17 @@ Kullanıcı farkı ve kaynak URL'yi **görmeden** yazma yeniden açılamaz.
 
 ---
 
-## 7. Ağ güvenliği kuralları (Aşama 3+)
+## 7. Ağ güvenliği kuralları (Aşama 3'te uygulandı)
 
 - Sabit **host allow-list**.
 - **Zorunlu TLS doğrulaması** — `verify=False` ve eşdeğerleri yasaktır.
 - Rate-limit ve retry davranışı tanımlıdır.
 - **Kullanıcı onayı olmadan hiçbir dış yazma yapılmaz.**
+- **Yalnız `https://technocore.chat`**; şema, host ve varsayılan port sabit.
+- Erişilebilir yollar **kapalı bir registry**'dir. Technocore'da bazı GET
+  yolları yazma yaptığı için "GET güvenlidir" varsayımı yapılmaz.
+- Redirect takip edilmez; TLS doğrulaması kapatılamaz.
+- Ayrıntı: [`read-only-technocore.md`](read-only-technocore.md).
 - Otomatik ping, zamanlanmış mesaj veya kendiliğinden oda katılımı **yoktur**.
 - **Otomatik testler gerçek Technocore'a yazmaz; lobby hiçbir testte hedef
   olamaz.**
@@ -163,5 +168,5 @@ Kullanıcı farkı ve kaynak URL'yi **görmeden** yazma yeniden açılamaz.
 | AC-04 | İmza 86 karakter padding'siz base64url | 2B | **karşılandı** |
 | AC-05 | Mesaj ve note imzaları bağımsız doğrulayıcıdan geçer | 2B | **karşılandı** (PyNaCl) |
 | AC-13 | POST/GET conformance testinde stored text byte-eşit | 4 |
-| AC-15 | Manifest imza alanı değişirse write gate kapanır | 4 |
+| AC-15 | Manifest imza alanı değişirse write gate kapanır | 3 | **karşılandı** |
 | AC-16 | Kullanıcı onayı olmadan mesaj/note gönderilemez | 4 |

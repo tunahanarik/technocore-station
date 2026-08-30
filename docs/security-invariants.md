@@ -115,10 +115,34 @@ kontrolü ve CSRF katmanından gelir.
 | SI-50 | Paroladan seed türetilmez | 2 |
 | SI-51 | Restore-test tamamlanmadan hiçbir Technocore write çalışmaz | 2 |
 | SI-52 | Yanlış parola ve kurcalanmış recovery **aynı** genel hatayı verir | 2 |
-| SI-53 | TLS doğrulaması kapatılamaz; host allow-list zorunludur | 3 |
-| SI-54 | Technocore içeriği HTML veya tıklanabilir dış link olarak render edilmez | 3 |
+| SI-53 | TLS doğrulaması kapatılamaz; host allow-list zorunludur | 3 — **uygulandı**, bkz. §9c |
+| SI-54 | Technocore içeriği HTML veya tıklanabilir dış link olarak render edilmez | 3 — **uygulandı**, bkz. §9c |
 | SI-55 | Kullanıcı onayı olmadan mesaj/note gönderilemez | 4 |
-| SI-56 | Manifest imza alanı değişirse write gate kapanır | 4 |
+| SI-56 | Manifest imza alanı değişirse write gate kapanır | 3 — **uygulandı**, bkz. §9c |
+
+## 9c. Aşama 3 değişmezleri (uygulandı)
+
+| ID | Değişmez | Beklenen | Test | Durum |
+|---|---|---|---|---|
+| SI-65 | Yalnız `https://technocore.chat`; şema/host/port tam eşleşme | allow-list dışı her biçim reddedilir | `test_technocore_readonly.py::test_every_way_around_the_allow_list_is_refused` | A3 |
+| SI-66 | İstemci URL, method, header veya TLS ayarı kabul etmez | parametre yok | `::test_the_client_takes_no_url_method_or_tls_setting` | A3 |
+| SI-67 | TLS doğrulaması kapatılamaz | `verify=` hiçbir yerde geçmez | `::test_tls_verification_is_never_disabled` | A3 |
+| SI-68 | Redirect takip edilmez | 3xx hata | `::test_a_redirect_is_never_followed` | A3 |
+| SI-69 | Boyut sınırı decompress edilmiş bayt üzerinde | gzip bombası reddedilir | `::test_a_body_over_the_cap_is_refused_on_decompressed_bytes` | A3 |
+| SI-70 | Retry sınırlı; `Retry-After` üst sınırla | en çok 3 deneme | `::test_retries_are_bounded_and_then_give_up`, `::test_a_retry_after_header_is_honoured_but_clamped` | A3 |
+| SI-71 | Giden istekte cookie/auth/DID/CSRF yok | header temiz | `::test_the_request_carries_no_identity_or_credential` | A3 |
+| SI-72 | GET yazma yollarına ulaşan kod yolu yok | AST literal taraması | `test_write_gate.py::test_no_code_path_can_reach_a_technocore_write_endpoint` | A3 |
+| SI-73 | HTTP istemcisi yalnız salt-okuma modülünde | tek dosya | `test_write_gate.py::test_httpx_is_imported_only_by_the_read_only_client` | A3 |
+| SI-74 | Açılışta otomatik dış istek yok | `never_checked` | `::test_reading_status_makes_no_outbound_request` | A3 |
+| SI-75 | Refresh session + CSRF gerektirir | 401/403 | `::test_refresh_requires_session_and_csrf` | A3 |
+| SI-76 | Kritik alan değişince `manifest_current=false` (AC-15) | `drifted` | `::test_a_critical_change_makes_the_manifest_not_current` | A3 |
+| SI-77 | Ağ hatası eski başarılı verdict'i kullanmaz | `unavailable` | `::test_a_later_failure_does_not_inherit_an_earlier_success` | A3 |
+| SI-78 | Persist edilen snapshot yeni process'te kapıyı açmaz | `never_checked` | `::test_a_persisted_check_does_not_open_a_fresh_process` | A3 |
+| SI-79 | API yanıtında raw gövde yoktur | belge işaretleri yok | `::test_the_response_carries_no_document_body` | A3 |
+| SI-80 | DB'de cookie veya keyfi header saklanmaz | temiz | `::test_the_database_never_stores_a_cookie_or_arbitrary_header` | A3 |
+| SI-81 | Snapshot retention sınırlıdır | son 50 koşu | `::test_snapshots_are_written_and_retained_within_the_limit` | A3 |
+| SI-82 | Uzak içerik link veya HTML olmaz (AC-17) | anchor yok | `pages.test.tsx` — "never turns a remote URL into a clickable link" | A3 |
+| SI-83 | Tüm ön koşullar geçse bile yazma yolu yoktur | route yok | `::test_no_outbound_write_route_exists_even_when_every_check_passes` | A3 |
 
 ## 9b. Aşama 2B değişmezleri (uygulandı)
 

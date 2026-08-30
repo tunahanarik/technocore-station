@@ -62,10 +62,18 @@ class SessionSecurityStatus(StrictModel):
 
 
 class TechnocoreStatus(StrictModel):
-    """Always disconnected in this stage. There is no network client yet."""
+    """The read-only connection state shown on the dashboard header.
 
-    state: Literal["not_connected"] = "not_connected"
-    available_from_stage: int = 3
+    Stage 3 made this real. ``never_checked`` is where every launch
+    starts: Station sends no request until the user asks for one, so
+    "not yet checked" is the honest opening state rather than a
+    placeholder. There is still no write path of any kind.
+    """
+
+    state: Literal["never_checked", "current", "drifted", "unavailable"]
+    #: The stage that opens outbound *writes*. Reading is Stage 3;
+    #: composing and sending is Stage 4.
+    write_available_from_stage: int = 4
     detail: str
 
 
@@ -242,3 +250,69 @@ class ConformanceStatusResponse(StrictModel):
     unicode_version: str
     bundle_unicode_version: str
     unicode_version_matches: bool
+
+
+# ---------------------------------------------------------------------------
+# Read-only Technocore monitoring (Stage 3)
+#
+# Everything here is metadata about documents Station fetched from a public
+# origin: which source, which fixed URL, the hash of the exact bytes, and
+# which protocol fields matched. The raw bodies are **never** returned - they
+# stay in the bounded database excerpt for human review. Remote strings are
+# swept and truncated before they reach these models.
+# ---------------------------------------------------------------------------
+
+
+class OfficialSourceStatus(StrictModel):
+    """One official document, as far as the UI is allowed to know."""
+
+    source_id: str
+    url: str
+    authority: int
+    outcome: Literal["ok", "fetch_error", "parse_error"]
+    http_status: int
+    content_type: str
+    etag: str
+    last_modified: str
+    #: First 12 hex characters of the SHA-256 over the exact response bytes.
+    short_hash: str
+    byte_count: int
+    detail: str
+    rationale: str
+
+
+class ProtocolFieldStatus(StrictModel):
+    """One field of the critical protocol projection, and its verdict."""
+
+    key: str
+    label: str
+    source_id: str
+    json_path: str
+    severity: Literal["critical", "warning"]
+    expected: str
+    observed: str
+    matches: bool
+    #: Why a change to this field matters, in plain language.
+    rationale: str
+
+
+class TechnocoreStatusResponse(StrictModel):
+    """The read-only monitoring verdict.
+
+    ``state`` is the honest four-way answer. ``never_checked`` is the state
+    every launch starts in: Station contacts nobody until the user asks it
+    to, and a check recorded in an earlier session never restores an open
+    gate.
+    """
+
+    state: Literal["never_checked", "current", "drifted", "unavailable"]
+    manifest_current: bool
+    checked_at: datetime | None
+    last_attempt_at: datetime | None
+    last_success_at: datetime | None
+    reasons: list[str]
+    sources: list[OfficialSourceStatus]
+    fields: list[ProtocolFieldStatus]
+    critical_mismatch_count: int
+    warning_count: int
+    origin: str

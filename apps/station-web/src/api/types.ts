@@ -32,9 +32,13 @@ export interface SessionSecurityStatus {
   readonly transport: "loopback-http";
 }
 
-export interface TechnocoreStatus {
-  readonly state: "not_connected";
-  readonly available_from_stage: number;
+/** The four honest states of the read-only connection. */
+export type DriftState = "never_checked" | "current" | "drifted" | "unavailable";
+
+export interface TechnocoreHeaderStatus {
+  readonly state: DriftState;
+  /** Writing opens in Stage 4. Reading is Stage 3. */
+  readonly write_available_from_stage: number;
   readonly detail: string;
 }
 
@@ -42,7 +46,7 @@ export interface AppStatus {
   readonly service: ServiceStatus;
   readonly database: DatabaseStatus;
   readonly session_security: SessionSecurityStatus;
-  readonly technocore: TechnocoreStatus;
+  readonly technocore: TechnocoreHeaderStatus;
 }
 
 // --- Identity and recovery (Stage 2) --------------------------------------
@@ -156,4 +160,53 @@ export interface ConformanceStatus {
   readonly unicode_version: string;
   readonly bundle_unicode_version: string;
   readonly unicode_version_matches: boolean;
+}
+
+// --- Read-only Technocore monitoring (Stage 3) -----------------------------
+//
+// Metadata only. The API never returns a document body, so nothing here can
+// carry remote markup, a room message or a note value.
+
+export type SourceOutcome = "ok" | "fetch_error" | "parse_error";
+
+export interface OfficialSourceStatus {
+  readonly source_id: string;
+  readonly url: string;
+  readonly authority: number;
+  readonly outcome: SourceOutcome;
+  readonly http_status: number;
+  readonly content_type: string;
+  readonly etag: string;
+  readonly last_modified: string;
+  /** First 12 hex characters of the SHA-256 over the exact response bytes. */
+  readonly short_hash: string;
+  readonly byte_count: number;
+  readonly detail: string;
+  readonly rationale: string;
+}
+
+export interface ProtocolFieldStatus {
+  readonly key: string;
+  readonly label: string;
+  readonly source_id: string;
+  readonly json_path: string;
+  readonly severity: "critical" | "warning";
+  readonly expected: string;
+  readonly observed: string;
+  readonly matches: boolean;
+  readonly rationale: string;
+}
+
+export interface TechnocoreStatus {
+  readonly state: DriftState;
+  readonly manifest_current: boolean;
+  readonly checked_at: string | null;
+  readonly last_attempt_at: string | null;
+  readonly last_success_at: string | null;
+  readonly reasons: readonly string[];
+  readonly sources: readonly OfficialSourceStatus[];
+  readonly fields: readonly ProtocolFieldStatus[];
+  readonly critical_mismatch_count: number;
+  readonly warning_count: number;
+  readonly origin: string;
 }

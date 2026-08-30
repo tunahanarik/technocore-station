@@ -21,6 +21,7 @@ from station_api.routes import api as api_routes
 from station_api.routes import conformance as conformance_routes
 from station_api.routes import identity as identity_routes
 from station_api.routes import session as session_routes
+from station_api.routes import technocore as technocore_routes
 from station_api.security.middleware import (
     CsrfMiddleware,
     FetchMetadataMiddleware,
@@ -30,6 +31,7 @@ from station_api.security.middleware import (
 )
 from station_api.security.sessions import SessionStore
 from station_api.security.tokens import BootstrapTokenStore
+from station_api.technocore.service import TechnocoreService
 
 #: apps/station-api/src/station_api/app.py -> repo root
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -103,6 +105,7 @@ def create_app(
     web_dist: Path | None = DEFAULT_WEB_DIST,
     token_store: BootstrapTokenStore | None = None,
     conformance: ConformanceService | None = None,
+    technocore: TechnocoreService | None = None,
 ) -> FastAPI:
     """Build the application.
 
@@ -131,11 +134,20 @@ def create_app(
     # so the two can never disagree about whether this build is conformant.
     app.state.conformance = conformance or default_conformance_service()
 
+    # The live-check verdict. Starts at never_checked and stays there
+    # until the user asks for a check: creating the app contacts nobody.
+    # One instance, shared by the status route and the write gate, so the
+    # two surfaces cannot disagree about whether the protocol is current.
+    app.state.technocore = technocore or TechnocoreService(engine=engine)
+
     # The identity service needs a database. Without one the identity routes
     # answer 503 rather than pretending to work.
     app.state.identity_service = (
         IdentityService(
-            engine=engine, data_dir=settings.data_dir, conformance=app.state.conformance
+            engine=engine,
+            data_dir=settings.data_dir,
+            conformance=app.state.conformance,
+            technocore=app.state.technocore,
         )
         if engine is not None
         else None
@@ -146,6 +158,7 @@ def create_app(
     app.include_router(identity_routes.router)
     app.include_router(identity_routes.gate_router)
     app.include_router(conformance_routes.router)
+    app.include_router(technocore_routes.router)
 
     # Registered last so it cannot shadow /api or /session.
     if web_dist is not None:

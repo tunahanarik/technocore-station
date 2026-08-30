@@ -9,9 +9,15 @@ geçici kayıtlarını yerelde yeniden doğrulanabilir biçimde saklayan
 > Technocore imzayı doğrular; Station canonical metni, alınan kaydı ve
 > kaynağı doğrular.
 
-**Durum: Aşama 2 — Identity & Recovery.** Kimlik, DPAPI kasası ve `.tcrec`
-recovery çalışıyor. İmzalama, Technocore bağlantısı ve Evidence özellikleri
-**henüz yoktur**; recovery doğrulanmadan dış yazma açılmaz. Güncel durum:
+**Durum: Aşama 3 — Salt okunur Technocore tamamlandı.** Kimlik, recovery ve
+protokol uygunluk motoru çalışıyor; Station artık resmî kaynakları **yalnız
+okuyarak** protokol sürüklenmesini tespit ediyor. Mesaj yazma, imzalama ve
+Evidence özellikleri **henüz yoktur** — gönderim yolu Aşama 4'te açılır.
+
+Uygunluk ile güncellik ayrı şeylerdir: uygunluk self-test'i bu yapının
+**pinlenmiş referans commit** ile aynı davrandığını gösterir; salt okunur
+denetim ise **canlı sunucunun** hâlâ o protokolü yayımladığını gösterir. İkisi
+de geçmeden dış yazma kapısı açılmaz. Güncel durum:
 [`PROJECT_STATUS.md`](PROJECT_STATUS.md).
 
 Ürün bir wallet, token claim uygulaması, airdrop puanlayıcısı, otomatik mesaj
@@ -30,6 +36,7 @@ botu veya kimlik sağlayıcısı **değildir**.
 | [`docs/architecture.md`](docs/architecture.md) | Mimari ve paket sınırları |
 | [`docs/protocol-contract.md`](docs/protocol-contract.md) | Canonical/sweep/imza sözleşmesi |
 | [`docs/conformance.md`](docs/conformance.md) | Uygunluk motoru, self-test, CLI (Aşama 2B) |
+| [`docs/read-only-technocore.md`](docs/read-only-technocore.md) | Salt okunur istemci, kaynak registry'si ve drift modeli (Aşama 3) |
 | [`docs/security-invariants.md`](docs/security-invariants.md) | Test edilebilir değişmezler (SI-01…SI-56) |
 | [`docs/evidence-model.md`](docs/evidence-model.md) | Dört seviyeli kanıt modeli |
 | [`docs/identity-lifecycle.md`](docs/identity-lifecycle.md) | Kimlik durum makinesi ve akışlar |
@@ -147,6 +154,7 @@ Bağımlılıklar minimumda tutulur. Her doğrudan bağımlılığın gerekçesi
 | `alembic` | MIT | Deterministik ve idempotent migration zinciri; version tablosu `schema_migrations` olarak adlandırılır |
 | `pydantic` | MIT | Response şeması sınırı; `extra="forbid"` ile beklenmeyen alan eklenemez |
 | `technocore-conform` | MIT (yerel) | Protokol uygunluk paketi — platformdan bağımsız sınır (ADR-018) |
+| `httpx` | BSD-3 | **Aşama 3.** Salt okunur Technocore istemcisi; faz bazlı timeout, redirect kapatma ve streaming (decompress edilmiş bayt üzerinde boyut sınırı) doğrudan desteklenir. Tek giden istek yolunda bunları elle yazmak yerine kütüphaneden almak tercih edildi. |
 
 **Test ve geliştirme:** `pytest`, `hypothesis` (sweep property testleri),
 `httpx` (gerçek loopback istemcisi), `pynacl`, `ruff`, `mypy`.

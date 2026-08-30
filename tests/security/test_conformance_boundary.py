@@ -354,7 +354,10 @@ def test_pynacl_is_absent_from_the_production_import_graph() -> None:
         "import sys;"
         "import station_api.app, station_api.launcher, technocore_conform;"
         "tops = {name.split('.')[0] for name in sys.modules};"
-        "print(','.join(sorted(tops & {'nacl', 'httpx', 'requests', 'urllib3'})))"
+        # httpx is deliberately absent from this set: Stage 3 added it as
+        # the read-only client's transport. That it is confined to one
+        # module is asserted in test_write_gate.py instead.
+        "print(','.join(sorted(tops & {'nacl', 'requests', 'urllib3', 'aiohttp'})))"
     )
     result = subprocess.run(
         [sys.executable, "-c", script],
@@ -366,7 +369,7 @@ def test_pynacl_is_absent_from_the_production_import_graph() -> None:
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "", (
-        f"a test-only or network library reached production: {result.stdout.strip()}"
+        f"a test-only or unreviewed network library reached production: {result.stdout.strip()}"
     )
 
 

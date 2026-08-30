@@ -91,7 +91,12 @@ def test_full_session_handoff_over_the_wire(live_server: LiveServer) -> None:
 
         status = client.get("/api/app/status")
         assert status.status_code == 200
-        assert status.json()["technocore"]["state"] == "not_connected"
+        # Stage 3 replaced the placeholder "not_connected" with the honest
+        # four-way state. A freshly launched server has contacted nobody, so
+        # the only correct opening value is never_checked - which is also the
+        # proof that starting Station makes no outbound request.
+        assert status.json()["technocore"]["state"] == "never_checked"
+        assert status.json()["technocore"]["write_available_from_stage"] == 4
 
         # The token is spent.
         assert client.get(f"/session/{token}", follow_redirects=False).status_code == 404
