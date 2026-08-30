@@ -13,6 +13,7 @@
 
 import type {
   AppStatus,
+  ConformanceStatus,
   IdentityStatus,
   ProtectionMode,
   RecoveryInspectResult,
@@ -103,6 +104,17 @@ async function mutateForm<T>(path: string, form: FormData): Promise<T> {
 
 export async function fetchIdentity(): Promise<IdentityStatus> {
   return request<IdentityStatus>("/api/identity");
+}
+
+/**
+ * The runtime conformance verdict.
+ *
+ * Read-only and public: check names, vector counts and the pinned reference,
+ * package, Python and Unicode versions. No vectors and no key material cross
+ * this boundary.
+ */
+export async function fetchConformance(): Promise<ConformanceStatus> {
+  return request<ConformanceStatus>("/api/conformance/status");
 }
 
 export interface CreateIdentityInput {

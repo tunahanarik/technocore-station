@@ -94,10 +94,15 @@ station-web  ──HTTP(aynı origin)──▶  station-api  ──▶  technoco
 
 ### `packages/technocore-conform`
 - Platform ve FastAPI'den **bağımsız** saf Python paketi.
-- `station-api`, SQLite, FastAPI veya Windows modülü **import etmez**.
+- `station-api`, SQLite, FastAPI, Windows veya **ağ** modülü **import etmez**.
 - Resmî kodu **kopyalamadan** spesifikasyonu uygular (MIT).
-- **Aşama 1'de yalnız paket sınırı + placeholder dokümantasyonudur.**
-  Sweep, DID veya imza kodu henüz yoktur.
+- **Aşama 2B'de protokol yüzeyi uygulandı:** sweep, isim/nonce doğrulama,
+  canonical string, `did:key`, Ed25519 imzalama/doğrulama, runtime self-test
+  ve `technocore-conform` CLI'ı. Tek runtime bağımlılığı `cryptography`.
+- Import anında **yan etkisi yoktur**: disk okumaz, self-test çalıştırmaz.
+- Self-test vektörleri paket verisi olarak gelir; `vendor/` dizinine
+  **production runtime'da ihtiyaç duymaz**.
+- Ayrıntı: [`conformance.md`](conformance.md).
 
 ### `vendor/technocore-reference`
 - Pinlenmiş resmî commit, **yalnız test oracle'ı** (Apache-2.0).

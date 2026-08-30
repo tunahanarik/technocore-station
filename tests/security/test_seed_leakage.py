@@ -69,7 +69,15 @@ def test_seed_is_absent_from_every_http_response(
     assert installed_identity is not None
     assert csrf_token
 
-    for path in ("/api/identity", "/api/write-gate", "/api/app/status", "/api/health"):
+    for path in (
+        "/api/identity",
+        "/api/write-gate",
+        "/api/app/status",
+        "/api/health",
+        # Stage 2B. The conformance vectors hold TEST-ONLY seeds, so this
+        # response is worth searching even though the canary is not among them.
+        "/api/conformance/status",
+    ):
         response = client.get(path)
         _assert_clean(response.content, f"{path} body")
         headers = " ".join(f"{key}: {value}" for key, value in response.headers.items())

@@ -18,6 +18,7 @@ geçerlidir. Türetilmiş belgeler:
 | [`SECURITY.md`](SECURITY.md) | Güvenlik politikası ve raporlama |
 | [`docs/architecture.md`](docs/architecture.md) | Sistem mimarisi ve paket sınırları |
 | [`docs/protocol-contract.md`](docs/protocol-contract.md) | Technocore canonical/imza sözleşmesi |
+| [`docs/conformance.md`](docs/conformance.md) | Uygunluk motoru, runtime self-test ve CLI |
 | [`docs/security-invariants.md`](docs/security-invariants.md) | Test edilebilir güvenlik değişmezleri |
 | [`docs/evidence-model.md`](docs/evidence-model.md) | Dört seviyeli kanıt güven modeli |
 | [`docs/decisions/README.md`](docs/decisions/README.md) | ADR indeksi |

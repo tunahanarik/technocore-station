@@ -66,6 +66,21 @@ sürece burada tutulurlar.
 | IMP-209 | Raw seed importu yalnız CLI; HTTP endpoint yok | Seed request body'sine, proxy tamponuna ve loga girmemelidir |
 | IMP-210 | Import yalnız 64-hex biçimi kabul eder; passphrase yolu reddedilir | Resmî `sign.py` bu iki yolu sunar, künye §8.3 ikincisini yasaklar |
 
+## 2c. Aşama 2B uygulama kararları
+
+| ID | Karar | Gerekçe |
+|---|---|---|
+| IMP-211 | İmzalama yalnız `CanonicalPayload` alır; `sign_arbitrary_string` benzeri public yol yoktur | Ham metni imzalamak sunucudan 403 alır ve saklanan kayda karşı yeniden doğrulanamaz; ulaşılamaz kılmak her çağrı yerinde test etmekten ucuzdur |
+| IMP-212 | Sweep limitleri `SweepPolicy` tipiyle taşınır, çıplak `int` ile değil | 4096 ile 8192'yi takas etmek tip denetiminden geçen, sessiz ve her imzayı bozan bir hata olurdu |
+| IMP-213 | Sweep oracle'ı, pinlenmiş `store.py`'nin AST'sinden normatif düğümler izole edilerek **çalıştırılır** | `store.py` `orjson`/`config`/`didkey`/`fcntl` çektiği için import edilemez; elle yazılmış bir "beklenen sweep" yalnız kendi anlayışımızı test ederdi |
+| IMP-214 | Self-test vektörleri pakette gelir ve SHA-256'ları kodda pinlenir | Son kullanıcıda `vendor/` yoktur; digest pini, vektörleri düzenleyerek kapıyı gevşetmeyi imkânsız kılar |
+| IMP-215 | `run_self_test` asla exception fırlatmaz; başarısızlık bir sonuçtur | Bir çağıranın `except` bloğu crash'i sessizce "geçti"ye çeviremesin |
+| IMP-216 | Unicode veritabanı sürümü uyuşmazlığı **başarısızlık** sayılır | Sweep Unicode kategorileri üzerinden tanımlıdır; kapsanmayan bir sürümde elimizde kanıt yoktur, kanıtsızlık uyumluluk değildir |
+| IMP-217 | AC-05 doğrulayıcısı PyNaCl'dir, vendor pini genişletilmez | Resmî `didkey.py` vendorlanmamıştır ve bu aşamada pini sessizce genişletmek yasaktır; PyNaCl aynı libsodium'dur ve yalnız test bağımlılığıdır |
+| IMP-218 | CLI'da `sign` komutu ve seed/parola argümanı yoktur | argv başka süreçlerden görünür, shell geçmişine ve crash dump'larına düşer |
+| IMP-219 | Nonce `int`'e çevrilmez; leading zero korunur | `"007"` ile `"7"` farklı wire baytlarıdır ve imza baytları kapsar |
+| IMP-220 | Uygunluk verdicti process başına bir kez hesaplanır ve gate ile status endpoint'i **aynı** nesneyi okur | İkisinin uygunluk hakkında farklı şey söylemesi mümkün olmasın |
+
 ## 3. Yeni ADR nasıl eklenir
 
 Yeni ve **kalıcı** bir mimari karar alındığında bu dizine

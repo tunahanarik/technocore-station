@@ -96,6 +96,27 @@ oturum/bootstrap yanıtlarında `Cache-Control: no-store`.
 - OpenAPI response modellerinde `seed`, `private_key`, `secret`, `mnemonic`
   alanı bulunamaz — bu otomatik testle doğrulanır.
 - Evidence ve log yazılmadan önce secret-pattern taraması uygulanır.
+- İmzalama seed'i **hiçbir nesnede uzun ömürlü saklanmaz**: anahtar kurulur,
+  kullanılır ve bırakılır; `repr`, log veya cache'e girmez. `CanonicalPayload`
+  seed taşımaz ve `repr`'i kullanıcı metnini değil uzunlukları yazar.
+- `technocore-conform` CLI'ında **`sign` komutu yoktur**; seed, parola,
+  seed-dosyası veya ortam değişkeni seçeneği de yoktur. Seed asla bir komut
+  satırı argümanı olamaz — argv başka süreçlerden görünür, shell geçmişine ve
+  crash dump'larına düşer.
+
+## 6.1 Uygunluk yüzeyi (Aşama 2B)
+
+- `GET /api/conformance/status` **salt okunur** ve session korumalıdır; yanıt
+  yalnız public metadata taşır (kontrol adları, vektör sayıları, bundle
+  digest'i, pinlenmiş commit, paket/Python/Unicode sürümleri). Vektör içeriği
+  ve içindeki TEST-ONLY seed'ler serialize **edilmez**.
+- Uygunluk self-test'i **fail-closed**'dur ve asla exception fırlatmaz; bir
+  crash "geçti" sayılamaz. Vektör paketinin SHA-256'sı kodda pinlenmiştir, bu
+  yüzden vektörleri düzenleyerek kapıyı gevşetmek mümkün değildir.
+- Başarılı bir self-test **dış yazma kapısını açmaz**. Manifest drift
+  kontrolü (Aşama 3) gelene kadar kapı kapalı kalır.
+- Doğrulama için kullanılan PyNaCl yalnız bir **test** bağımlılığıdır;
+  production import grafiğinde bulunmadığı testle doğrulanır.
 
 ## 7. Bilinen sınırlar (dürüst kapsam)
 

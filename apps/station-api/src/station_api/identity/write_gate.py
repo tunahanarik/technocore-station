@@ -8,11 +8,18 @@ re-implemented per endpoint.
 Two honesty rules govern this module:
 
 1. A check that is **not implemented yet** reports ``NOT_IMPLEMENTED``. It is
-   never counted as passed. Conformance and manifest-drift are exactly that
-   today, which is why ``allowed`` is False even for a fully recovered
-   identity - there is no verified canonicalization engine yet, so signing
-   anything would be unsafe.
+   never counted as passed. Manifest-drift is exactly that today, which is
+   why ``allowed`` is False even for a fully recovered identity whose
+   conformance self-test passes: nothing yet detects the live server moving
+   off the pinned protocol, so writing would be a guess.
 2. There is no override flag, no environment escape hatch and no debug bypass.
+
+Stage 2B made ``conformance_verified`` real. It now reflects an actual run of
+the shipped conformance vectors, not a placeholder. Note carefully what that
+check does and does not assert: it says this build reproduces the *pinned
+reference commit's* behaviour. It says nothing about whether the live
+Technocore server still speaks that protocol - that is ``manifest_current``,
+and it remains closed.
 """
 
 from __future__ import annotations
@@ -78,6 +85,10 @@ class WriteGateInput:
     identity_revoked: bool
     vault_present: bool
     recovery_verified: bool
+    #: Whether the runtime conformance self-test passed. Defaults to False so
+    #: a caller that forgets to supply it gets a closed gate, never an open
+    #: one.
+    conformance_verified: bool = False
 
 
 def evaluate(state: WriteGateInput) -> WriteGateStatus:
@@ -109,11 +120,12 @@ def evaluate(state: WriteGateInput) -> WriteGateStatus:
             detail="Recovery restore-test ile dogrulanmis olmali.",
             stage=IDENTITY_STAGE,
         ),
-        # Not yet built. Reported honestly rather than assumed to pass.
         GateCheck(
             key="conformance_verified",
-            state=CheckState.NOT_IMPLEMENTED,
-            detail="Sweep/canonical/imza uygunlugu Asama 2B ile gelir.",
+            state=(
+                CheckState.PASSED if state.conformance_verified else CheckState.BLOCKED
+            ),
+            detail="Sweep/canonical/imza uygunlugu self-test ile dogrulanmali.",
             stage=CONFORMANCE_STAGE,
         ),
         GateCheck(

@@ -4,9 +4,14 @@
 > Resmî referans: `flop-labs/technocore-chat` @ `7707cb63ebf638e8ef0cf59d1364818b9fef7d24`
 > (bkz. [`../vendor/technocore-reference/PROVENANCE.md`](../vendor/technocore-reference/PROVENANCE.md)).
 
-**Uygulama durumu: HENÜZ UYGULANMADI.** Aşama 1'de Technocore'a hiçbir
-network yolu, istemci veya write endpoint'i yoktur. Bu belge Aşama 2B–4
-için sözleşmeyi sabitler ve testlerin hedefini tanımlar.
+**Uygulama durumu: canonical/sweep/imza yüzeyi UYGULANDI (Aşama 2B); ağ
+yolu YOKTUR.** `technocore-conform` paketi sweep, canonical string, `did:key`
+ve Ed25519 imzalama/doğrulama sözleşmesini uygular ve pinlenmiş resmî
+referansa karşı diferansiyel olarak test edilir. Technocore'a **hiçbir**
+network yolu, istemci veya write endpoint'i hâlâ yoktur; dış yazma kapısı
+kapalıdır.
+
+Uygulama ayrıntısı, self-test ve CLI için: [`conformance.md`](conformance.md).
 
 ---
 
@@ -45,6 +50,10 @@ Sözleşme:
 1. Unicode kategorisi **`Cc`, `Cf`, `Cs`, `Co`, `Zl` veya `Zp`** olan her
    karakter tek bir **boşluk** (U+0020) ile değiştirilir.
 2. Sonuç metnin **uçları trim edilir**.
+
+Sweep **normalization yapmaz** ve boşlukları **collapse etmez**: art arda üç
+kontrol karakteri üç boşluk olur. Uzunluk sweep sonrasındaki code point
+sayısıyla ölçülür (mesaj 4096, note değeri 8192).
 
 Sonuçlar:
 - Sweep **idempotent** olmalıdır: `sweep(sweep(x)) == sweep(x)` (AC-03).
@@ -146,13 +155,13 @@ Kullanıcı farkı ve kaynak URL'yi **görmeden** yazma yeniden açılamaz.
 
 ## 8. Kabul kriterleri (bu sözleşmeye bağlı)
 
-| ID | Kriter | Aşama |
-|---|---|---|
-| AC-01 | Aynı seed için DID resmî script ile karakter karakter aynı | 2B |
-| AC-02 | En az 10.000 Unicode girdide sweep resmî `clean_text` ile aynı | 2B |
-| AC-03 | Sweep idempotent | 2B |
-| AC-04 | İmza 86 karakter padding'siz base64url | 2B |
-| AC-05 | Mesaj ve note imzaları bağımsız doğrulayıcıdan geçer | 2B |
+| ID | Kriter | Aşama | Durum |
+|---|---|---|---|
+| AC-01 | Aynı seed için DID resmî script ile karakter karakter aynı | 2B | **karşılandı** |
+| AC-02 | En az 10.000 Unicode girdide sweep resmî `clean_text` ile aynı | 2B | **karşılandı** (13.616 girdi) |
+| AC-03 | Sweep idempotent | 2B | **karşılandı** |
+| AC-04 | İmza 86 karakter padding'siz base64url | 2B | **karşılandı** |
+| AC-05 | Mesaj ve note imzaları bağımsız doğrulayıcıdan geçer | 2B | **karşılandı** (PyNaCl) |
 | AC-13 | POST/GET conformance testinde stored text byte-eşit | 4 |
 | AC-15 | Manifest imza alanı değişirse write gate kapanır | 4 |
 | AC-16 | Kullanıcı onayı olmadan mesaj/note gönderilemez | 4 |

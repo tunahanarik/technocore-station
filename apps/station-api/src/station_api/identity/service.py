@@ -32,6 +32,7 @@ from technocore_conform import (
     public_key_from_seed,
 )
 
+from station_api.conformance import ConformanceService, default_conformance_service
 from station_api.db.models import (
     ACTIVE_SLOT,
     Identity,
@@ -112,11 +113,15 @@ class IdentityService:
         data_dir: Path,
         vault: DpapiVault | None = None,
         kdf_policy: KdfPolicy = PRODUCTION_KDF_POLICY,
+        conformance: ConformanceService | None = None,
     ) -> None:
         self._engine = engine
         self._data_dir = data_dir
         self._kdf_policy = kdf_policy
         self._vault = vault or DpapiVault(data_dir, kdf_policy=kdf_policy)
+        # Shared by default so the self-test runs once per process rather than
+        # once per service instance.
+        self._conformance = conformance or default_conformance_service()
 
     # --- read ----------------------------------------------------------
 
@@ -162,6 +167,7 @@ class IdentityService:
                         identity_revoked=False,
                         vault_present=False,
                         recovery_verified=False,
+                        conformance_verified=self._conformance.passed,
                     )
                 ),
             )
@@ -210,6 +216,7 @@ class IdentityService:
                     identity_revoked=revoked,
                     vault_present=vault_present,
                     recovery_verified=verified_at is not None,
+                    conformance_verified=self._conformance.passed,
                 )
             ),
         )

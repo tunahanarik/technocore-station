@@ -113,8 +113,18 @@ def test_identity_lifecycle_over_http(api: tuple[TestClient, str, FastAPI]) -> N
     assert verified["gate"]["identity_ready"] is True
 
     # AC-12: identity is ready, but writing is still closed and honest about why.
+    #
+    # Stage 2B made conformance a real check, and on a healthy build it now
+    # passes - so the remaining blocker is manifest drift, which is Stage 3.
+    # The property under test is unchanged: a ready identity is not a licence
+    # to write.
     assert verified["gate"]["allowed"] is False
-    assert "conformance_verified" in verified["gate"]["blocking_reasons"]
+    assert "manifest_current" in verified["gate"]["blocking_reasons"]
+    assert "conformance_verified" not in verified["gate"]["blocking_reasons"]
+
+    checks = {check["key"]: check for check in verified["gate"]["checks"]}
+    assert checks["conformance_verified"]["state"] == "passed"
+    assert checks["manifest_current"]["state"] == "not_implemented"
 
 
 @windows_only

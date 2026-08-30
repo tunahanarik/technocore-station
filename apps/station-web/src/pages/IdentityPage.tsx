@@ -1,8 +1,8 @@
 import { Alert, Button, Card, Separator } from "@heroui/react";
 import { useCallback, useEffect, useState } from "react";
 
-import { fetchIdentity } from "../api/client";
-import type { IdentityStatus } from "../api/types";
+import { fetchConformance, fetchIdentity } from "../api/client";
+import type { ConformanceStatus, IdentityStatus } from "../api/types";
 import { EmptyState } from "../components/EmptyState";
 import { StatusPill, type StatusTone } from "../components/StatusPill";
 import {
@@ -22,6 +22,102 @@ import {
  */
 
 type DialogName = "create" | "export" | "restore" | "adopt" | "revoke" | null;
+
+/**
+ * Turkish labels for the self-test's contract areas.
+ *
+ * `unicode_database` is deliberately absent: it is a version comparison
+ * rather than a protocol capability, and it is reported with the other
+ * runtime versions below.
+ */
+const CAPABILITY_LABELS: Record<string, string> = {
+  sweep: "Sweep",
+  did: "DID",
+  canonical: "Canonical",
+  signing: "Imzalama",
+  verification: "Dogrulama",
+  encoding: "base64url",
+  tamper: "Tamper reddi",
+};
+
+/** The conformance block inside "Teknik ayrintilar". */
+function ConformancePanel({ conformance }: { readonly conformance: ConformanceStatus | null }) {
+  if (conformance === null) {
+    return <p className="text-sm text-muted">Uygunluk durumu okunuyor...</p>;
+  }
+
+  const areas = conformance.checks.filter((check) => check.name in CAPABILITY_LABELS);
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="text-sm font-semibold text-foreground">Protokol uygunlugu</h3>
+        <StatusPill
+          label={conformance.passed ? "Asama 2B · Hazir" : "Asama 2B · Basarisiz"}
+          tone={conformance.passed ? "ok" : "problem"}
+        />
+      </div>
+
+      <p className="text-xs text-muted">
+        Bu sonuc, bu yapinin <strong>pinlenmis referans commit</strong> ile ayni
+        davrandigini gosterir. Canli Technocore sunucusunun hala ayni protokolde
+        oldugunu <strong>gostermez</strong>; o kontrol Asama 3'te gelir.
+      </p>
+
+      <div className="flex flex-wrap gap-2">
+        {areas.map((check) => (
+          <StatusPill
+            key={check.name}
+            label={`${CAPABILITY_LABELS[check.name]} (${String(check.vectors)})`}
+            tone={check.passed ? "ok" : "problem"}
+          />
+        ))}
+      </div>
+
+      {!conformance.passed && conformance.failures.length > 0 && (
+        <ul className="flex flex-col gap-1">
+          {conformance.failures.map((failure) => (
+            <li key={failure} className="text-xs text-danger">
+              {failure}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <dl className="grid grid-cols-1 gap-x-6 gap-y-1 text-xs text-muted sm:grid-cols-2">
+        <div className="flex justify-between gap-2">
+          <dt>Pinlenmis referans</dt>
+          <dd className="font-mono">{conformance.upstream_commit_short}</dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt>Vektor paketi</dt>
+          {/* Short form only: the full digest is 64 hex characters, the same
+              shape as a seed, and this surface renders no such run. */}
+          <dd className="font-mono">{conformance.bundle_digest_short}</dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt>Vektor sayisi</dt>
+          <dd className="font-mono">{conformance.bundle_vectors}</dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt>Paket surumu</dt>
+          <dd className="font-mono">{conformance.package_version}</dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt>Python</dt>
+          <dd className="font-mono">{conformance.python_version}</dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt>Unicode veritabani</dt>
+          <dd className="font-mono">
+            {conformance.unicode_version}
+            {conformance.unicode_version_matches ? "" : " (uyusmuyor)"}
+          </dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
 
 function formatDate(value: string | null): string {
   if (value === null) return "-";
@@ -109,6 +205,7 @@ function stateLabel(status: IdentityStatus): string {
 
 export function IdentityPage() {
   const [status, setStatus] = useState<IdentityStatus | null>(null);
+  const [conformance, setConformance] = useState<ConformanceStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [dialog, setDialog] = useState<DialogName>(null);
@@ -122,6 +219,15 @@ export function IdentityPage() {
       setError(caught instanceof Error ? caught.message : "Kimlik durumu okunamadi.");
     } finally {
       setLoading(false);
+    }
+
+    // Loaded separately, and never allowed to block the identity surface: a
+    // conformance read that fails leaves the panel unknown rather than
+    // hiding the identity the user came here for.
+    try {
+      setConformance(await fetchConformance());
+    } catch {
+      setConformance(null);
     }
   }, []);
 
@@ -321,6 +427,12 @@ export function IdentityPage() {
               tone={capability.aead_available ? "ok" : "problem"}
             />
           </div>
+
+          <Separator />
+
+          <ConformancePanel conformance={conformance} />
+
+          <Separator />
 
           <div className="flex flex-col gap-2">
             <h3 className="text-sm font-semibold text-foreground">Dis yazma kapisi</h3>
