@@ -1,0 +1,36 @@
+/* Import order matters: tailwindcss first, then HeroUI. */
+@import "tailwindcss";
+@import "@heroui/styles";
+
+/*
+ * Paint the page background before React mounts, so switching to the system
+ * colour scheme in main.tsx cannot flash a white panel on a dark desktop.
+ * These two literals are the only hard-coded colours in the app; every other
+ * colour comes from a HeroUI theme token.
+ */
+@layer base {
+  html {
+    background-color: #ffffff;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    html:not([data-theme="light"]) {
+      background-color: #0a0a0a;
+    }
+  }
+
+  body {
+    min-height: 100vh;
+    font-family:
+      "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system,
+      "Helvetica Neue", Arial, sans-serif;
+  }
+
+  /* Canonical strings and hashes are shown verbatim in a monospace surface;
+     no syntax highlighting, no linkification of untrusted content. */
+  code,
+  pre,
+  samp {
+    font-family: "Cascadia Mono", Consolas, "Courier New", ui-monospace, monospace;
+  }
+}

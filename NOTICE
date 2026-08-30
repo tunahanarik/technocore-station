@@ -1,0 +1,52 @@
+Technocore Station
+Copyright (c) 2026 Technocore Station contributors
+
+This product is licensed under the MIT License. See LICENSE.
+
+================================================================================
+LICENSE MAP
+================================================================================
+
+The following table states, per directory, which license applies. There is no
+other third-party source vendored into this repository.
+
+  PATH                          LICENSE       COPYRIGHT
+  ----------------------------  ------------  --------------------------------
+  apps/station-web/             MIT           Technocore Station contributors
+  apps/station-api/             MIT           Technocore Station contributors
+  packages/technocore-conform/  MIT           Technocore Station contributors
+  tests/                        MIT           Technocore Station contributors
+  docs/                         MIT           Technocore Station contributors
+  vendor/technocore-reference/  Apache-2.0    Copyright 2026 FLOP Labs
+
+================================================================================
+vendor/technocore-reference/ -- Apache License 2.0
+================================================================================
+
+The directory vendor/technocore-reference/ contains an UNMODIFIED, pinned copy
+of files from the official FLOP Labs project technocore-chat:
+
+  Repository:  https://github.com/flop-labs/technocore-chat
+  Commit:      7707cb63ebf638e8ef0cf59d1364818b9fef7d24
+  License:     Apache License, Version 2.0
+  Copyright:   Copyright 2026 FLOP Labs
+
+  "This product includes software developed at FLOP Labs
+   (https://flop.network)."
+
+That upstream copyright notice and the full Apache-2.0 license text are
+preserved verbatim at:
+
+  vendor/technocore-reference/LICENSE
+  vendor/technocore-reference/NOTICE
+
+Provenance, the pinned commit SHA and per-file SHA-256 checksums are recorded
+in vendor/technocore-reference/PROVENANCE.md and SHA256SUMS.
+
+Boundary rules:
+
+  * These files are used ONLY as a differential test oracle.
+  * They are NOT imported by any application runtime code.
+  * They are NOT included in any distributable installation package.
+  * Apache-2.0 implementation lines are NOT copied into our MIT-licensed code;
+    packages/technocore-conform/ implements the specification independently.
