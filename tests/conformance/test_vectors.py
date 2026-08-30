@@ -14,6 +14,7 @@ came from the reference" is checked on every run, not asserted in a comment.
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -107,6 +108,71 @@ def test_the_bundle_covers_every_contract_area(shipped_bundle_path: Path) -> Non
 def test_the_bundle_is_pure_ascii(shipped_bundle_path: Path) -> None:
     """``ensure_ascii`` is what lets a lone surrogate survive the round-trip."""
     shipped_bundle_path.read_bytes().decode("ascii")
+
+
+#: Files whose exact bytes are pinned by a SHA-256 that is checked at runtime.
+_BYTE_EXACT_PATHS = (
+    "packages/technocore-conform/src/technocore_conform/vectors/conformance-v1.json",
+    "vendor/technocore-reference/SHA256SUMS",
+    "vendor/technocore-reference/LICENSE",
+    "vendor/technocore-reference/NOTICE",
+    "vendor/technocore-reference/scripts/sign.py",
+    "vendor/technocore-reference/src/store.py",
+)
+
+
+@pytest.mark.parametrize("relative", _BYTE_EXACT_PATHS)
+def test_git_hands_a_fresh_checkout_the_exact_pinned_bytes(
+    repo_root: Path, relative: str
+) -> None:
+    """Regression: line-ending conversion silently broke both integrity checks.
+
+    ``core.autocrlf`` is ``true`` by default on Windows - the only platform
+    this product supports - and rewrites LF to CRLF *on checkout*. The blobs
+    in the repository stayed correct, so every check passed in the working
+    tree they were written in, while a fresh clone got different bytes: the
+    conformance self-test failed closed and ``sha256sum -c`` could not even
+    read ``SHA256SUMS``.
+
+    Comparing the working file against its own blob is the direct statement
+    of the property that matters - what git will hand the next machine.
+    ``.gitattributes`` marks these paths ``-text`` to guarantee it.
+    """
+    blob = subprocess.run(  # noqa: S603 - fixed argv, no shell
+        ["git", "cat-file", "blob", f"HEAD:{relative}"],
+        cwd=repo_root,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    if blob.returncode != 0:  # pragma: no cover - path not committed yet
+        pytest.skip(f"{relative} is not committed at HEAD")
+
+    on_disk = (repo_root / relative).read_bytes()
+    assert on_disk == blob.stdout, (
+        f"{relative} differs from its committed blob, so a fresh clone would "
+        "receive different bytes than the pinned digest expects"
+    )
+
+
+@pytest.mark.parametrize("relative", _BYTE_EXACT_PATHS)
+def test_byte_exact_paths_are_protected_from_line_ending_conversion(
+    repo_root: Path, relative: str
+) -> None:
+    """The guarantee behind the test above, stated where it is configured."""
+    result = subprocess.run(  # noqa: S603 - fixed argv, no shell
+        ["git", "check-attr", "text", "--", relative],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().endswith("text: unset"), (
+        f"{relative} is not marked -text in .gitattributes, so git may rewrite "
+        f"its line endings on checkout: {result.stdout.strip()}"
+    )
 
 
 def test_the_bundle_seeds_are_not_the_leak_canary(shipped_bundle_path: Path) -> None:
