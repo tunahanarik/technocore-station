@@ -40,6 +40,79 @@ class AppMetadata(Base):
         return f"AppMetadata(key={self.key!r})"
 
 
+class ManifestCheck(Base):
+    """One user-initiated read-only check of the official sources.
+
+    Evidence, not authority. The write gate reads its verdict from the
+    in-process service, never from this table: a row here proves a check once
+    ran, and a check that ran an hour ago says nothing about the protocol
+    right now. Reading a stored boolean to open an outbound door is exactly
+    the mistake this separation exists to prevent.
+    """
+
+    __tablename__ = "manifest_check"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: One of the DriftState values: current, drifted or unavailable.
+    #: ``never_checked`` is a process state and is never persisted.
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    critical_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    warning_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: Newline-separated, already swept and length-bounded by the projection.
+    reasons: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"ManifestCheck(id={self.id!r}, state={self.state!r})"
+
+
+class OfficialSourceSnapshot(Base):
+    """What one official document looked like during one check.
+
+    Only allow-listed response headers are kept. An arbitrary header store
+    would eventually hold a ``Set-Cookie`` or a tracking value that nothing
+    here needs, so the three headers that carry cache identity are named
+    explicitly and everything else is dropped at the client boundary.
+
+    No column holds a seed, a private key, a passphrase or a vault path; this
+    table describes public documents fetched from a public origin.
+    """
+
+    __tablename__ = "official_source_snapshot"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    check_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("manifest_check.id", ondelete="CASCADE"), nullable=False
+    )
+    #: The registry identifier, not a caller-supplied string.
+    source_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: The fixed official URL this source resolves to.
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    authority: Mapped[int] = mapped_column(Integer, nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: 0 when the request never produced a status (DNS, TLS, timeout).
+    http_status: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    content_type: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    etag: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    last_modified: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    #: SHA-256 over the exact response bytes. Empty when nothing was received.
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    byte_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: A bounded, control-character-swept excerpt. Kept for human review and
+    #: never returned over HTTP.
+    snapshot_excerpt: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: ok | fetch_error | parse_error
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return (
+            f"OfficialSourceSnapshot(source_id={self.source_id!r}, "
+            f"outcome={self.outcome!r})"
+        )
+
+
 class IdentityStatus(StrEnum):
     """Lifecycle of the single active identity."""
 

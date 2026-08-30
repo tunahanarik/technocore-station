@@ -104,6 +104,16 @@ station-web  ──HTTP(aynı origin)──▶  station-api  ──▶  technoco
   **production runtime'da ihtiyaç duymaz**.
 - Ayrıntı: [`conformance.md`](conformance.md).
 
+### `station_api/technocore` (Aşama 3)
+- Uygulamanın **tek giden istek yüzeyi**.
+- `sources.py` kapalı bir registry; istemci URL değil `SourceId` alır.
+- `client.py` TLS zorunlu, redirect kapalı, faz bazlı timeout, decompress
+  edilmiş bayt üzerinde boyut sınırı, sınırlı retry.
+- `projection.py` kritik protokol alanlarını canlı belgelerle karşılaştırır.
+- `service.py` verdict'i **process içinde** tutar; her açılışta
+  `never_checked` başlar ve otomatik istek atmaz.
+- Ayrıntı: [`read-only-technocore.md`](read-only-technocore.md).
+
 ### `vendor/technocore-reference`
 - Pinlenmiş resmî commit, **yalnız test oracle'ı** (Apache-2.0).
 - Uygulama runtime paketine **girmez**; hiçbir `apps/` veya `packages/`

@@ -130,7 +130,15 @@ function formatDate(value: string | null): string {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString("tr-TR");
 }
 
-/** The single safest thing to do next, given the current state. */
+/**
+ * The single safest thing to do next.
+ *
+ * Derived from the backend's own gate checks rather than from a parallel copy
+ * of the roadmap. The previous version hard-coded "Stage 2B is next", which
+ * was true when it was written and quietly wrong the moment Stage 2B shipped.
+ * Reading the gate means this text cannot go stale again: whatever the
+ * backend reports as blocking *is* the next step.
+ */
 function nextAction(status: IdentityStatus): string {
   switch (status.state) {
     case "capability_error":
@@ -143,11 +151,29 @@ function nextAction(status: IdentityStatus): string {
       return status.recovery.exported_at === null
         ? "Recovery dosyasi olusturun."
         : "Restore-test yaparak recovery dosyasini dogrulayin.";
-    case "ready":
-      return "Kimlik hazir. Sonraki adim Asama 2B uygunluk motorudur.";
     case "revoked":
       return "Kimlik revoke edildi. Yeni bir kimlik olusturabilirsiniz.";
+    case "ready":
+      return readyNextAction(status);
   }
+}
+
+/** What a ready identity still needs, in the backend's own terms. */
+function readyNextAction(status: IdentityStatus): string {
+  const checks = new Map(status.gate.checks.map((check) => [check.key, check]));
+  const conformance = checks.get("conformance_verified");
+  const manifest = checks.get("manifest_current");
+
+  if (conformance !== undefined && conformance.state !== "passed") {
+    return "Uygunluk self-test'i gecmiyor. Asama 2B motorunu inceleyin.";
+  }
+  if (manifest !== undefined && manifest.state !== "passed") {
+    return "Resmi kaynaklar bu oturumda henuz dogrulanmadi. Evidence & Sources sekmesinden 'Resmi kaynaklari denetle' calistirin.";
+  }
+  if (status.gate.allowed) {
+    return "Butun on kosullar hazir. Gonderim yuzeyi Asama 4 - Composer & Participation ile gelir.";
+  }
+  return "Dis yazma icin eksik bir on kosul var. Ayrintilar asagidaki kapida.";
 }
 
 function CopyableValue({ label, value }: { readonly label: string; readonly value: string }) {

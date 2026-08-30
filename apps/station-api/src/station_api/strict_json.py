@@ -30,6 +30,17 @@ def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _reject_non_finite(constant: str) -> Any:
+    """Refuse ``NaN``, ``Infinity`` and ``-Infinity``.
+
+    ``json.loads`` accepts all three by default even though none is valid
+    JSON. They survive a round-trip through most parsers and NaN compares
+    unequal to itself, which is exactly the wrong property for a document
+    whose fields are compared one by one against an expected contract.
+    """
+    raise StrictJsonError(f"document contains the non-finite value {constant}")
+
+
 def loads_strict(payload: bytes | str, *, max_bytes: int | None = None) -> dict[str, Any]:
     """Parse a JSON object, refusing duplicates, oversize input and non-objects."""
     raw = payload.encode("utf-8") if isinstance(payload, str) else payload
@@ -43,7 +54,11 @@ def loads_strict(payload: bytes | str, *, max_bytes: int | None = None) -> dict[
         raise StrictJsonError("document is not valid UTF-8") from exc
 
     try:
-        parsed = json.loads(text, object_pairs_hook=_reject_duplicate_keys)
+        parsed = json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_keys,
+            parse_constant=_reject_non_finite,
+        )
     except json.JSONDecodeError as exc:
         raise StrictJsonError("document is not valid JSON") from exc
 

@@ -7,6 +7,7 @@ never counted as satisfied.
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,16 @@ _RECOVERED_AND_CONFORMANT = WriteGateInput(
     vault_present=True,
     recovery_verified=True,
     conformance_verified=True,
+)
+
+#: Every precondition met, including a successful live check.
+_FULLY_READY = WriteGateInput(
+    has_identity=True,
+    identity_revoked=False,
+    vault_present=True,
+    recovery_verified=True,
+    conformance_verified=True,
+    manifest_current=True,
 )
 
 
@@ -129,23 +140,86 @@ def test_each_check_names_the_stage_that_delivers_it() -> None:
 def test_unimplemented_requirements_are_never_counted_as_passed() -> None:
     """The core honesty property of the gate.
 
-    Before Stage 2B this asserted that conformance *and* manifest-drift were
-    both unimplemented. Stage 2B built the conformance engine, so conformance
-    is now a real check and only manifest-drift remains unbuilt. The property
-    itself is unchanged and is what matters: an unbuilt requirement is never
-    reported as satisfied.
+    Stage 2B made conformance real and Stage 3 made manifest-drift real, so
+    no check sits in ``NOT_IMPLEMENTED`` any more. The property being tested
+    is unchanged and is the one that matters: whatever is in that state is
+    never reported as satisfied. The state is kept precisely so a later stage
+    can use it honestly rather than reaching for ``passed``.
+    """
+    status = evaluate(_FULLY_READY)
+
+    unimplemented = [
+        check for check in status.checks if check.state is CheckState.NOT_IMPLEMENTED
+    ]
+    assert unimplemented == []
+    for check in status.checks:
+        if check.state is CheckState.NOT_IMPLEMENTED:  # pragma: no cover
+            assert check.satisfied is False
+
+
+def test_manifest_blocks_until_a_live_check_succeeds() -> None:
+    """Stage 3's check is real, and closed until the user runs it.
+
+    A build can be perfectly conformant with a reference the live service has
+    since moved away from. That is the case this check exists to catch, so it
+    starts closed rather than optimistic.
     """
     status = evaluate(_RECOVERED_AND_CONFORMANT)
 
     assert status.allowed is False
     assert "manifest_current" in status.blocking_reasons
 
-    unimplemented = [
-        check for check in status.checks if check.state is CheckState.NOT_IMPLEMENTED
-    ]
-    assert {check.key for check in unimplemented} == {"manifest_current"}
-    for check in unimplemented:
-        assert check.satisfied is False
+    manifest = next(check for check in status.checks if check.key == "manifest_current")
+    assert manifest.state is CheckState.BLOCKED
+    assert manifest.satisfied is False
+
+
+def test_manifest_defaults_to_closed() -> None:
+    """A caller that forgets the field gets a shut gate."""
+    default = WriteGateInput(
+        has_identity=True,
+        identity_revoked=False,
+        vault_present=True,
+        recovery_verified=True,
+        conformance_verified=True,
+    )
+    assert default.manifest_current is False
+    assert "manifest_current" in evaluate(default).blocking_reasons
+
+
+def test_conformance_and_manifest_stay_separate_checks() -> None:
+    """They answer different questions and must not collapse into one.
+
+    Conformance asks whether this build matches the pinned reference.
+    Manifest asks whether the live service still publishes that protocol.
+    Either one alone leaves the gate shut.
+    """
+    conformant_only = evaluate(_RECOVERED_AND_CONFORMANT)
+    manifest_only = evaluate(
+        WriteGateInput(
+            has_identity=True,
+            identity_revoked=False,
+            vault_present=True,
+            recovery_verified=True,
+            conformance_verified=False,
+            manifest_current=True,
+        )
+    )
+
+    assert conformant_only.allowed is False
+    assert manifest_only.allowed is False
+    assert "manifest_current" in conformant_only.blocking_reasons
+    assert "conformance_verified" in manifest_only.blocking_reasons
+
+
+def test_every_precondition_together_opens_the_gate() -> None:
+    """All six met: the gate reports allowed.
+
+    Stage 3 completes the precondition set, and the gate says so honestly.
+    That is *not* the same as a write being possible - a separate test proves
+    no outbound write code exists at all.
+    """
+    assert evaluate(_FULLY_READY).allowed is True
 
 
 def test_conformance_blocks_when_the_self_test_has_not_passed() -> None:
@@ -204,8 +278,6 @@ def test_no_check_can_be_bypassed_by_a_flag(api_source_root: Path) -> None:
     Checked structurally against the AST, not the raw text: a docstring that
     *describes* the absence of an override must not look like an override.
     """
-    import ast
-
     tree = ast.parse(
         (api_source_root / "station_api" / "identity" / "write_gate.py").read_text(
             encoding="utf-8"
@@ -240,29 +312,132 @@ def test_the_gate_reads_no_environment_variable(api_source_root: Path) -> None:
     assert "import os" not in source
 
 
-def test_repository_contains_no_technocore_write_path(repo_root: Path) -> None:
-    """Stage 2 ships no outbound client and no live write test (INV-05)."""
+def _non_docstring_literals(tree: ast.Module) -> list[str]:
+    """Every string literal in a module except its docstrings.
+
+    Prose *about* a forbidden path is exactly what the Stage 3 client is full
+    of - it documents why those paths must never be requested - so a scan
+    that matched comments and docstrings would fire on the code that is most
+    careful. Only literals a program could actually use are inspected.
+    """
+    docstrings: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(
+            node, ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
+        ):
+            continue
+        first = node.body[0] if node.body else None
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            docstrings.add(id(first.value))
+
+    return [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and id(node) not in docstrings
+    ]
+
+
+def test_no_code_path_can_reach_a_technocore_write_endpoint(repo_root: Path) -> None:
+    """AC-16 groundwork: the write lanes are unreachable, not merely unused.
+
+    Technocore performs writes over GET, so "we only send GET" proves
+    nothing. What matters is that no string a program could use names a write
+    path. Checked against the AST, because the read-only client's own
+    docstrings quote these paths while explaining why they are forbidden.
+    """
     roots = (
         repo_root / "apps" / "station-api" / "src",
         repo_root / "packages" / "technocore-conform" / "src",
     )
+    write_markers = ("say-signed", "set-signed", "/say/", "/set/", "/r/events")
+
     offenders: list[str] = []
     for root in roots:
         for path in root.rglob("*.py"):
-            text = path.read_text(encoding="utf-8")
-            for marker in ("technocore.chat", "https://technocore", "say-signed", "set-signed"):
-                if marker in text:
-                    offenders.append(f"{path.name}: {marker}")
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for literal in _non_docstring_literals(tree):
+                for marker in write_markers:
+                    if marker in literal:
+                        offenders.append(f"{path.name}: {marker} in {literal[:60]!r}")
 
-    assert offenders == [], f"a Technocore endpoint is referenced in code: {offenders}"
+    assert offenders == [], f"a Technocore write path is reachable from code: {offenders}"
 
 
-def test_no_outbound_http_client_is_imported(api_source_root: Path) -> None:
-    """No production module may import an HTTP client in this stage."""
+def test_the_source_registry_contains_only_read_only_documents() -> None:
+    """The positive half: every reachable URL is a document, not a lane.
+
+    The test above proves no write path appears. This one proves the paths
+    that *do* appear are the six official documents and nothing else, so the
+    registry cannot quietly grow a room read or a note write.
+    """
+    from station_api.technocore.sources import SOURCES, TECHNOCORE_ORIGIN
+
+    paths = {source.path for source in SOURCES}
+    assert paths == {
+        "/.well-known/agent.json",
+        "/openapi.json",
+        "/config",
+        "/healthz",
+        "/llms.txt",
+        "/skill.md",
+    }
+
+    for source in SOURCES:
+        assert source.url == f"{TECHNOCORE_ORIGIN}{source.path}"
+        # Not a room read, a note read, a room listing or an event stream.
+        for forbidden in ("/r/", "/kv/", "/rooms", "/events"):
+            assert forbidden not in source.path
+
+
+def test_httpx_is_imported_only_by_the_read_only_client(api_source_root: Path) -> None:
+    """Stage 3 adds exactly one outbound client, in exactly one module.
+
+    Before Stage 3 this asserted no HTTP client existed anywhere. That was the
+    honest statement while none did. Now one must, so the assertion is
+    narrowed rather than dropped: any *other* module importing an HTTP client
+    is a new outbound surface that nothing has reviewed.
+    """
+    allowed = {"client.py"}
+    clients = ("httpx", "requests", "aiohttp", "urllib3", "http.client")
+
     offenders: list[str] = []
     for path in api_source_root.rglob("*.py"):
-        text = path.read_text(encoding="utf-8")
-        for marker in ("import httpx", "import requests", "from httpx", "urllib.request"):
-            if marker in text:
-                offenders.append(f"{path.name}: {marker}")
-    assert offenders == [], f"outbound HTTP client found in production code: {offenders}"
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [node.module or ""]
+            else:
+                continue
+            for name in names:
+                if any(name == c or name.startswith(f"{c}.") for c in clients) and (
+                    path.name not in allowed
+                    or path.parent.name != "technocore"
+                ):
+                    offenders.append(f"{path.relative_to(api_source_root)}: {name}")
+
+    assert offenders == [], f"an HTTP client is imported outside the read-only client: {offenders}"
+
+
+def test_urllib_request_is_not_used_anywhere(api_source_root: Path) -> None:
+    """``urllib.request`` would be an outbound surface with no timeout by default."""
+    offenders: list[str] = []
+    for path in api_source_root.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
+                "urllib.request"
+            ):
+                offenders.append(path.name)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.startswith("urllib.request"):
+                        offenders.append(path.name)
+    assert offenders == []

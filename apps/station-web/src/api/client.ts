@@ -18,6 +18,7 @@ import type {
   ProtectionMode,
   RecoveryInspectResult,
   SessionBootstrap,
+  TechnocoreStatus,
 } from "./types";
 
 const DEFAULT_CSRF_HEADER = "X-Station-CSRF";
@@ -115,6 +116,23 @@ export async function fetchIdentity(): Promise<IdentityStatus> {
  */
 export async function fetchConformance(): Promise<ConformanceStatus> {
   return request<ConformanceStatus>("/api/conformance/status");
+}
+
+/**
+ * The read-only Technocore verdict. Reading it makes no outbound request:
+ * it reports what the last user-initiated check found, or that none has run.
+ */
+export async function fetchTechnocore(): Promise<TechnocoreStatus> {
+  return request<TechnocoreStatus>("/api/technocore/status");
+}
+
+/**
+ * Run the read-only check. This is the one call that reaches the public
+ * internet, so it goes through the CSRF chokepoint and carries no body:
+ * the backend runs a fixed source registry and there is nothing to steer.
+ */
+export async function refreshTechnocore(): Promise<TechnocoreStatus> {
+  return mutate<TechnocoreStatus>("/api/technocore/refresh", {});
 }
 
 export interface CreateIdentityInput {

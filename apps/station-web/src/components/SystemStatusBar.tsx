@@ -1,7 +1,26 @@
 import { Card } from "@heroui/react";
 
-import type { AppStatus } from "../api/types";
+import type { AppStatus, DriftState } from "../api/types";
 import { StatusPill, type StatusTone } from "./StatusPill";
+
+/**
+ * The four honest states. "never_checked" is not a failure and not a success:
+ * it is the accurate description of an application that has contacted nobody,
+ * which is what Station does until the user asks it to.
+ */
+const TECHNOCORE_LABEL: Record<DriftState, string> = {
+  never_checked: "Denetlenmedi",
+  current: "Salt okunur · guncel",
+  drifted: "Suruklenme var",
+  unavailable: "Erisilemiyor",
+};
+
+const TECHNOCORE_TONE: Record<DriftState, StatusTone> = {
+  never_checked: "inactive",
+  current: "ok",
+  drifted: "problem",
+  unavailable: "pending",
+};
 
 interface StatusItem {
   readonly id: string;
@@ -22,7 +41,7 @@ function buildItems(status: AppStatus | null, loading: boolean): StatusItem[] {
       { id: "service", title: "Yerel servis", tone: "pending", label: "Kontrol ediliyor", detail: "Durum okunuyor." },
       { id: "database", title: "Veritabani", tone: "pending", label: "Kontrol ediliyor", detail: "Durum okunuyor." },
       { id: "session", title: "Oturum guvenligi", tone: "pending", label: "Kontrol ediliyor", detail: "Durum okunuyor." },
-      { id: "technocore", title: "Technocore", tone: "inactive", label: "Bagli degil", detail: "Asama 3 kapsaminda." },
+      { id: "technocore", title: "Technocore", tone: "pending", label: "Kontrol ediliyor", detail: "Durum okunuyor." },
     ];
   }
 
@@ -31,7 +50,7 @@ function buildItems(status: AppStatus | null, loading: boolean): StatusItem[] {
       { id: "service", title: "Yerel servis", tone: "problem", label: "Ulasilamiyor", detail: "Yerel cekirdege baglanilamadi." },
       { id: "database", title: "Veritabani", tone: "problem", label: "Bilinmiyor", detail: "Servise ulasilamadigi icin okunamadi." },
       { id: "session", title: "Oturum guvenligi", tone: "problem", label: "Oturum yok", detail: "Uygulamayi launcher ile yeniden acin." },
-      { id: "technocore", title: "Technocore", tone: "inactive", label: "Bagli degil", detail: "Asama 3 kapsaminda." },
+      { id: "technocore", title: "Technocore", tone: "problem", label: "Bilinmiyor", detail: "Servise ulasilamadigi icin okunamadi." },
     ];
   }
 
@@ -71,9 +90,9 @@ function buildItems(status: AppStatus | null, loading: boolean): StatusItem[] {
     {
       id: "technocore",
       title: "Technocore",
-      tone: "inactive",
-      label: "Bagli degil",
-      detail: `Asama ${status.technocore.available_from_stage} kapsaminda. Bu surumde hicbir istek gonderilmez.`,
+      tone: TECHNOCORE_TONE[status.technocore.state],
+      label: TECHNOCORE_LABEL[status.technocore.state],
+      detail: status.technocore.detail,
     },
   ];
 }

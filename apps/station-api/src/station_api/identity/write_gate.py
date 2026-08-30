@@ -8,18 +8,28 @@ re-implemented per endpoint.
 Two honesty rules govern this module:
 
 1. A check that is **not implemented yet** reports ``NOT_IMPLEMENTED``. It is
-   never counted as passed. Manifest-drift is exactly that today, which is
-   why ``allowed`` is False even for a fully recovered identity whose
-   conformance self-test passes: nothing yet detects the live server moving
-   off the pinned protocol, so writing would be a guess.
+   never counted as passed. No check is in that state as of Stage 3; the
+   state is kept because later stages will need it, and because a gate that
+   cannot express "unbuilt" ends up expressing it as "passed".
 2. There is no override flag, no environment escape hatch and no debug bypass.
 
-Stage 2B made ``conformance_verified`` real. It now reflects an actual run of
-the shipped conformance vectors, not a placeholder. Note carefully what that
-check does and does not assert: it says this build reproduces the *pinned
-reference commit's* behaviour. It says nothing about whether the live
-Technocore server still speaks that protocol - that is ``manifest_current``,
-and it remains closed.
+Stage 2B made ``conformance_verified`` real, and Stage 3 did the same for
+``manifest_current``. The two answer different questions and are deliberately
+kept apart:
+
+* ``conformance_verified`` - does *this build* reproduce the pinned reference
+  commit's sweep, canonicalization and signature encoding?
+* ``manifest_current`` - does the *live service*, checked just now by the
+  user, still publish that same protocol contract?
+
+A build can be perfectly conformant with a reference the server has since
+moved away from. Collapsing the two into one check would hide exactly that
+case, which is the one that produces a valid signature over bytes the server
+will refuse.
+
+``manifest_current`` reflects an in-process verdict that starts at
+``never_checked`` on every launch. It is never restored from the database: a
+successful check recorded yesterday says nothing about the protocol now.
 """
 
 from __future__ import annotations
@@ -89,6 +99,12 @@ class WriteGateInput:
     #: a caller that forgets to supply it gets a closed gate, never an open
     #: one.
     conformance_verified: bool = False
+    #: Whether a user-initiated live check found the official protocol
+    #: contract unchanged. Same default, same reason. This is a *different*
+    #: question from conformance: conformance asks "does this build match the
+    #: pinned reference", manifest asks "does the live service still speak
+    #: that protocol". Both must hold before anything is written.
+    manifest_current: bool = False
 
 
 def evaluate(state: WriteGateInput) -> WriteGateStatus:
@@ -130,8 +146,8 @@ def evaluate(state: WriteGateInput) -> WriteGateStatus:
         ),
         GateCheck(
             key="manifest_current",
-            state=CheckState.NOT_IMPLEMENTED,
-            detail="Resmi manifest surukleme kontrolu Asama 3 ile gelir.",
+            state=(CheckState.PASSED if state.manifest_current else CheckState.BLOCKED),
+            detail="Resmi kaynaklar bu oturumda denetlenmis ve guncel olmali.",
             stage=MANIFEST_STAGE,
         ),
     ]

@@ -3,7 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { resetSessionState } from "../api/client";
-import type { ConformanceStatus, IdentityStatus } from "../api/types";
+import type {
+  ConformanceStatus,
+  IdentityStatus,
+  TechnocoreStatus,
+} from "../api/types";
 import { ComposeVerifyPage } from "./ComposeVerifyPage";
 import { EvidencePage } from "./EvidencePage";
 import { IdentityPage } from "./IdentityPage";
@@ -36,8 +40,9 @@ const NO_IDENTITY: IdentityStatus = {
   gate: {
     allowed: false,
     identity_ready: false,
-    // Stage 2B: conformance is a real check and passes on a healthy build.
-    // Manifest drift is still unbuilt, so the gate stays shut on that alone.
+    // Stage 3: both conformance and manifest are real checks now.
+    // Conformance passes on a healthy build; the manifest stays blocked
+    // until the user runs a live check in this session.
     blocking_reasons: ["identity_present", "manifest_current"],
     checks: [
       { key: "identity_present", state: "blocked", detail: "Aktif bir kimlik gerekli.", stage: "2" },
@@ -55,8 +60,8 @@ const NO_IDENTITY: IdentityStatus = {
       },
       {
         key: "manifest_current",
-        state: "not_implemented",
-        detail: "Resmi manifest surukleme kontrolu Asama 3 ile gelir.",
+        state: "blocked",
+        detail: "Resmi kaynaklar bu oturumda denetlenmis ve guncel olmali.",
         stage: "3",
       },
     ],
@@ -114,6 +119,75 @@ const CONFORMANT: ConformanceStatus = {
   unicode_version_matches: true,
 };
 
+//: TEST-ONLY read-only monitoring fixture. Mirrors the real response shape.
+const TECHNOCORE_CURRENT: TechnocoreStatus = {
+  state: "current",
+  manifest_current: true,
+  checked_at: "2026-08-30T18:00:00+00:00",
+  last_attempt_at: "2026-08-30T18:00:00+00:00",
+  last_success_at: "2026-08-30T18:00:00+00:00",
+  reasons: [],
+  sources: [
+    {
+      source_id: "openapi",
+      url: "https://technocore.chat/openapi.json",
+      authority: 1,
+      outcome: "ok",
+      http_status: 200,
+      content_type: "application/json",
+      etag: '"abc123"',
+      last_modified: "",
+      short_hash: "aabbccdd1122",
+      byte_count: 60482,
+      detail: "",
+      rationale: "The authoritative API description.",
+    },
+  ],
+  fields: [
+    {
+      key: "signature_pattern",
+      label: "Imza bicimi",
+      source_id: "openapi",
+      json_path: "paths./r/{room}.post",
+      severity: "critical",
+      expected: "^[A-Za-z0-9_-]{86}$",
+      observed: "^[A-Za-z0-9_-]{86}$",
+      matches: true,
+      rationale: "Padding'siz base64url, tam 86 karakter.",
+    },
+  ],
+  critical_mismatch_count: 0,
+  warning_count: 0,
+  origin: "https://technocore.chat",
+};
+
+const TECHNOCORE_NEVER_CHECKED: TechnocoreStatus = {
+  ...TECHNOCORE_CURRENT,
+  state: "never_checked",
+  manifest_current: false,
+  checked_at: null,
+  last_attempt_at: null,
+  last_success_at: null,
+  sources: [],
+  fields: [],
+};
+
+const TECHNOCORE_DRIFTED: TechnocoreStatus = {
+  ...TECHNOCORE_CURRENT,
+  state: "drifted",
+  manifest_current: false,
+  last_success_at: null,
+  reasons: ["Imza bicimi: beklenen '^[A-Za-z0-9_-]{86}$', gorulen '^[A-Za-z0-9+/]{88}$'"],
+  fields: [
+    {
+      ...TECHNOCORE_CURRENT.fields[0]!,
+      observed: "^[A-Za-z0-9+/]{88}$",
+      matches: false,
+    },
+  ],
+  critical_mismatch_count: 1,
+};
+
 const NOT_CONFORMANT: ConformanceStatus = {
   ...CONFORMANT,
   passed: false,
@@ -134,6 +208,7 @@ const NOT_CONFORMANT: ConformanceStatus = {
 function stubIdentity(
   status: IdentityStatus,
   conformance: ConformanceStatus | null = CONFORMANT,
+  technocore: TechnocoreStatus = TECHNOCORE_NEVER_CHECKED,
 ): void {
   vi.stubGlobal(
     "fetch",
@@ -142,6 +217,15 @@ function stubIdentity(
       // yield "[object Object]" and route every call to the identity branch.
       const url =
         typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+
+      if (url.includes("/api/technocore/")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(technocore), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
 
       if (url.includes("/api/conformance/status")) {
         if (conformance === null) {
@@ -227,18 +311,22 @@ describe("Identity surface", () => {
     expect(screen.queryByRole("button", { name: "Restore-test yap" })).toBeNull();
   });
 
-  it("labels unbuilt gate requirements with the correct stage", async () => {
-    // The same badges render on Identity and on Compose & Verify, both driven
-    // by check.stage. Regression: both read "Asama 4".
+  it("shows blocked requirements as blocked, not as a future stage", async () => {
+    // The stage badge exists only for requirements that are not built yet.
+    // Stage 2B made conformance real and Stage 3 made the manifest check
+    // real, so nothing is badged with a stage any more - a blocked check is
+    // something the user can act on, not something to wait for.
     //
-    // Since Stage 2B, conformance is a real check rather than an unbuilt one,
-    // so manifest is the only requirement still badged with a stage.
+    // The original regression this guards against remains covered: no badge
+    // may claim a stage that does not match the text beside it.
     stubIdentity(NO_IDENTITY);
     const { container } = render(<IdentityPage />);
     await screen.findByText("Kimlik olusturulmadi");
 
-    expect(screen.getByText("Asama 3")).toBeInTheDocument();
-    expect(container.textContent).not.toContain("Asama 4");
+    const text = container.textContent ?? "";
+    expect(text).not.toContain("Asama 4");
+    // Blocked preconditions read as closed, which is actionable.
+    expect(screen.getAllByText("Kapali").length).toBeGreaterThan(0);
   });
 
   it("shows the conformance verdict from the backend, not a hardcoded one", async () => {
@@ -412,13 +500,15 @@ describe("Compose and Verify surface", () => {
     expect(container.querySelectorAll("button")).toHaveLength(0);
   });
 
-  it("shows unimplemented requirements as a stage, never as passed", async () => {
+  it("never shows an unmet requirement as passed", async () => {
     stubIdentity(NO_IDENTITY);
     render(<ComposeVerifyPage />);
     await screen.findByText("Bu yuzey kilitli");
 
-    // Manifest drift is the requirement that remains unbuilt.
-    expect(await screen.findByText("Asama 3")).toBeInTheDocument();
+    // Every Stage 3 check is real, so unmet ones read as waiting rather than
+    // as a future stage. What must never happen is one reading "Tamam".
+    const waiting = await screen.findAllByText("Bekliyor");
+    expect(waiting.length).toBeGreaterThan(0);
   });
 
   it("stays locked even though conformance now passes", async () => {
@@ -484,5 +574,206 @@ describe("every surface", () => {
       expect(container.querySelectorAll('a[href^="http"]')).toHaveLength(0);
       unmount();
     }
+  });
+});
+
+describe("Read-only Technocore monitoring", () => {
+  it("starts as not yet checked and offers an explicit user action", async () => {
+    stubIdentity(NO_IDENTITY);
+    render(<EvidencePage />);
+
+    expect(await screen.findByText("Henuz denetlenmedi")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Resmi kaynaklari denetle" }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows official source metadata after a check", async () => {
+    stubIdentity(NO_IDENTITY, CONFORMANT, TECHNOCORE_CURRENT);
+    render(<EvidencePage />);
+
+    expect(await screen.findByText("Guncel")).toBeInTheDocument();
+    expect(
+      screen.getByText("https://technocore.chat/openapi.json"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("aabbccdd1122")).toBeInTheDocument();
+    expect(
+      screen.getByText("Seviye 1 · makine-okunabilir resmi belge"),
+    ).toBeInTheDocument();
+  });
+
+  it("never turns a remote URL into a clickable link", async () => {
+    // AC-17: Technocore data is never active content.
+    stubIdentity(NO_IDENTITY, CONFORMANT, TECHNOCORE_CURRENT);
+    const { container } = render(<EvidencePage />);
+    await screen.findByText("Guncel");
+
+    expect(container.querySelectorAll("a")).toHaveLength(0);
+    expect(container.innerHTML).not.toContain("<iframe");
+    expect(container.innerHTML).not.toContain("<script");
+    expect(
+      screen.getByRole("button", { name: /adresini kopyala/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("separates a critical drift from a non-critical warning", async () => {
+    stubIdentity(NO_IDENTITY, CONFORMANT, TECHNOCORE_DRIFTED);
+    render(<EvidencePage />);
+
+    expect(await screen.findByText("Suruklenme tespit edildi")).toBeInTheDocument();
+    expect(screen.getByText("Kritik protokol suruklenmesi")).toBeInTheDocument();
+    expect(screen.getByText("Kritik")).toBeInTheDocument();
+  });
+
+  it("states plainly that the check only reads", async () => {
+    stubIdentity(NO_IDENTITY);
+    render(<EvidencePage />);
+    await screen.findByText("Henuz denetlenmedi");
+
+    expect(screen.getByText("Bu denetim yalniz okur")).toBeInTheDocument();
+  });
+
+  it("makes no airdrop or eligibility claim", async () => {
+    // AC-18 forbids *making* a claim, not naming one. The page carries an
+    // explicit disclaimer, so a test that banned the word would fail on the
+    // very sentence that satisfies the rule.
+    stubIdentity(NO_IDENTITY, CONFORMANT, TECHNOCORE_CURRENT);
+    const { container } = render(<EvidencePage />);
+    await screen.findByText("Guncel");
+
+    const text = (container.textContent ?? "").toLowerCase();
+    expect(text).toContain("hicbir airdrop garantisi");
+    for (const claim of [
+      "airdrop kazandiniz",
+      "uygunlugunuz onaylandi",
+      "tahsis edildi",
+      "hak kazandiniz",
+    ]) {
+      expect(text).not.toContain(claim);
+    }
+  });
+});
+
+describe("Identity next-step guidance", () => {
+  function readyWith(conformance: string, manifest: string): IdentityStatus {
+    return {
+      ...READY,
+      gate: {
+        ...READY.gate,
+        allowed: conformance === "passed" && manifest === "passed",
+        checks: [
+          { key: "conformance_verified", state: conformance, detail: "", stage: "2B" },
+          { key: "manifest_current", state: manifest, detail: "", stage: "3" },
+        ],
+      },
+    } as IdentityStatus;
+  }
+
+  it("points at Stage 2B when conformance fails", async () => {
+    stubIdentity(readyWith("blocked", "blocked"));
+    render(<IdentityPage />);
+    expect(
+      await screen.findByText(/Asama 2B motorunu inceleyin/),
+    ).toBeInTheDocument();
+  });
+
+  it("points at the source check when the manifest is unverified", async () => {
+    stubIdentity(readyWith("passed", "blocked"));
+    render(<IdentityPage />);
+    expect(
+      await screen.findByText(/Resmi kaynaklar bu oturumda henuz dogrulanmadi/),
+    ).toBeInTheDocument();
+  });
+
+  it("points at Stage 4 once every precondition is met", async () => {
+    stubIdentity(readyWith("passed", "passed"));
+    render(<IdentityPage />);
+    expect(await screen.findByText(/Asama 4/)).toBeInTheDocument();
+  });
+
+  it("no longer claims Stage 2B is next", async () => {
+    stubIdentity(readyWith("passed", "passed"));
+    const { container } = render(<IdentityPage />);
+    await screen.findByText(/Asama 4/);
+    expect(container.textContent).not.toContain("Sonraki adim Asama 2B");
+  });
+});
+
+describe("Restore-test file picker", () => {
+  async function openRestoreDialog(): Promise<ReturnType<typeof render>> {
+    const user = userEvent.setup();
+    const view = render(<IdentityPage />);
+    await screen.findByText(/did:key:z6Mk/);
+    await user.click(screen.getByRole("button", { name: "Restore-test yap" }));
+    await screen.findByText(/Henuz dosya secilmedi/);
+    return view;
+  }
+
+  it("shows a labelled dropzone with explanatory text before a file is chosen", async () => {
+    stubIdentity(READY);
+    await openRestoreDialog();
+
+    expect(screen.getByTestId("recovery-dropzone")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Recovery dosyasi (.tcrec)" }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the native input out of the tab order and filtered to .tcrec", async () => {
+    stubIdentity(READY);
+    await openRestoreDialog();
+
+    // The dialog renders in a portal, so it is outside the render container.
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(input).not.toBeNull();
+    expect(input?.accept).toContain(".tcrec");
+    // One keyboard stop, not two: the button carries the accessible name.
+    expect(input?.tabIndex).toBe(-1);
+  });
+
+  it("reports the chosen file and offers to change it", async () => {
+    stubIdentity(READY);
+    const user = userEvent.setup();
+    await openRestoreDialog();
+
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]');
+    await user.upload(
+      input as HTMLInputElement,
+      new File(["ciphertext"], "backup.tcrec", { type: "application/octet-stream" }),
+    );
+
+    expect(await screen.findByText("backup.tcrec")).toBeInTheDocument();
+    expect(screen.getByText("Secildi")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Recovery dosyasi (.tcrec)" }),
+    ).toHaveTextContent("Baska dosya sec");
+  });
+
+  it("keeps the picker reachable from the keyboard", async () => {
+    stubIdentity(READY);
+    await openRestoreDialog();
+
+    const picker = screen.getByRole("button", {
+      name: "Recovery dosyasi (.tcrec)",
+    });
+    picker.focus();
+    expect(picker).toHaveFocus();
+  });
+
+  it("never puts the file contents in the DOM", async () => {
+    stubIdentity(READY);
+    const user = userEvent.setup();
+    await openRestoreDialog();
+
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]');
+    await user.upload(
+      input as HTMLInputElement,
+      new File(["SECRET-CIPHERTEXT-BYTES"], "backup.tcrec", {
+        type: "application/octet-stream",
+      }),
+    );
+    await screen.findByText("backup.tcrec");
+
+    expect(document.body.innerHTML).not.toContain("SECRET-CIPHERTEXT-BYTES");
   });
 });

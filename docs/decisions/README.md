@@ -81,6 +81,24 @@ sürece burada tutulurlar.
 | IMP-219 | Nonce `int`'e çevrilmez; leading zero korunur | `"007"` ile `"7"` farklı wire baytlarıdır ve imza baytları kapsar |
 | IMP-220 | Uygunluk verdicti process başına bir kez hesaplanır ve gate ile status endpoint'i **aynı** nesneyi okur | İkisinin uygunluk hakkında farklı şey söylemesi mümkün olmasın |
 
+## 2d. Aşama 3 uygulama kararları
+
+| ID | Karar | Gerekçe |
+|---|---|---|
+| IMP-221 | İstemci `SourceId` alır, URL almaz; erişilebilir yollar kapalı registry | Technocore GET üzerinden yazma yapar, bu yüzden "yalnız GET" bir güvenlik özelliği değildir; keyfi path kabul eden bir API canlı bir odaya yazmaktan bir hata uzakta olurdu |
+| IMP-222 | `verify` parametresi hiçbir yerde geçirilmez | httpx varsayılan olarak doğrular; parametreyi hiç yazmamak, `False` yapılacak bir satır bırakmamak demektir |
+| IMP-223 | Redirect takip edilmez | Redirect izlemek, allow-list'in dışlamak için yazıldığı host'a sessizce gitmenin tam olarak yoludur |
+| IMP-224 | Boyut sınırı decompress edilmiş bayt üzerinde, streaming ile | Küçük bir gzip'in gigabaytlara açılması tamponlanmadan reddedilmeli |
+| IMP-225 | Verdict process içinde tutulur; DB yalnız kanıt | Bir gün önce kaydedilmiş başarılı kontrol, bugünkü protokol hakkında hiçbir şey söylemez; geçmişi bugünmüş gibi raporlamak kapının önlemek için var olduğu hatadır |
+| IMP-226 | `openapi` ve `agent.json` zorunlu, diğer dört kaynak tamamlayıcı | `/healthz` ve `/config` aralıklı 503 dönüyor ve protokol sözleşmesi taşımıyor; altyapı hıçkırığında kapının titremesi yanlış olurdu |
+| IMP-227 | Ham hash yerine alan bazlı kritik projeksiyon | Ham hash her yazım düzeltmesini drift sayar ve bir hafta içinde göz ardı edilir |
+| IMP-228 | `signature_encoding` token karşılaştırmasıyla ele alınır | İfade yeniden yazılabilir; fakat `unpadded` veya `86` kaybolursa sözleşme gerçekten değişmiştir |
+| IMP-229 | Limit/kapasite değişikliği uyarıdır, drift değil | Künye §14.4; imza geçerliliğini etkilemez |
+| IMP-230 | Uzak değerler saklanmadan ve gösterilmeden önce sweep edilip kısaltılır | Otorite seviyesi 1 doğruluk satın alır, güvenlik değil |
+| IMP-231 | Refresh endpoint'i gövde almaz | Kullanıcının yönlendirebileceği bir adres bırakmamak |
+| IMP-232 | Dosya seçici native input'u sarar; input tab sırasından çıkarılır | Çıplak `input[type=file]` görünür sınırı ve adı olmayan bir kontroldür; tek klavye durağı ve gerçek erişilebilir ad daha iyidir |
+| IMP-233 | Identity "sonraki adım" metni backend gate verisinden türetilir | Hardcoded roadmap metni Aşama 2B biter bitmez sessizce yanlış olmuştu |
+
 ## 3. Yeni ADR nasıl eklenir
 
 Yeni ve **kalıcı** bir mimari karar alındığında bu dizine

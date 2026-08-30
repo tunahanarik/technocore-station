@@ -43,6 +43,7 @@ from station_api.db.models import (
 from station_api.identity import write_gate
 from station_api.identity.write_gate import WriteGateInput, WriteGateStatus
 from station_api.recovery import create_recovery, file_fingerprint, open_recovery
+from station_api.technocore.service import TechnocoreService
 from station_api.vault import DpapiVault, ProtectionMode, VaultCapability
 from station_api.vault.passphrase import KDF_ARGON2ID, PRODUCTION_KDF_POLICY, KdfPolicy
 from station_api.vault.paths import new_identity_id
@@ -114,6 +115,7 @@ class IdentityService:
         vault: DpapiVault | None = None,
         kdf_policy: KdfPolicy = PRODUCTION_KDF_POLICY,
         conformance: ConformanceService | None = None,
+        technocore: TechnocoreService | None = None,
     ) -> None:
         self._engine = engine
         self._data_dir = data_dir
@@ -122,6 +124,10 @@ class IdentityService:
         # Shared by default so the self-test runs once per process rather than
         # once per service instance.
         self._conformance = conformance or default_conformance_service()
+        # Optional: without a live-check service the manifest half of the
+        # gate stays closed, which is the correct default rather than a
+        # degraded one.
+        self._technocore = technocore
 
     # --- read ----------------------------------------------------------
 
@@ -168,6 +174,7 @@ class IdentityService:
                         vault_present=False,
                         recovery_verified=False,
                         conformance_verified=self._conformance.passed,
+                        manifest_current=self._manifest_current(),
                     )
                 ),
             )
@@ -217,9 +224,18 @@ class IdentityService:
                     vault_present=vault_present,
                     recovery_verified=verified_at is not None,
                     conformance_verified=self._conformance.passed,
+                    manifest_current=self._manifest_current(),
                 )
             ),
         )
+
+    def _manifest_current(self) -> bool:
+        """The live-check half of the gate.
+
+        Absent a service, False. A missing dependency must never read as
+        a passing check.
+        """
+        return self._technocore is not None and self._technocore.manifest_current
 
     # --- create --------------------------------------------------------
 

@@ -1,5 +1,5 @@
 import { Alert, Button, Checkbox, Input, Label, Modal, TextField } from "@heroui/react";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import {
   adoptRecovery,
@@ -11,6 +11,7 @@ import {
   verifyRecovery,
 } from "../../api/client";
 import type { IdentityStatus, ProtectionMode, RecoveryInspectResult } from "../../api/types";
+import { StatusPill } from "../StatusPill";
 
 /**
  * Every dialog in this file follows the same two rules:
@@ -108,6 +109,104 @@ function ErrorAlert({ title, message }: { readonly title: string; readonly messa
 }
 
 // --- create ---------------------------------------------------------------
+
+
+/**
+ * An accessible picker for a `.tcrec` recovery file.
+ *
+ * A bare `<input type="file">` renders as an unstyled, browser-specific
+ * control with no visible boundary and no indication of what belongs in it.
+ * It is also easy to miss entirely inside a dialog. This wraps one in a
+ * labelled dropzone with an explicit button.
+ *
+ * The native input is kept - it is the only thing that can open the OS file
+ * dialog - but it is taken out of the tab order and driven by the button, so
+ * keyboard users get one predictable stop with a real accessible name rather
+ * than two controls that do the same thing.
+ *
+ * Only the file's *name* ever reaches the DOM. Its contents are read by the
+ * browser when the form is submitted and are never placed in markup, state or
+ * a log line.
+ */
+function RecoveryFileField({
+  file,
+  isDisabled = false,
+  onSelect,
+  errorMessage,
+}: {
+  readonly file: File | null;
+  readonly isDisabled?: boolean;
+  readonly onSelect: (file: File | null) => void;
+  readonly errorMessage?: string | null;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const id = useId();
+  const describedBy = `${id}-hint${errorMessage != null ? ` ${id}-error` : ""}`;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-sm font-medium" id={`${id}-label`}>
+        Recovery dosyasi (.tcrec)
+      </span>
+
+      <div
+        className={[
+          "flex flex-col gap-2 rounded-lg border border-dashed p-4 transition-colors",
+          "border-border hover:border-accent",
+          "focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/40",
+          isDisabled ? "opacity-60" : "",
+        ].join(" ")}
+        data-selected={file !== null}
+        data-testid="recovery-dropzone"
+      >
+        {file === null ? (
+          <p className="text-xs text-muted" id={`${id}-hint`}>
+            Henuz dosya secilmedi. Daha once disa aktardiginiz{" "}
+            <code className="font-mono">.tcrec</code> dosyasini secin.
+          </p>
+        ) : (
+          <p className="flex flex-wrap items-center gap-2 text-xs" id={`${id}-hint`}>
+            <StatusPill label="Secildi" tone="ok" />
+            <span className="font-mono break-all text-foreground">{file.name}</span>
+          </p>
+        )}
+
+        <div>
+          <Button
+            aria-describedby={describedBy}
+            aria-labelledby={`${id}-label`}
+            isDisabled={isDisabled}
+            onPress={() => inputRef.current?.click()}
+            size="sm"
+            variant="secondary"
+          >
+            {file === null ? "Dosya sec" : "Baska dosya sec"}
+          </Button>
+        </div>
+
+        {/* Visually hidden and out of the tab order: the button above is the
+            single, named control. `sr-only` rather than `display:none`,
+            because a hidden input cannot be activated in some browsers. */}
+        <input
+          accept=".tcrec,application/octet-stream"
+          aria-hidden="true"
+          className="sr-only"
+          disabled={isDisabled}
+          onChange={(event) => onSelect(event.target.files?.[0] ?? null)}
+          ref={inputRef}
+          tabIndex={-1}
+          type="file"
+        />
+      </div>
+
+      {errorMessage != null && (
+        <p className="text-xs text-danger" id={`${id}-error`}>
+          {errorMessage}
+        </p>
+      )}
+    </div>
+  );
+}
 
 export function CreateIdentityDialog({ isOpen, onClose, onUpdated, status }: DialogProps) {
   const [protection, setProtection] = useState<ProtectionMode>(status.default_protection);
@@ -465,18 +564,11 @@ export function RestoreTestDialog({ isOpen, onClose, onUpdated }: DialogProps) {
         karsilastirir. Kasaya dokunmaz ve basarisiz olursa hicbir sey degismez.
       </p>
 
-      <div className="flex flex-col gap-1">
-        <label className="text-sm font-medium" htmlFor="restore-file">
-          Recovery dosyasi (.tcrec)
-        </label>
-        <input
-          accept=".tcrec,application/octet-stream"
-          className="text-sm"
-          id="restore-file"
-          onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-          type="file"
-        />
-      </div>
+      <RecoveryFileField
+        errorMessage={file === null && error !== null ? "Once bir dosya secin." : null}
+        file={file}
+        onSelect={setFile}
+      />
 
       <PassphraseField
         autoComplete="current-password"
@@ -577,19 +669,11 @@ export function AdoptRecoveryDialog({ isOpen, onClose, onUpdated, status }: Dial
         hesabina ihtiyac yoktur.
       </p>
 
-      <div className="flex flex-col gap-1">
-        <label className="text-sm font-medium" htmlFor="adopt-file">
-          Recovery dosyasi (.tcrec)
-        </label>
-        <input
-          accept=".tcrec,application/octet-stream"
-          className="text-sm"
-          disabled={inspected !== null}
-          id="adopt-file"
-          onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-          type="file"
-        />
-      </div>
+      <RecoveryFileField
+        file={file}
+        isDisabled={inspected !== null}
+        onSelect={setFile}
+      />
 
       {inspected === null ? (
         <PassphraseField
