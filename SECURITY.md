@@ -5,6 +5,9 @@ güvenlik değişmezleri ve kalan riskler burada özetlenir.
 
 Ayrıntılı ve test edilebilir liste:
 [`docs/security-invariants.md`](docs/security-invariants.md).
+Tehdit modeli: [`docs/threat-model.md`](docs/threat-model.md).
+Kimlik yaşam döngüsü: [`docs/identity-lifecycle.md`](docs/identity-lifecycle.md).
+Recovery biçimi: [`docs/recovery-format-v1.md`](docs/recovery-format-v1.md).
 Ana karar kaynağı: [`Technocore-Station-Proje-Kunyesi.md`](Technocore-Station-Proje-Kunyesi.md) §17.
 
 ---
@@ -75,8 +78,21 @@ oturum/bootstrap yanıtlarında `Cache-Control: no-store`.
 ## 6. Secret yönetimi
 
 - Seed hiçbir veritabanı tablosunda bulunmaz.
-- Seed ayrı bir Windows **DPAPI** zarfında saklanır (Aşama 2).
+- Seed ayrı bir Windows **DPAPI** zarfında, **current-user** kapsamında
+  saklanır. `CRYPTPROTECT_LOCAL_MACHINE` hiçbir zaman kullanılmaz.
+- Kasa dosyasına, yalnız mevcut kullanıcı ve SYSTEM erişebilen **protected
+  DACL** uygulanır. ACL Windows API ile yazılır (`icacls` kabuk komutu
+  kullanılmaz) ve geri okunarak doğrulanır. Uygulanamazsa işlem **başarısız
+  olur**; sessizce devam edilmez.
+- Yazma **atomiktir**; yarım kasa veya orphan DB kaydı bırakılmaz.
+- Önerilen mod `dpapi+passphrase`: seed önce Argon2id (64 MiB, 3 iterasyon)
+  ile türetilen anahtarla ChaCha20-Poly1305 kullanılarak sarılır.
+- Parola uygulama açılışında değil, yalnız secret kullanan işlemlerde istenir.
 - Paroladan seed türetilmez.
+- Raw seed **HTTP üzerinden kabul edilmez**; import yalnız yerel CLI ile,
+  `getpass` kullanılarak yapılır.
+- **Python belleği güvenilir biçimde sıfırlanamaz.** Seed kullanım sonrası
+  en-iyi-çaba ile sıfırlanır; bu bir garanti değildir.
 - OpenAPI response modellerinde `seed`, `private_key`, `secret`, `mnemonic`
   alanı bulunamaz — bu otomatik testle doğrulanır.
 - Evidence ve log yazılmadan önce secret-pattern taraması uygulanır.
@@ -92,6 +108,11 @@ Bu ürünün **savunmadığı** durumlar:
 - Resmî FLOP/Technocore domain'inin ele geçirilmesi.
 - Güvenilen bir upstream paketin ele geçirilmesi (supply-chain).
 - Kullanıcının manuel port yönlendirmesi yapması.
+- **DPAPI, aynı Windows kullanıcısı olarak çalışan malware'e karşı mutlak
+  koruma değildir.**
+- **`.tcrec` güvenliği tamamen recovery parolasının gücüne bağlıdır.**
+- Revoke bir **güvenli disk silme değildir** ve mevcut recovery dosyaları
+  geçerli kalmaya devam eder.
 
 Audit zinciri için kullanılan ifade **"çevrimdışı değişikliğe karşı
 tespit edici"**dir; "değişmez kayıt" veya "güvenilir zaman kanıtı" değildir.

@@ -8,9 +8,10 @@ The database path is likewise never returned (SI-36).
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 
 class StrictModel(BaseModel):
@@ -73,3 +74,127 @@ class AppStatusResponse(StrictModel):
     database: DatabaseStatus
     session_security: SessionSecurityStatus
     technocore: TechnocoreStatus
+
+
+# ---------------------------------------------------------------------------
+# Identity and recovery (Stage 2)
+#
+# Response models are an explicit allow-list. Only public material appears
+# here: DID, public key, fingerprint, label, status, protection mode and
+# recovery timestamps. There is deliberately no seed, private key, mnemonic,
+# passphrase or vault path anywhere in this section, and a security test walks
+# every model in this module to prove it.
+# ---------------------------------------------------------------------------
+
+#: The user must type this exactly to create an identity.
+CREATE_IDENTITY_CONFIRMATION = "KİMLİK OLUŞTUR"
+
+
+class IdentityPublic(StrictModel):
+    """Everything about an identity that is safe to show or copy."""
+
+    did: str
+    public_key: str = Field(description="Raw Ed25519 public key, lowercase hex.")
+    fingerprint: str
+    fingerprint_short: str
+    label: str
+    status: str
+    protection: str | None
+    created_at: datetime
+    revoked_at: datetime | None
+
+
+class RecoveryStatus(StrictModel):
+    exported_at: datetime | None
+    verified_at: datetime | None
+    file_fingerprint: str | None = Field(
+        default=None, description="SHA-256 of the exported .tcrec. Not a secret."
+    )
+    kdf: str | None
+    kdf_time_cost: int | None
+    kdf_memory_kib: int | None
+    kdf_parallelism: int | None
+
+
+class VaultCapabilityStatus(StrictModel):
+    platform_supported: bool
+    dpapi_available: bool
+    aead_available: bool
+    usable: bool
+    detail: str
+
+
+class GateCheckStatus(StrictModel):
+    key: str
+    state: Literal["passed", "blocked", "not_implemented"]
+    detail: str
+    #: Roadmap stage that delivers this requirement: "2", "2B", "3", ...
+    #: A string because the roadmap has a "2B" stage.
+    stage: str
+
+
+class WriteGateResponse(StrictModel):
+    """Why an external write may or may not proceed.
+
+    ``allowed`` stays False while any check is ``not_implemented``: an
+    unbuilt requirement is never counted as satisfied.
+    """
+
+    allowed: bool
+    identity_ready: bool
+    blocking_reasons: list[str]
+    checks: list[GateCheckStatus]
+
+
+class IdentityStatusResponse(StrictModel):
+    state: Literal[
+        "no_identity",
+        "creating",
+        "recovery_pending",
+        "ready",
+        "revoked",
+        "capability_error",
+    ]
+    identity: IdentityPublic | None
+    recovery: RecoveryStatus
+    capability: VaultCapabilityStatus
+    gate: WriteGateResponse
+    default_protection: str
+    min_passphrase_chars: int
+    create_confirmation_text: str
+
+
+class CreateIdentityRequest(StrictModel):
+    """Request body for creating an identity.
+
+    Passphrases use ``SecretStr`` so an accidental repr, log line or traceback
+    prints ``**********`` instead of the value.
+    """
+
+    protection: Literal["dpapi", "dpapi+passphrase"]
+    passphrase: SecretStr | None = None
+    passphrase_confirm: SecretStr | None = None
+    label: str = Field(default="", max_length=128)
+    confirmation: str = Field(description="Must equal the create confirmation text.")
+    accept_dpapi_only_risk: bool = Field(
+        default=False,
+        description="Required when choosing dpapi without a passphrase.",
+    )
+
+
+class ExportRecoveryRequest(StrictModel):
+    recovery_passphrase: SecretStr
+    recovery_passphrase_confirm: SecretStr
+    vault_passphrase: SecretStr | None = None
+
+
+class RevokeIdentityRequest(StrictModel):
+    confirm_did: str
+
+
+class RecoveryInspectResponse(StrictModel):
+    """Public DID read from a recovery file, shown before adoption."""
+
+    did: str
+    fingerprint: str
+    fingerprint_short: str

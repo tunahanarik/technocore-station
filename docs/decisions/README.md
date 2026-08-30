@@ -51,6 +51,21 @@ sürece burada tutulurlar.
 | IMP-109 | Development'ta backend sabit `STATION_DEV_PORT` (varsayılan 8787) kullanır | Vite proxy hedefinin bilinmesi gerekir; production yolu efemer kalır |
 | IMP-110 | `technocore-conform` Aşama 1'de yalnız paket sınırı + placeholder | Prompt gereği; sweep/DID/imza kodu Aşama 2B'de yazılır |
 
+## 2b. Aşama 2 uygulama kararları
+
+| ID | Karar | Gerekçe |
+|---|---|---|
+| IMP-201 | Kasa yolu `<data_dir>/vault/v1/<identity_id>.vault.json` | Sürümlü dizin, gelecekteki bir zarf biçimine sorunsuz geçiş sağlar |
+| IMP-202 | Kasa dosya adı uygulama üretimi 32-hex identity id'den gelir | Tahmin edilebilir kullanıcı girdisi yol bileşenine giremez |
+| IMP-203 | ACL, SDDL + `SetNamedSecurityInfoW` ile uygulanır (`D:P(A;;FA;;;SY)(A;;FA;;;<sid>)`) | `icacls` bir kabuk enjeksiyon yüzeyidir ve hatası sessizce kaybolur; API ile hem uygulanır hem geri okunup doğrulanır |
+| IMP-204 | Parola katmanı DPAPI zarfının **içinde** | Kopyalanan dosya DPAPI ile, yerel saldırgan Argon2id ile karşılaşır |
+| IMP-205 | Tek aktif kimlik, nullable UNIQUE `active_slot` sütunuyla şemada zorlanır | SQLite NULL'ları eşit saymaz; kural servis katmanına bırakılmaz |
+| IMP-206 | `KdfPolicy` hem üretim hem **kabul sınırlarını** taşır | Testler ucuz politika enjekte edebilir, fakat production alt sınırı bunu bir downgrade yoluna dönüşmekten alıkoyar |
+| IMP-207 | Argon2 kütüphane hataları `VaultUnlockError`a eşlenir | `memory_cost < 8 x parallelism` gibi kombinasyonlar aksi hâlde istisna sızdırırdı |
+| IMP-208 | Write gate'te `not_implemented` ayrı bir durumdur | Uygulanmamış gereksinim asla `passed` sayılmaz; ürün boşluğu kullanıcı hatasından ayrılır |
+| IMP-209 | Raw seed importu yalnız CLI; HTTP endpoint yok | Seed request body'sine, proxy tamponuna ve loga girmemelidir |
+| IMP-210 | Import yalnız 64-hex biçimi kabul eder; passphrase yolu reddedilir | Resmî `sign.py` bu iki yolu sunar, künye §8.3 ikincisini yasaklar |
+
 ## 3. Yeni ADR nasıl eklenir
 
 Yeni ve **kalıcı** bir mimari karar alındığında bu dizine

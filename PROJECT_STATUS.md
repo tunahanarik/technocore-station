@@ -8,8 +8,8 @@
 
 - [x] **Aşama 0 — Spesifikasyon** — tamamlandı
 - [x] **Aşama 1 — Güvenli iskelet** — tamamlandı
-- [ ] **Aşama 2 — Identity & Recovery** — sıradaki
-- [ ] **Aşama 2B — Conformance**
+- [x] **Aşama 2 — Identity & Recovery** — tamamlandı
+- [ ] **Aşama 2B — Conformance** — sıradaki
 - [ ] **Aşama 3 — Salt okunur Technocore**
 - [ ] **Aşama 4 — Composer & Participation**
 - [ ] **Aşama 5 — Evidence & Audit**
@@ -280,22 +280,163 @@ düzeltildi:
 
 ---
 
-## Sonraki aşama: Aşama 2 — Identity & Recovery
+## Aşama 2 — Tamamlanan görevler
 
-Kapsam: DPAPI vault, seed üretme/import, `.tcrec` şifreli recovery
-(Argon2id + ChaCha20-Poly1305), restore-test gate.
-Kabul kriterleri: **AC-01, AC-06, AC-10, AC-11, AC-12**.
+Dal: `stage-2-identity-recovery` (commit atılmadı).
+
+### DID uygunluğu (AC-01)
+- [x] `technocore-conform` içinde seed → public key → `did:key` ve **ters** çözümleme
+- [x] Bağımsız uygulama; resmî implementation satırı kopyalanmadı
+- [x] **7 TEST-ONLY seed** ile pinlenmiş `scripts/sign.py` oracle'ına karşı
+      subprocess diferansiyel testi — hepsi **karakter karakter aynı**
+      (all-zero ve all-`0xff` kenar durumları dâhil)
+- [x] Public key tam 32 bayt; multibase tam 48 karakter, `z6Mk` başlıklı
+- [x] Geçersiz uzunluk, prefix, alfabe dışı karakter ve **canonical olmayan**
+      kodlama fail-closed reddedilir
+- [x] Sweep/canonical/sign/verify **yazılmadı** (Aşama 2B)
+
+### DPAPI vault
+- [x] **Current-user** kapsam; `CRYPTPROTECT_LOCAL_MACHINE` hiç kullanılmaz (testle doğrulandı)
+- [x] Kasa `%LOCALAPPDATA%\TechnocoreStation\vault\v1\<identity_id>.vault.json`;
+      repo ve OneDrive dışında, sürümlü dizin
+- [x] Dosya adı uygulama üretimi 32-hex id'den; yol HTTP girdisinden türetilmez
+- [x] **Atomik yazma**: temp dosya → ACL → `os.replace` → ACL; artık `.tmp` kalmaz
+- [x] **Windows API ile ACL** (`icacls` yok): `D:P(A;;FA;;;SY)(A;;FA;;;<user-sid>)`;
+      geri okunup doğrulanır, uygulanamazsa **fail-closed**
+- [x] Sürümlü, strict parse edilen envelope (bilinmeyen alan reddedilir)
+- [x] Açılışta DPAPI + AEAD self-test
+- [x] Production'da **fake/in-memory vault yok**; non-Windows fail-closed
+- [x] Modlar: `dpapi`, `dpapi+passphrase` (varsayılan ve önerilen)
+
+### Recovery `.tcrec` v1
+- [x] Argon2id **64 MiB / 3 iterasyon / p=1 / 32 bayt**, ChaCha20-Poly1305
+- [x] Dosya başına yeni 16 baytlık salt ve 12 baytlık nonce
+- [x] Aynı seed + aynı parola → **byte olarak farklı** dosyalar
+- [x] `ciphertext` hariç tüm header alanları **AAD**; byte-exact test vektörü
+- [x] Duplicate key, oversize (64 KiB), aşırı/düşük KDF maliyeti, unsupported
+      version/algorithm, padding'li ve non-canonical base64url **reddedilir**
+- [x] Untrusted KDF parametreleri **türetmeden önce** doğrulanır
+- [x] Yanlış parola, ciphertext tamperi ve header tamperi **aynı** dış hata
+      sözleşmesini kullanır (zamanlama eşitliği **iddia edilmez**)
+- [x] `docs/recovery-format-v1.md` yazıldı
+
+### Akışlar
+- [x] Kimlik oluşturma: koruma seçimi, risk onayı, çift parola, tam
+      `KİMLİK OLUŞTUR` onay metni; sonuç `recovery_pending`
+- [x] Recovery export: ayrı eylem, `attachment` + `no-store`, DB'ye yalnız
+      SHA-256 ve KDF metadata
+- [x] Restore-test: yalnız şifreli dosya + parola; kasaya dokunmaz;
+      başarısızlıkta **hiçbir şey değişmez**; başarıda `ready`
+- [x] Temiz profilden kurtarma: inspect → onay → yeni koruma → kurulum
+- [x] CLI seed import: yalnız resmî 64-hex biçim, `getpass`, tam onay,
+      aktif kimlik varsa ret, kaynak dosya değiştirilmez
+- [x] Revoke: tam DID yazımı, kasa silme, "güvenli silme değildir" uyarısı
+
+### Write gate (AC-12)
+- [x] Merkezî `WriteGate`; override/env/bypass **yok**
+- [x] Kimlik yok / recovery bekliyor / kasa yok / revoked → **kapalı**
+- [x] Başarılı restore-test sonrası `identity_ready = true`, fakat
+      `allowed = false` — conformance ve manifest `not_implemented`
+- [x] Repoda hiçbir Technocore write yolu veya giden HTTP istemcisi yok
+
+### Veri modeli
+- [x] `Identity`, `SecretMetadata`, `RecoveryRecord` (migration `0002`)
+- [x] Tek aktif kimlik, nullable UNIQUE `active_slot` ile **şemada** zorlanır
+- [x] Hiçbir tabloda seed, private key, parola veya ciphertext yok
+- [x] Dosya sistemi/DB hatalarında iki yönlü rollback
+
+### UI
+- [x] Identity sekmesi gerçek state machine ile çalışıyor
+- [x] Public DID ve fingerprint kopyalanabilir; **seed gösterimi/kopyalaması yok**
+- [x] Raw seed textbox'ı yok; parolalar yalnız local state, dialog kapanınca temizlenir
+- [x] Compose & Verify **gerçek write gate**'i okuyor ve kilitli kalıyor
+- [x] Üç sekme korundu; LLM/Lobby sekmesi eklenmedi
+
+---
+
+## Aşama 2 — Ek bağımlılıklar
+
+| Paket | Sürüm | Gerekçe |
+|---|---|---|
+| cryptography | 46.0.7 | Ed25519 ve ChaCha20-Poly1305 |
+| argon2-cffi | 25.1.0 | Recovery ve vault KDF |
+| python-multipart | 0.0.32 | Şifreli `.tcrec` yüklemesi (multipart) |
+| @testing-library/user-event | 14.x | Dialog ve klavye akışı testleri |
+
+---
+
+## Aşama 2 — Test sonuçları
+
+| Kapı | Sonuç |
+|---|---|
+| `ruff check` | **All checks passed** |
+| `mypy --strict` | **Success: no issues found in 41 source files** |
+| `pytest tests` | **222 passed** |
+| ESLint | **0 hata** |
+| `tsc -b` | **0 hata** |
+| vitest | **28 passed** |
+| production build | **başarılı** (JS 437.93 kB, CSS 405.89 kB) |
+| `npm audit` | **0 vulnerabilities** |
+| `uv lock --check` | güncel |
+| vendor SHA256 | **4/4 OK** |
+| secret taraması | temiz |
+| Windows DPAPI integration | **gerçek DPAPI ile çalıştırıldı ve geçti** |
+
+### Dağılım (toplam **250**)
+| Katman | Adet |
+|---|---:|
+| `tests/security/` | 173 |
+| `tests/integration/` | 15 |
+| `tests/conformance/` | 34 |
+| Frontend (vitest) | 28 |
+
+### Kabul kriteri eşlemesi
+| AC | Kriter | Kanıt |
+|---|---|---|
+| **AC-01** | DID resmî script ile karakter karakter aynı | `test_did_differential.py::test_did_matches_official_reference` (7 seed) |
+| **AC-06** | Seed hiçbir response, log veya bundle'da görünmez | `test_seed_leakage.py` (canary seed; HTTP, OpenAPI, SQLite, kasa, log, exception, bundle) |
+| **AC-10** | Recovery round-trip temiz profilde aynı DID | `test_identity_flow.py::test_clean_profile_recovers_the_same_did` |
+| **AC-11** | Yanlış parola ve kurcalanmış dosya aynı güvenli hata | `test_identity_flow.py::test_wrong_passphrase_and_tamper_share_one_response` |
+| **AC-12** | Restore-test olmadan write çalışmaz | `test_write_gate.py` + `test_identity_lifecycle_over_http` |
+
+---
+
+## Aşama 2 — Açık riskler
+
+| ID | Risk | Durum |
+|---|---|---|
+| A2-R1 | **Farklı Windows hesabında test edilmedi.** Temiz profil testi aynı hesap içinde bağımsız veri kökü kullanır. | Dürüstçe beyan edildi; ikinci hesap testi manuel bir adımdır |
+| A2-R2 | Zamanlama eşitliği iddia edilmiyor | Tek dış hata sözleşmesi var; yan kanal kapatılmadı |
+| A2-R3 | Python belleği güvenilir sıfırlanamaz | En-iyi-çaba scrub; belgelendi |
+| A2-R4 | DPAPI aynı kullanıcı malware'ine karşı mutlak değil | `dpapi+passphrase` azaltır; `threat-model.md` §2.1 |
+| A2-R5 | `.tcrec` güvenliği parola gücüne bağlı | UI ve belge açıkça söylüyor |
+| A2-R6 | Argon2 64 MiB, HTTP testlerini yavaşlatır | Kabul edildi; production politikası düşürülmedi |
+
+---
+
+## Sonraki aşama: Aşama 2B — Conformance
+
+Kapsam: bağımsız `technocore-conform` sweep, canonical string, sign ve verify
+yüzeyi ile CLI. Kabul kriterleri: **AC-02, AC-03, AC-04, AC-05**.
+
+Aşama 2B tamamlanmadan write gate'in `conformance_verified` kontrolü
+`not_implemented` kalır ve dış yazma açılmaz.
 
 Ön koşul: kullanıcı açıkça "başlayalım" demeden gerçek DID/seed üretilmez
 (künye §20.2).
 
 ---
 
-## Bu turda yapılmayanlar (açık beyan)
+## Bu turda yapılmayanlar (Aşama 2 beyanı)
 
-- **Gerçek DID oluşturulmadı.**
-- **Secret seed, private key veya recovery dosyası oluşturulmadı.**
-- **Technocore'a write isteği gönderilmedi.** Hiçbir mesaj, note veya başka
-  yazma isteği gönderilmedi; uygulamada giden network istemcisi yoktur.
-- Git commit, push, deploy veya public repo işlemi yapılmadı.
+- **Gerçek kullanıcı DID'si oluşturulmadı.** UI'daki "Kimlik oluştur" butonuna
+  basılmadı.
+- **Operasyonel seed veya private key üretilmedi.** Tüm anahtar materyali
+  `TEST-ONLY` etiketli fixture'lardır ve geçici dizinlerde kalmıştır.
+- **Gerçek `.tcrec` recovery dosyası bırakılmadı.**
+- **Technocore'a hiçbir okuma veya yazma isteği gönderilmedi.** Uygulamada
+  giden bir HTTP istemcisi yoktur; bir test bunu kaynak taramasıyla doğrular.
+- Sweep, canonical, imzalama ve doğrulama yazılmadı (Aşama 2B).
+- LLM/Agent Runtime, Evidence/HMAC zinciri, çoklu DID yazılmadı.
+- Commit, push, PR, tag, release veya deploy yapılmadı.
 - Telemetri, analytics veya bulut servisi eklenmedi.

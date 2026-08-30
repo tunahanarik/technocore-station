@@ -11,7 +11,13 @@
  *    never logged.
  */
 
-import type { AppStatus, SessionBootstrap } from "./types";
+import type {
+  AppStatus,
+  IdentityStatus,
+  ProtectionMode,
+  RecoveryInspectResult,
+  SessionBootstrap,
+} from "./types";
 
 const DEFAULT_CSRF_HEADER = "X-Station-CSRF";
 
@@ -38,7 +44,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new ApiError(response.status, `request_failed_${response.status}`);
+    // Surface the backend's own message so the user sees why, in Turkish.
+    throw new ApiError(response.status, await readErrorDetail(response));
   }
 
   return (await response.json()) as T;
@@ -80,4 +87,136 @@ export async function mutate<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
     headers: { "Content-Type": "application/json", [csrfHeader]: csrfToken },
   });
+}
+
+/** Multipart POST. Used only to send an already-encrypted .tcrec file. */
+async function mutateForm<T>(path: string, form: FormData): Promise<T> {
+  if (csrfToken === null) {
+    throw new Error("session_not_bootstrapped");
+  }
+  // Content-Type is intentionally omitted: the browser must set the multipart
+  // boundary itself.
+  return request<T>(path, { method: "POST", body: form, headers: { [csrfHeader]: csrfToken } });
+}
+
+// --- Identity and recovery -------------------------------------------------
+
+export async function fetchIdentity(): Promise<IdentityStatus> {
+  return request<IdentityStatus>("/api/identity");
+}
+
+export interface CreateIdentityInput {
+  readonly protection: ProtectionMode;
+  readonly passphrase: string | null;
+  readonly passphraseConfirm: string | null;
+  readonly label: string;
+  readonly confirmation: string;
+  readonly acceptDpapiOnlyRisk: boolean;
+}
+
+export async function createIdentity(input: CreateIdentityInput): Promise<IdentityStatus> {
+  return mutate<IdentityStatus>("/api/identity", {
+    protection: input.protection,
+    passphrase: input.passphrase,
+    passphrase_confirm: input.passphraseConfirm,
+    label: input.label,
+    confirmation: input.confirmation,
+    accept_dpapi_only_risk: input.acceptDpapiOnlyRisk,
+  });
+}
+
+/**
+ * Download the encrypted recovery file.
+ *
+ * The response body is ciphertext. It is handed straight to a temporary
+ * object URL, which is revoked immediately after the click so the blob does
+ * not linger in memory or in the document.
+ */
+export async function exportRecovery(input: {
+  readonly recoveryPassphrase: string;
+  readonly recoveryPassphraseConfirm: string;
+  readonly vaultPassphrase: string | null;
+}): Promise<{ blob: Blob; filename: string }> {
+  if (csrfToken === null) {
+    throw new Error("session_not_bootstrapped");
+  }
+
+  const response = await fetch("/api/identity/recovery/export", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", [csrfHeader]: csrfToken },
+    body: JSON.stringify({
+      recovery_passphrase: input.recoveryPassphrase,
+      recovery_passphrase_confirm: input.recoveryPassphraseConfirm,
+      vault_passphrase: input.vaultPassphrase,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new ApiError(response.status, await readErrorDetail(response));
+  }
+
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const match = /filename="([^"]+)"/.exec(disposition);
+  return { blob: await response.blob(), filename: match?.[1] ?? "technocore-station.tcrec" };
+}
+
+export async function verifyRecovery(
+  file: File,
+  recoveryPassphrase: string,
+): Promise<IdentityStatus> {
+  const form = new FormData();
+  form.append("recovery_file", file);
+  form.append("recovery_passphrase", recoveryPassphrase);
+  return mutateForm<IdentityStatus>("/api/identity/recovery/verify", form);
+}
+
+export async function inspectRecovery(
+  file: File,
+  recoveryPassphrase: string,
+): Promise<RecoveryInspectResult> {
+  const form = new FormData();
+  form.append("recovery_file", file);
+  form.append("recovery_passphrase", recoveryPassphrase);
+  return mutateForm<RecoveryInspectResult>("/api/identity/recovery/inspect", form);
+}
+
+export async function adoptRecovery(input: {
+  readonly file: File;
+  readonly recoveryPassphrase: string;
+  readonly protection: ProtectionMode;
+  readonly vaultPassphrase: string | null;
+  readonly confirmDid: string;
+  readonly label: string;
+}): Promise<IdentityStatus> {
+  const form = new FormData();
+  form.append("recovery_file", input.file);
+  form.append("recovery_passphrase", input.recoveryPassphrase);
+  form.append("protection", input.protection);
+  form.append("confirm_did", input.confirmDid);
+  form.append("label", input.label);
+  if (input.vaultPassphrase !== null) {
+    form.append("vault_passphrase", input.vaultPassphrase);
+  }
+  return mutateForm<IdentityStatus>("/api/identity/recovery/adopt", form);
+}
+
+export async function revokeIdentity(confirmDid: string): Promise<IdentityStatus> {
+  return mutate<IdentityStatus>("/api/identity/revoke", { confirm_did: confirmDid });
+}
+
+/** Pull the backend's Turkish message out of an error response, if present. */
+async function readErrorDetail(response: Response): Promise<string> {
+  try {
+    const body: unknown = await response.json();
+    if (typeof body === "object" && body !== null && "detail" in body) {
+      const { detail } = body;
+      if (typeof detail === "string") {
+        return detail;
+      }
+    }
+  } catch {
+    // Fall through to the generic message below.
+  }
+  return `request_failed_${response.status}`;
 }
