@@ -110,6 +110,30 @@ def test_the_bundle_is_pure_ascii(shipped_bundle_path: Path) -> None:
     shipped_bundle_path.read_bytes().decode("ascii")
 
 
+def _git(repo_root: Path, *arguments: str) -> subprocess.CompletedProcess[bytes]:
+    """Run a git command, skipping only when git genuinely cannot be consulted.
+
+    The two legitimate reasons to skip are that git is not installed and that
+    this is not a checkout - which is the case when the suite runs from an
+    unpacked sdist. Every *other* failure is reported by the caller, because
+    a guard that quietly disarms itself is worse than no guard.
+    """
+    try:
+        result = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            ["git", *arguments],
+            cwd=repo_root,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+    except (FileNotFoundError, OSError) as exc:  # pragma: no cover - no git here
+        pytest.skip(f"git is unavailable, cannot verify checkout bytes: {exc}")
+
+    if b"not a git repository" in result.stderr:  # pragma: no cover - sdist run
+        pytest.skip("not a git checkout, cannot verify checkout bytes")
+    return result
+
+
 #: Files whose exact bytes are pinned by a SHA-256 that is checked at runtime.
 _BYTE_EXACT_PATHS = (
     "packages/technocore-conform/src/technocore_conform/vectors/conformance-v1.json",
@@ -138,15 +162,14 @@ def test_git_hands_a_fresh_checkout_the_exact_pinned_bytes(
     of the property that matters - what git will hand the next machine.
     ``.gitattributes`` marks these paths ``-text`` to guarantee it.
     """
-    blob = subprocess.run(  # noqa: S603 - fixed argv, no shell
-        ["git", "cat-file", "blob", f"HEAD:{relative}"],
-        cwd=repo_root,
-        capture_output=True,
-        timeout=60,
-        check=False,
+    blob = _git(repo_root, "cat-file", "blob", f"HEAD:{relative}")
+    # Every path here is tracked, so "not in HEAD" is a failure, not a skip:
+    # treating any non-zero exit as "nothing to check" would let a missing
+    # git, a permissions error or a deleted file silently disarm the guard.
+    assert blob.returncode == 0, (
+        f"{relative} could not be read from HEAD, so this guard did not run: "
+        f"{blob.stderr.decode(errors='replace').strip()}"
     )
-    if blob.returncode != 0:  # pragma: no cover - path not committed yet
-        pytest.skip(f"{relative} is not committed at HEAD")
 
     on_disk = (repo_root / relative).read_bytes()
     assert on_disk == blob.stdout, (
@@ -160,18 +183,13 @@ def test_byte_exact_paths_are_protected_from_line_ending_conversion(
     repo_root: Path, relative: str
 ) -> None:
     """The guarantee behind the test above, stated where it is configured."""
-    result = subprocess.run(  # noqa: S603 - fixed argv, no shell
-        ["git", "check-attr", "text", "--", relative],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip().endswith("text: unset"), (
+    result = _git(repo_root, "check-attr", "text", "--", relative)
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+
+    rendered = result.stdout.decode(errors="replace").strip()
+    assert rendered.endswith("text: unset"), (
         f"{relative} is not marked -text in .gitattributes, so git may rewrite "
-        f"its line endings on checkout: {result.stdout.strip()}"
+        f"its line endings on checkout: {rendered}"
     )
 
 
