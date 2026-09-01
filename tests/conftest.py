@@ -1,7 +1,10 @@
 """Shared fixtures.
 
-No test in this suite contacts the real Technocore. There is no outbound
-network client in the product yet, and INV-05 forbids adding one to a test.
+No test in this suite contacts the real Technocore. Since Stage 3 the product
+*does* carry an outbound client - one module, one fixed source registry, read
+only - so this is no longer true by absence: it holds because INV-05 forbids
+a test from reaching the network, and the Stage 3 tests drive that client
+through a mock transport instead.
 """
 
 from __future__ import annotations

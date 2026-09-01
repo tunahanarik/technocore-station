@@ -339,6 +339,8 @@ Dal: `stage-2-identity-recovery` (commit atılmadı).
 - [x] Başarılı restore-test sonrası `identity_ready = true`, fakat
       `allowed = false` — conformance ve manifest `not_implemented`
 - [x] Repoda hiçbir Technocore write yolu veya giden HTTP istemcisi yok
+      *(Aşama 2 durumu. Aşama 3 tek bir salt-okunur istemci ekledi; write
+      yolu hâlâ yok ve bunu bir test doğruluyor.)*
 
 ### Veri modeli
 - [x] `Identity`, `SecretMetadata`, `RecoveryRecord` (migration `0002`)
@@ -701,7 +703,7 @@ gerçek belgeyle çalıştırıldığında dört kritik alan `<yok>` görünüyo
 |---|---|
 | ruff | geçti |
 | mypy strict | 51 dosya, 0 hata |
-| pytest | **605 geçti**, 0 hata |
+| pytest | **648 geçti**, 0 hata |
 | ESLint | geçti |
 | TypeScript + production build | geçti |
 | Vitest | **58 geçti** |
@@ -709,7 +711,7 @@ gerçek belgeyle çalıştırıldığında dört kritik alan `<yok>` görünüyo
 | conformance self-test | PASS |
 | referans belge bayt karşılaştırması | 2/2 OK |
 
-**Toplam 663 test** (605 backend + 58 frontend). Aşama 3 tabanı 582'ydi.
+**Toplam 706 test** (648 backend + 58 frontend). Aşama 3 tabanı 582'ydi.
 
 Not: `test_git_hands_a_fresh_checkout_the_exact_pinned_bytes` çalışma ağacını
 **commit edilmiş blob** ile karşılaştırır, bu yüzden yeni byte-exact dosyalar
@@ -771,12 +773,76 @@ testiyle birlikte düzeltildi (PR #6):
    yalnız **bu çağrının kurduğu** shim'ler geri alınır; hâlihazırda yüklü bir
    modüle dokunulmaz.
 
+### Ek şema denetimi (aynı aşamanın devamı)
+
+İlk düzeltmeden sonra **kalan bir kusur** vardı: `resolve_signed_lane()` gövde
+şemasının ve `dependentSchemas.did` düğümünün yalnız *bazı* anahtarlarını
+denetleyip alt düğümü döndürüyordu. Aynı isteği birlikte etkileyen diğer
+kısıtlar hesaba katılmıyordu.
+
+Sekiz senaryo, depodaki üretilmiş referans belgelerle çevrimdışı çalıştırıldı.
+**Bunlar değiştirilmiş test belgeleridir; canlı sunucunun bu kısıtları
+yayımladığı iddia edilmiyor.**
+
+| # | Senaryo | Önceki | Şimdi |
+|---|---|---|---|
+| 1 | Değiştirilmemiş pinned belgeler | `current` | `current` |
+| 2 | Yalnız `agent.version = 0.11.2` | `current` + uyarı | `current` + uyarı |
+| 3 | Koşullu `sig.maxLength = "86"` | `drifted` | `drifted` |
+| 4 | Koşullu `required` kaldırılmış | `unavailable` | `unavailable` |
+| 5 | Gövde şemasında `not: {}` | `unavailable` | `unavailable` |
+| 6 | Koşullu `sig` şemasında `not: {}` | **`current`** | `unavailable` |
+| 7 | Koşulsuz `properties.sig.maxLength = 1` | **`current`** | `drifted` |
+| 8 | Gövde `anyOf = [{"not": {"required": ["did"]}}]` | **`current`** | `unavailable` |
+
+Hepsi **mesaj ve note lane'lerinin ikisinde de** doğrulandı; üçü de her iki
+lane'de aynı şekilde kırıktı ve aynı şekilde düzeldi.
+
+**Ortak kök neden:** kalıbın bir köşede doğru olması, şemanın isteğimizi kabul
+ettiğini kanıtlamaz. JSON Schema'da aynı seviyedeki anahtarlar "ve" ile
+bağlanır; okunmayan bir anahtar yok sayılmış olmaz, yalnız görülmemiş olur.
+
+**Düzeltme:** anahtar listeleri **blok listesi değil izin listesi** oldu. Adı
+geçmeyen bir anahtar şemayı değerlendirilemez yapar. Ayrıca koşulsuz ve
+koşullu kısıtlar birlikte değerlendirilir (uzunluk aralığı boşsa çelişki),
+`anyOf` yalnız referansın yayımladığı `required` dalları biçiminde kabul
+edilir ve en az bir dal imzalı gövdeyle sağlanabilmelidir. Ayrıntı ve
+`mismatch`/`unsupported` ayrımının gerekçesi:
+[`docs/read-only-technocore.md`](docs/read-only-technocore.md) §5.
+
+Açıklama anahtarları (`description`, `title`, `$comment`, `example`,
+`examples`, `default`, `deprecated`, `readOnly`, `writeOnly`) kısıtlardan
+ayrılır; yalnız metin veya alan sırası değişimi protokol alarmı üretmez.
+
+### `tests/` artık projenin lint kural setinde
+
+Ruff yapılandırmayı çalışma dizininden değil denetlenen dosyadan yukarı
+yürüyerek bulur. `apps/station-api` ve `packages/technocore-conform` kendi
+`[tool.ruff]` bloklarını taşıyordu; `tests/` hiçbirini taşımıyor ve ruff'ın
+**varsayılan** setiyle denetleniyordu. Sonuç, benimsenmemiş stil kurallarını
+raporlarken burada gerçekten zorunlu olan `S` kurallarını hiç çalıştırmamaktı;
+en açık belirti, gerçek yapılandırmada gerekli olan `# noqa: S603` satırlarının
+"kullanılmayan noqa" diye işaretlenmesiydi.
+
+Kök dizine [`ruff.toml`](ruff.toml) eklendi. Ortaya çıkan **44 gerçek bulgu
+düzeltilerek** kapatıldı, bastırılarak veya dosya dışlanarak değil:
+
+- 11 otomatik düzeltme (import sırası, Yoda koşulları, ölü `noqa`'lar);
+- 19 kasıtlı görünmez/benzeşen karakter kaçış dizisine çevrildi — değerler bit
+  düzeyinde aynı kaldı, vektör paketinin digest'i değişmedi;
+- 7 `subprocess` / `0.0.0.0` bulgusu gerekçeli `noqa` ile kapatıldı (sabit
+  argv, shell yok; `0.0.0.0` zaten testin konusu);
+- Türkçe metindeki `ı` için `allowed-confusables` tanımlandı — proje dili
+  Türkçedir (AGENTS.md §3);
+- kalan 2 bulgu (satır uzunluğu, iç içe `if`) doğrudan düzeltildi.
+
 ### Açık riskler
 
 | ID | Risk | Durum |
 |---|---|---|
 | D-R1 | Olumsuzlama listesi kapalı ve kısa | Bilinçli: genel amaçlı bir dil modeli yok. Asıl dayanak makine şeması; liste gerçek referans metnine karşı testli |
-| D-R2 | `anyOf` desteklenmeyen anahtar sayılmıyor | Aynı seviyedeki anahtarlar konjonktif olduğu için `dependentSchemas`'ı gevşetemez; gerekçe kodda ve belgede yazılı |
+| D-R2 | `anyOf` yalnız referansın yayımladığı `required` dalları biçiminde okunur | Farklı bir `anyOf` yapısı adı yüzünden kabul edilmez; okunamaz sayılır ve kapı kapanır. Eski "yalnız kısıt ekler" gerekçesi yanlıştı ve düzeltildi |
+| D-R5 | Değerlendirici bir JSON Schema motoru değildir | Bilinçli. İki regex'in kesişimi, sayısal aralıklar dışındaki genel çelişkiler ve iç içe bileşik şemalar **hesaplanmaz** — okunamaz sayılıp kapı kapatılır. "26 alan geçti" ifadesi, sözleşmenin tamamının doğrulandığı anlamına gelmez |
 | D-R3 | Vendor pini hâlâ `7707cb63…`, canlı `0.11.2` | Bilinçli; yükseltme ayrı ve açık bir karar adımı. Sürüm uyarısı bu farkı görünür tutuyor |
 | D-R4 | Referans belgeleri pinlenmiş sürümün belgeleridir | Testler ağa çıkmaz; canlı gözlem ayrı ve tarihli tutulur |
 
@@ -805,8 +871,11 @@ yazma kodu bulunmaz.
   `TEST-ONLY` etiketli, depoda yayımlanmış fixture'lardır.
 - **Gerçek `.tcrec` recovery dosyası bırakılmadı.**
 - **Identity vault açılmadı.**
-- **Technocore'a hiçbir okuma veya yazma isteği gönderilmedi.** Uygulamada
-  giden bir HTTP istemcisi yoktur; bir test bunu kaynak taramasıyla doğrular.
+- **Technocore'a hiçbir yazma isteği gönderilmedi.** Aşama 3 ile birlikte
+  uygulama giden bir salt-okunur istemci taşır — tek modül, sabit kaynak
+  registry'si — fakat hiçbir write yolu yoktur ve bir test bunu kaynak
+  taramasıyla doğrular. (Aşama 2 ve öncesindeki "giden istemci yok" beyanı o
+  aşamalar için doğruydu; bugünkü durum budur.)
 - **Vendor pini güncellenmedi.** Upstream `main` ilerlemiş olsa da pin
   `7707cb63…` olarak bırakıldı.
 - Nonce sayacı, rezervasyon, replay reddi ve gerçek imzalama yazılmadı (Aşama 4).

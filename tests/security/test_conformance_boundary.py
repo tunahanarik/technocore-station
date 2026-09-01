@@ -29,8 +29,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine
 from station_api.app import create_app
-from station_api.conformance import ConformanceService
 from station_api.config import Settings
+from station_api.conformance import ConformanceService
 from station_api.identity.service import IdentityService
 from technocore_conform import SelfTestResult
 from technocore_conform.selftest import EXPECTED_BUNDLE_DIGEST
@@ -359,7 +359,7 @@ def test_pynacl_is_absent_from_the_production_import_graph() -> None:
         # module is asserted in test_write_gate.py instead.
         "print(','.join(sorted(tops & {'nacl', 'requests', 'urllib3', 'aiohttp'})))"
     )
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: S603 - fixed argv, no shell
         [sys.executable, "-c", script],
         capture_output=True,
         text=True,

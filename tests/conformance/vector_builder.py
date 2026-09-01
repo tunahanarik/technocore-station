@@ -68,9 +68,9 @@ _SWEEP_CASES: tuple[tuple[str, str, str], ...] = (
     ("unicode-tag", "message", "gizli\U000e0041\U000e0042talimat"),
     ("private-use", "message", "ab\U000f0000c"),
     ("zero-width", "message", "a​b‌c‍d"),
-    ("line-separator", "message", "a b c"),
-    ("nbsp-interior", "message", "a b"),
-    ("nbsp-edges", "message", " abc "),
+    ("line-separator", "message", "a\u2028b\u2029c"),
+    ("nbsp-interior", "message", "a\u00a0b"),
+    ("nbsp-edges", "message", "\u00a0abc\u00a0"),
     ("pipe-in-text", "message", "a|b|c"),
     ("pipe-only-text", "message", "|"),
     ("astral", "message", "\U0001d11e \U00020bb7 son"),
@@ -132,7 +132,7 @@ def _sweep_vector(
     limit = limits[_POLICY_LIMIT_FIELD[policy]]
     try:
         output = clean(text, limit)
-    except Exception:  # noqa: BLE001 - the reference's StoreError stand-in
+    except Exception:
         return {"id": case_id, "policy": policy, "input": text, "outcome": "refused"}
     return {
         "id": case_id,

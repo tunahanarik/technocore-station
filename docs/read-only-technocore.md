@@ -122,12 +122,87 @@ yayımlamak, hiçbir şeyin zorlamadığı bir kısıtı belgelemek olurdu.
 Sonuç: eski projeksiyon dört kritik alanı `<yok>` olarak gördü ve **yanlış
 bir drift alarmı** üretti. Alanlar kaybolmamıştı; yanlış yerde aranıyordu.
 
-Projeksiyon artık **DID ile seçilen effective schema**'yı çözer. Anlamı
-değiştirebilecek bir anahtar (`$ref`, `$dynamicRef`, `allOf`, `oneOf`,
-`not`, `if`) görürse şemayı okumaz ve **doğrulanamadı** der. `anyOf`
-bilinçli olarak listede değildir: referans bir tane yayımlar
-(`from` ya da `did` zorunlu) ve aynı seviyedeki anahtarlar birbirine "ve" ile
-bağlandığı için `dependentSchemas`'ı gevşetemez, yalnız kısıt ekleyebilir.
+Projeksiyon **DID ile seçilen effective schema**'yı çözer.
+
+### Doğru değeri bulmak, şemanın isteği kabul ettiğini göstermez
+
+İlk düzeltme reddettiği anahtarları saydı (`$ref`, `allOf`, `not`, …) ve
+geri kalanından istediği alanları okudu. Bu ters bir yaklaşımdı: her imzalı
+isteği reddeden üç ayrı belge `current` raporladı.
+
+| Belge | Neden her imzayı reddeder | Eski sonuç |
+|---|---|---|
+| `sig` alan düğümünde `not: {}` | Boş şemanın değili — hiçbir değer eşleşmez | `current` |
+| Koşulsuz `properties.sig.maxLength: 1` | Koşullu `minLength: 86` ile birlikte uygulanır; hiçbir string ikisini birden sağlayamaz | `current` |
+| `anyOf: [{"not": {"required": ["did"]}}]` | İmzalı lane'i seçen alanı yasaklar | `current` |
+
+Ortak hata: **kalıbın bir köşede doğru olması, şemanın isteğimizi kabul
+ettiğini kanıtlamaz.** JSON Schema'da aynı seviyedeki anahtarlar "ve" ile
+bağlanır; okunmayan bir anahtar yok sayılmış olmaz, yalnız görülmemiş olur.
+
+### Bu yüzden listeler artık **izin listesi**
+
+Adı geçmeyen bir anahtar yok sayılmaz — şemayı **değerlendirilemez** yapar ve
+kapı kapanır. Bu bir JSON Schema motoru değildir ve olmaya çalışmaz; okuyabildiği
+biçimlerin açık beyanıdır.
+
+| Düğüm | Anlaşılan anahtarlar |
+|---|---|
+| İstek gövdesi | `type`, `properties`, `required`, `anyOf`, `dependentSchemas` |
+| `dependentSchemas.did` | `type`, `properties`, `required` |
+| Alan düğümü (`sig`, `nonce`, `did`) | `type`, `pattern`, `minLength`, `maxLength` |
+| `anyOf` dalı | `required` |
+
+Ayrıca **yalnız açıklama olan** anahtarlar (`description`, `title`,
+`$comment`, `example`, `examples`, `default`, `deprecated`, `readOnly`,
+`writeOnly`) hiçbir zaman kısıt sayılmaz ve hiçbir zaman protokol alarmı
+üretmez. Sabit anahtar listesi kullanan bir denetimde bu ayrımı yapmamak, her
+metin düzeltmesinde yazma kapısını kapatmak demek olurdu.
+
+### İki seviye birlikte uygulanır
+
+`properties.sig` ile `dependentSchemas.did.properties.sig` aynı değeri
+kısıtlar; ikisi de geçerlidir. Referans birincisini yalnız `description` ile
+yayımlar, yani normalde uzlaştıracak bir şey yoktur. Bir kısıt gerçekten
+varsa:
+
+- **birebir aynı** kısıt tekrarı kabul edilir;
+- **uzunluk sınırları** birleştirilir ve aralık boşsa (`en az 86`, `en fazla 1`)
+  bu **kanıtlanmış bir çelişkidir** → `mismatch`;
+- **farklı `type`** aynı anda sağlanamaz → `mismatch`;
+- **farklı `pattern`** iki regex'in kesişimi demektir, bu modül onu hesaplamaz
+  → `unsupported`.
+
+### `anyOf` gerekçesi düzeltildi
+
+Eski gerekçe "`anyOf` yalnız kısıt ekleyebilir, gevşetemez" idi. Doğru — ve
+konu dışı: **eklediği kısıt bizi reddedebilir.** Referansın gerçekte
+yayımladığı biçim şudur ve bir test bunu sabitler:
+
+```json
+"anyOf": [{"required": ["from"]}, {"required": ["did"]}]
+```
+
+Yani "ya kendine bir ad ver ya da imzala". Station imzalı dalı kullanır.
+Kabul edilen tek şekil budur: her dal yalnız `required` taşımalı ve **en az
+bir dal** imzalı gövdenin taşıdığı alanlarla (`did`, `sig`, `nonce` ve lane'in
+`text`/`value` alanı) sağlanabilmelidir. Bir dal farklı bir biçimdeyse, adı
+`anyOf` olduğu için kabul edilmez — okunamaz sayılır ve kapı kapanır. Hiçbir
+dal sağlanamıyorsa bu değerlendirilmiş bir olgudur → `mismatch`.
+
+### `mismatch` mi `unsupported` mu
+
+Karar tek bir soruya bağlıdır: **iddiayı kanıtladık mı?**
+
+- **`mismatch`** — şema okundu ve sağlanamayacağı *gösterildi*. Boş uzunluk
+  aralığı, çelişen tip, hiçbir dalı sağlanamayan `anyOf`. Belge hakkında
+  gerçek bir bulgudur.
+- **`unsupported`** — şemanın bir parçası okunamadı. Bu bir bilgi eksikliğidir,
+  sunucu hakkında bir iddia değildir; kullanıcı "protokol uyumu doğrulanamadı"
+  görür.
+
+İkisi de kapıyı kapatır. Ayrım, kullanıcının okuduğu cümlenin doğru olması
+içindir — bu modülün bir kez yeniden yazılmasının sebebi tam olarak buydu.
 
 ### Kritik (kapıyı kapatır)
 

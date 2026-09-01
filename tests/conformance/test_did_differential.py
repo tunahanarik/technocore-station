@@ -49,7 +49,7 @@ TEST_ONLY_SEEDS = (
 def _oracle_did(repo_root: Path, seed_hex: str) -> str:
     """Ask the pinned official signer for the did:key of a seed."""
     script = repo_root / "vendor" / "technocore-reference" / "scripts" / "sign.py"
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: S603 - fixed argv, no shell
         [sys.executable, str(script), "did", "--seed", seed_hex],
         capture_output=True,
         text=True,

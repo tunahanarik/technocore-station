@@ -116,6 +116,10 @@ kendisidir.
 
 - **Technocore'a hiçbir okuma veya yazma isteği gönderilmedi.** Üründe giden
   bir HTTP istemcisi yoktur; bir test bunu kaynak taramasıyla doğrular.
+  *(Aşama 2 beyanı. Aşama 3 tek bir salt-okunur istemci ekledi —
+  `technocore/client.py`, sabit altı belgelik registry, redirect takip etmez.
+  Yazma yolu hâlâ yoktur; ilgili test artık "hiç istemci yok" yerine "yalnız
+  bu modülde istemci var" iddiasını doğrular.)*
 - **Hiçbir LLM veya model adaptörü kullanılmadı.** Vault paketi, gelecekteki
   bir model yüzeyinin erişemeyeceği bir paket sınırıdır.
 - Temiz profilden kurtarma **aynı Windows hesabı içinde bağımsız bir veri

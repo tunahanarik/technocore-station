@@ -48,7 +48,7 @@ def _oracle_verdict(oracle: OracleSweep, text: str, limit: int) -> tuple[bool, s
     """``(accepted, output)`` from the reference, refusals included."""
     try:
         return True, oracle(text, limit)
-    except Exception:  # noqa: BLE001 - the reference's StoreError stand-in
+    except Exception:
         return False, ""
 
 
@@ -266,7 +266,7 @@ def test_the_two_limits_do_not_leak_into_each_other() -> None:
 
 @pytest.mark.parametrize(
     "text",
-    ["", "   ", "​", "​‌‍", "‮‬", "\n\t\r", "  "],
+    ["", "   ", "​", "​‌‍", "‮‬", "\n\t\r", "\u2028\u2029"],
 )
 def test_text_with_nothing_visible_is_refused(
     text: str, official_sweep: OracleSweep
@@ -303,6 +303,6 @@ def test_no_break_space_is_kept_inside_and_trimmed_at_the_edges(
     ``str.strip()`` removes it, because it is whitespace. Interior no-break
     spaces therefore survive and edge ones do not.
     """
-    text = " a b "
-    assert sweep_message(text) == "a b"
+    text = "\u00a0a\u00a0b\u00a0"
+    assert sweep_message(text) == "a\u00a0b"
     assert sweep_message(text) == official_sweep(text, MAX_MESSAGE_CHARS)

@@ -156,6 +156,15 @@ kontrolü ve CSRF katmanından gelir.
 | SI-94 | Beklenen imza kalıbı canlıdan değil kendi motorumuzdan türetilir | `SIGNATURE_PATTERN` | `::test_the_expectation_comes_from_our_own_conformance_engine` | A3.1 |
 | SI-95 | Referans belgeleri pinlenmiş üreticiyle bayt bayt aynıdır | bayt eşitliği | `test_manifest_oracle.py::test_the_stored_documents_are_byte_identical_to_a_fresh_run` | A3.1 |
 | SI-96 | UI, okunamayan alanı "değişmiş" diye göstermez | ayrı uyarı | `pages.test.tsx` — "does not call an unreadable field a change the server made" | A3.1 |
+| SI-97 | Alan düğümündeki `not`/`$ref`/`allOf`/`oneOf`/`if`/`enum`/`const` sessizce yok sayılmaz | `unavailable` | `::test_any_unreadable_keyword_in_a_field_node_closes_the_gate` | A3.1 |
+| SI-98 | Koşulsuz ve koşullu uzunluk sınırları birlikte değerlendirilir | `drifted` (boş aralık) | `::test_an_unconditional_length_that_contradicts_the_conditional_one` | A3.1 |
+| SI-99 | Koşulsuz ve koşullu `type` çelişkisi kapıyı kapatır | `drifted` | `::test_an_unconditional_type_that_contradicts_the_conditional_one` | A3.1 |
+| SI-100 | İkinci bir koşulsuz `pattern` yok sayılmaz | `unavailable` | `::test_a_second_unconditional_pattern_is_not_silently_ignored` | A3.1 |
+| SI-101 | DID'i yasaklayan `anyOf` kapıyı kapatır | `unavailable` | `::test_an_any_of_that_forbids_the_did_is_not_current` | A3.1 |
+| SI-102 | Hiçbir dalı imzalı gövdeyle sağlanamayan `anyOf` kapıyı kapatır | `drifted` | `::test_an_any_of_with_no_satisfiable_branch_is_not_current` | A3.1 |
+| SI-103 | Yalnız açıklama/başlık/örnek değişimi protokol alarmı üretmez | `current` | `::test_annotations_anywhere_in_the_body_are_not_a_protocol_change` | A3.1 |
+| SI-104 | Gövde şeması anahtar sırası değişimi drift değildir | `current` | `::test_reordering_the_body_schema_keys_is_not_a_protocol_change` | A3.1 |
+| SI-105 | Her iki lane aynı değerlendiriciden geçer | mesaj + note parametrik | `::test_*` (`_LANES` ile parametrik) | A3.1 |
 
 ## 9b. Aşama 2B değişmezleri (uygulandı)
 
