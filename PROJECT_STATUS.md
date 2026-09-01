@@ -701,7 +701,7 @@ gerçek belgeyle çalıştırıldığında dört kritik alan `<yok>` görünüyo
 |---|---|
 | ruff | geçti |
 | mypy strict | 51 dosya, 0 hata |
-| pytest | **596 geçti** |
+| pytest | **603 geçti**, 0 hata |
 | ESLint | geçti |
 | TypeScript + production build | geçti |
 | Vitest | **57 geçti** |
@@ -709,7 +709,12 @@ gerçek belgeyle çalıştırıldığında dört kritik alan `<yok>` görünüyo
 | conformance self-test | PASS |
 | referans belge bayt karşılaştırması | 2/2 OK |
 
-**Toplam 653 test** (596 backend + 57 frontend). Aşama 3 tabanı 582'ydi.
+**Toplam 660 test** (603 backend + 57 frontend). Aşama 3 tabanı 582'ydi.
+
+Not: `test_git_hands_a_fresh_checkout_the_exact_pinned_bytes` çalışma ağacını
+**commit edilmiş blob** ile karşılaştırır, bu yüzden yeni byte-exact dosyalar
+için ancak commit sonrası anlamlıdır. Yukarıdaki 603 sayısı commit sonrası
+tam koşudur.
 
 ### Canlı doğrulama — 1 Eylül 2026, UTC 18:29:40–18:29:47
 
