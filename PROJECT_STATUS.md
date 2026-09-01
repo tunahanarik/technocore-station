@@ -703,15 +703,15 @@ gerçek belgeyle çalıştırıldığında dört kritik alan `<yok>` görünüyo
 |---|---|
 | ruff | geçti |
 | mypy strict | 51 dosya, 0 hata |
-| pytest | **648 geçti**, 0 hata |
+| pytest | **736 geçti**, 0 hata |
 | ESLint | geçti |
 | TypeScript + production build | geçti |
-| Vitest | **58 geçti** |
+| Vitest | **59 geçti** |
 | vendor SHA-256 | 8/8 OK |
 | conformance self-test | PASS |
 | referans belge bayt karşılaştırması | 2/2 OK |
 
-**Toplam 706 test** (648 backend + 58 frontend). Aşama 3 tabanı 582'ydi.
+**Toplam 795 test** (736 backend + 59 frontend). Aşama 3 tabanı 582'ydi.
 
 Not: `test_git_hands_a_fresh_checkout_the_exact_pinned_bytes` çalışma ağacını
 **commit edilmiş blob** ile karşılaştırır, bu yüzden yeni byte-exact dosyalar
@@ -734,6 +734,13 @@ verilen altı belge; hiçbir yazma isteği yok.
 
 **Sonuç: `current`** — 26/26 kritik alan eşleşti, 0 değerlendirilemeyen alan,
 **1 uyarı**: `service_version` beklenen `0.10.0`, görülen `0.11.2`.
+
+> **26 sayısı neyi kanıtlar?** Yalnız şunu: bu projeksiyonun okuduğu 26 kritik
+> alan beklenen değeriyle eşleşti ve gövde şemasının desteklenen biçimi içinde
+> bizi reddeden bir kural bulunmadı. **JSON Schema sözleşmesinin tamamının
+> doğrulandığı anlamına gelmez.** Canlı `current` tek başına değerlendiricinin
+> sağlamlığının kanıtı da değildir — 22 senaryo bunu gösterdi: canlı sonuç
+> `current` iken değerlendirici hâlâ kusurluydu.
 
 Canlı servis (`0.11.2`) ile pin (`0.10.0`) **bütün protokol-kritik alanlarda
 aynıdır**. Sürüm farkı uyarı olarak durur; beklenen sürüm uyarıyı susturmak
@@ -835,6 +842,75 @@ düzeltilerek** kapatıldı, bastırılarak veya dosya dışlanarak değil:
 - Türkçe metindeki `ı` için `allowed-confusables` tanımlandı — proje dili
   Türkçedir (AGENTS.md §3);
 - kalan 2 bulgu (satır uzunluğu, iç içe `if`) doğrudan düzeltildi.
+
+### İkinci ek denetim — anahtar adı yetmiyor, değeri de okunmalı
+
+İzin listesi **hangi** anahtarın görünebileceğini düzeltmişti; ne dediğini
+okumuyordu. Tek anahtarlık **11 mutasyon × 2 lane = 22 senaryo**, her biri
+Station'ın göndereceği isteği reddeden bir şema olmasına rağmen `current`
+raporladı.
+
+| # | Tek mutasyon | Önce | Sonra | Kapanma gerekçesi |
+|---|---|---|---|---|
+| 1 | `B.type = "string"` | **current** | `drifted` | Station JSON nesnesi gönderir |
+| 2 | `C.type = "string"` | **current** | `drifted` | Koşul gövdenin tamamına uygulanır |
+| 3 | `B.required += "extraProof"` | **current** | `drifted` | Göndermediğimiz alan zorunlu olur |
+| 4 | `C.properties.did = {"not":{}}` | **current** | `unavailable` | DID taşıyan her gövde reddedilir |
+| 5 | `B.dependentSchemas.sig = {"not":{}}` | **current** | `unavailable` | sig taşıyan her gövde reddedilir |
+| 6 | `P.did.type = "integer"` | **current** | `drifted` | DID string sözleşmesiyle uyumsuz |
+| 7 | `P.did.minLength = 100` | **current** | `drifted` | Mevcut `maxLength 56` ile boş aralık |
+| 8 | `C.properties.nonce.maxLength = 0` | **current** | `drifted` | 1–19 basamaklı nonce'u dışlar |
+| 9 | `P.sig.maxLength = "1"` | **current** | `unavailable` | String, uzunluk sınırı değildir |
+| 10 | `P.sig.type = null` | **current** | `unavailable` | `null` bir JSON Schema tipi değildir |
+| 11 | `B.anyOf = [{"required": null}]` | **current** | `unavailable` | `null` geçerli bir ad listesi değildir |
+
+Hepsi iki lane'de de aynı şekilde kırıktı ve aynı şekilde düzeldi:
+**22/22 → 0/22 yanlış `current`.** Önceki 16 kontrol korundu.
+
+PR #9 review'unda aynı ailenin kalan bir kolu bulundu ve düzeltildi: boş
+uzunluk aralığı denetimi yalnız uzunluğunu bildiğimiz alanlar için
+çalışıyordu, bu yüzden `text`/`value` üzerinde `minLength 100, maxLength 5`
+gibi bir çelişki fark edilmiyordu. Aralığın boş olması, ne gönderdiğimizi
+bilmeyi gerektirmez — hiçbir değer sağlayamaz — bu yüzden denetim artık her
+alan için çalışıyor.
+
+**Kök neden (üç P1 bulgusunun ortağı):** izin listesindeki bir anahtarın adı
+denetleniyor, **değeri ve uygulanma anlamı** denetlenmiyordu. Somut sonuçları:
+
+- gövde ve koşullu düğümde `type`/`required` hiç okunmuyordu;
+- yalnız `dependentSchemas.did` bakılıyordu — oysa imzalı gövde `sig`, `nonce`
+  ve payload alanını da taşır, bunlara bağlı koşullar da devreye girer;
+- koşullu `properties` içinde yalnız `sig`/`nonce` okunuyordu, oradaki `did`
+  incelenmiyordu;
+- bozuk bir sınır (`"1"`, `null`) **hiç sınır yokmuş gibi** okunuyordu.
+
+**Düzeltme.** Her izin verilen anahtar için değer tipi doğrulanır; `null`,
+`false`, `0` ve eksik anahtar birbirinden ayrılır; `bool` uzunluk sayılmaz;
+negatif sınır geçersizdir. Uzunluk sınırları bütün seviyelerden birleştirilir
+ve **Station'ın gerçekten gönderdiği değere** karşı yargılanır (`did` 56,
+`sig` 86, `nonce` 1–19 — hepsi kendi sözleşmemizden). İmzalı gövdenin taşıdığı
+her alana bağlı `dependentSchemas` uygulanır; göndermediğimiz `from` gibi bir
+ada bağlı koşul uygulanmaz. Ayrıntı:
+[`docs/read-only-technocore.md`](docs/read-only-technocore.md) §5.
+
+**Bir sınıflandırma değişti.** Önceki 3. kontrol (koşullu
+`sig.maxLength = "86"`) `drifted` sayılıyordu, artık `unavailable`. Gerekçe:
+bir string uzunluk sınırı değildir; bu okunabilir bir sözleşme farkı değil,
+**bozuk bir şemadır**. "Sunucu uzunluğu string-86 yaptı" demek elimizde
+olmayan bir kanıtı iddia etmek olurdu. Kapı her iki sınıflandırmada da
+kapalıdır; değişen yalnız kullanıcının okuduğu cümledir.
+
+### 503 ekranının anlamı
+
+Kullanıcının gördüğü ekranda `openapi.json` art arda üç kez 503 döndü.
+`openapi` **zorunlu** kaynaktır, bu yüzden `unavailable` ve kapalı gate doğru
+davranıştır. `healthz` tamamlayıcıdır ve tek başına 503 vermesi protokol
+verdict'ini kapatmaz. Üçü de mock transport ile testlendi (SI-116…SI-118),
+sınırlı 3 denemeli retry korundu (SI-119).
+
+HTTP 503 yalnız o isteğe hizmet verilemediğini gösterir; bu loglardan yük,
+rate limit veya altyapı arızası gibi kesin bir kök neden **çıkarılamaz**. Bu
+durum şema kusurlarıyla ilgisizdir.
 
 ### Açık riskler
 

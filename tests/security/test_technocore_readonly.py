@@ -48,14 +48,22 @@ from station_api.technocore.errors import (
     UnexpectedRedirectError,
 )
 from station_api.technocore.projection import (
+    EXPECTED_DID_CHARS,
     EXPECTED_DID_PATTERN,
     EXPECTED_NAME_PATTERN,
     EXPECTED_NONCE_PATTERN,
     EXPECTED_SIGNATURE_PATTERN,
     MAX_PROSE_CHARS,
+    NONCE_MAX_DIGITS,
+    NONCE_MIN_DIGITS,
+    PLANNED_BODY_FIELDS,
     PROTOCOL_FIELDS,
+    STATION_FIELD_LENGTHS,
+    UNDERSTOOD_FIELD_KEYS,
     DriftState,
     FieldOutcome,
+    Lane,
+    SentLength,
     project,
 )
 from station_api.technocore.service import TechnocoreService
@@ -72,7 +80,12 @@ from station_api.technocore.sources import (
     get_source,
     required_sources,
 )
-from technocore_conform import NAME_PATTERN, NONCE_PATTERN, SIGNATURE_PATTERN
+from technocore_conform import (
+    NAME_PATTERN,
+    NONCE_PATTERN,
+    SIGNATURE_CHARS,
+    SIGNATURE_PATTERN,
+)
 
 from tests.conftest import TEST_PORT
 from tests.security.conftest import establish_session
@@ -982,6 +995,403 @@ def test_reordering_the_body_schema_keys_is_not_a_protocol_change(
     assert _projected(documents).state is DriftState.CURRENT
 
 
+# ---------------------------------------------------------------------------
+# Allowed keys are not enough: their values decide too
+#
+# The allow-list fixed *which* keywords may appear. It did not read what they
+# said. Eleven single-key mutations - each a schema that refuses the request
+# Station would send - still reported `current`, on both lanes, because the
+# evaluator checked names and skipped values:
+#
+#   * `type` and `required` were never read on the body or the conditional
+#     node, so a body typed `"string"` and a body requiring a field we do not
+#     send both looked fine;
+#   * only `dependentSchemas.did` was consulted, though a signed body also
+#     carries `sig`, `nonce` and its payload field - so a dependency keyed on
+#     any of those applied to us unseen;
+#   * only `sig` and `nonce` were read inside the conditional properties, so a
+#     `did` sitting there went unexamined;
+#   * a malformed bound (`"1"`, `null`) read as *no bound at all*, which is
+#     the dangerous direction to guess in.
+#
+# The rule these settle: a key on the allow-list must have its value checked
+# and its effect on the planned signed body evaluated.
+# ---------------------------------------------------------------------------
+
+
+def _mutate_body_type(body: dict[str, Any], payload: str) -> None:
+    body["type"] = "string"
+
+
+def _mutate_conditional_type(body: dict[str, Any], payload: str) -> None:
+    signed_lane(body)["type"] = "string"
+
+
+def _mutate_extra_required(body: dict[str, Any], payload: str) -> None:
+    body["required"] = [*body["required"], "extraProof"]
+
+
+def _mutate_conditional_did_negated(body: dict[str, Any], payload: str) -> None:
+    signed_lane(body)["properties"]["did"] = {"not": {}}
+
+
+def _mutate_sig_dependency_negated(body: dict[str, Any], payload: str) -> None:
+    body["dependentSchemas"]["sig"] = {"not": {}}
+
+
+def _mutate_did_type(body: dict[str, Any], payload: str) -> None:
+    body["properties"]["did"]["type"] = "integer"
+
+
+def _mutate_did_min_length(body: dict[str, Any], payload: str) -> None:
+    body["properties"]["did"]["minLength"] = 100
+
+
+def _mutate_nonce_max_length(body: dict[str, Any], payload: str) -> None:
+    signed_lane(body)["properties"]["nonce"]["maxLength"] = 0
+
+
+def _mutate_sig_max_length_string(body: dict[str, Any], payload: str) -> None:
+    body["properties"]["sig"]["maxLength"] = "1"
+
+
+def _mutate_sig_type_null(body: dict[str, Any], payload: str) -> None:
+    body["properties"]["sig"]["type"] = None
+
+
+def _mutate_any_of_required_null(body: dict[str, Any], payload: str) -> None:
+    body["anyOf"] = [{"required": None}]
+
+
+#: Each row is one single-key mutation and the verdict it must produce.
+#:
+#: ``drifted`` where the schema is well-formed and readable and simply refuses
+#: us - a contract difference we can state. ``unavailable`` where the schema is
+#: malformed or uses a form outside the supported shape: there the honest
+#: answer is that it could not be evaluated, not a claim about what the server
+#: decided. Both leave ``manifest_current`` false.
+_VALUE_MUTATIONS = [
+    ("body-type-not-object", _mutate_body_type, DriftState.DRIFTED),
+    ("conditional-type-not-object", _mutate_conditional_type, DriftState.DRIFTED),
+    ("body-requires-unknown-field", _mutate_extra_required, DriftState.DRIFTED),
+    ("conditional-did-negated", _mutate_conditional_did_negated, DriftState.UNAVAILABLE),
+    ("sig-dependency-negated", _mutate_sig_dependency_negated, DriftState.UNAVAILABLE),
+    ("did-type-integer", _mutate_did_type, DriftState.DRIFTED),
+    ("did-min-length-above-max", _mutate_did_min_length, DriftState.DRIFTED),
+    ("nonce-max-length-zero", _mutate_nonce_max_length, DriftState.DRIFTED),
+    ("sig-max-length-string", _mutate_sig_max_length_string, DriftState.UNAVAILABLE),
+    ("sig-type-null", _mutate_sig_type_null, DriftState.UNAVAILABLE),
+    ("any-of-required-null", _mutate_any_of_required_null, DriftState.UNAVAILABLE),
+]
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        pytest.param(mutate, expected, id=label)
+        for label, mutate, expected in _VALUE_MUTATIONS
+    ],
+)
+def test_a_schema_that_refuses_the_signed_body_is_never_current(
+    body_of: BodyOf,
+    payload: str,
+    mutate: Callable[[dict[str, Any], str], None],
+    expected: DriftState,
+) -> None:
+    """Every one of these reported `current` before the values were read."""
+    documents = build_documents(parsed=True)
+    mutate(body_of(documents["openapi"]), payload)
+
+    result = _projected(documents)
+
+    assert result.state is not DriftState.CURRENT
+    assert result.state is expected
+    assert result.critical_failures != ()
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_malformed_bound_is_not_read_as_no_bound(
+    body_of: BodyOf, payload: str
+) -> None:
+    """The direction of the guess matters.
+
+    Treating ``maxLength: "1"`` as "no ceiling published" is the permissive
+    reading of a schema nobody can satisfy. It is reported as unreadable.
+    """
+    del payload
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["properties"]["sig"]["maxLength"] = "1"
+
+    result = _projected(documents)
+    assert result.state is DriftState.UNAVAILABLE
+    assert any("sayi degil" in item.problem for item in result.critical_unevaluable)
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+@pytest.mark.parametrize("published", [None, False, 0, [], {}, "string"])
+def test_a_required_list_that_is_not_a_list_of_names_is_unreadable(
+    body_of: BodyOf, payload: str, published: object
+) -> None:
+    """``required: null`` is not the same as no ``required``.
+
+    ``[]`` is the interesting row: an empty list is a *valid* required list,
+    so it must stay readable rather than being swept up with the malformed
+    ones.
+    """
+    del payload
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["required"] = published
+
+    result = _projected(documents)
+    if published == []:
+        assert result.state is DriftState.CURRENT
+    else:
+        assert result.state is not DriftState.CURRENT
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+@pytest.mark.parametrize("published", [None, 0, False, [], {"const": "x"}])
+def test_a_type_that_is_not_a_string_is_unreadable(
+    body_of: BodyOf, payload: str, published: object
+) -> None:
+    del payload
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["properties"]["did"]["type"] = published
+
+    assert _projected(documents).state is DriftState.UNAVAILABLE
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_negative_length_bound_is_unreadable(body_of: BodyOf, payload: str) -> None:
+    del payload
+    documents = build_documents(parsed=True)
+    signed_lane(body_of(documents["openapi"]))["properties"]["sig"]["minLength"] = -1
+
+    assert _projected(documents).state is DriftState.UNAVAILABLE
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_boolean_is_not_accepted_as_a_length(body_of: BodyOf, payload: str) -> None:
+    """``True == 1`` in Python; a published ``true`` is still not a length."""
+    del payload
+    documents = build_documents(parsed=True)
+    signed_lane(body_of(documents["openapi"]))["properties"]["sig"]["maxLength"] = True
+
+    assert _projected(documents).state is DriftState.UNAVAILABLE
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_pattern_that_is_not_a_string_is_unreadable(
+    body_of: BodyOf, payload: str
+) -> None:
+    del payload
+    documents = build_documents(parsed=True)
+    signed_lane(body_of(documents["openapi"]))["properties"]["nonce"]["pattern"] = None
+
+    assert _projected(documents).state is DriftState.UNAVAILABLE
+
+
+# --- every dependency a signed body switches on is read ---------------------
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+@pytest.mark.parametrize("keyed_on", ["did", "sig", "nonce"])
+def test_a_dependency_on_any_carried_field_applies(
+    body_of: BodyOf, payload: str, keyed_on: str
+) -> None:
+    """``dependentSchemas`` applies its subschema to the whole body.
+
+    A signed body carries all three credentials, so a dependency keyed on any
+    of them switches on. Reading only ``did`` left the others unexamined.
+    """
+    del payload
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["dependentSchemas"][keyed_on] = {
+        "required": ["extraProof"]
+    }
+
+    result = _projected(documents)
+    assert result.state is DriftState.DRIFTED
+    assert any("extraProof" in item.reason for item in result.critical_mismatches)
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_dependency_on_the_payload_field_applies(
+    body_of: BodyOf, payload: str
+) -> None:
+    """``text`` on the message lane, ``value`` on the note lane."""
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["dependentSchemas"][payload] = {"type": "string"}
+
+    assert _projected(documents).state is DriftState.DRIFTED
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_dependency_on_a_field_we_do_not_send_does_not_apply(
+    body_of: BodyOf, payload: str
+) -> None:
+    """``from`` is ignored on the signed lane, so Station does not send it.
+
+    A dependency keyed on it can never switch on for our body, and treating it
+    as binding would close the gate over a rule that does not reach us.
+    """
+    del payload
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["dependentSchemas"]["from"] = {"not": {}}
+
+    assert _projected(documents).state is DriftState.CURRENT
+
+
+# --- the bounds are judged against what Station actually sends -------------
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+@pytest.mark.parametrize(
+    ("field", "bound", "value"),
+    [
+        ("did", "minLength", EXPECTED_DID_CHARS + 1),
+        ("did", "maxLength", EXPECTED_DID_CHARS - 1),
+        ("sig", "minLength", SIGNATURE_CHARS + 1),
+        ("sig", "maxLength", SIGNATURE_CHARS - 1),
+        ("nonce", "minLength", NONCE_MAX_DIGITS + 1),
+        ("nonce", "maxLength", NONCE_MIN_DIGITS - 1),
+    ],
+)
+def test_a_bound_excluding_what_station_sends_closes_the_gate(
+    body_of: BodyOf, payload: str, field: str, bound: str, value: int
+) -> None:
+    """A bound is not wrong for being unusual, but for excluding our value.
+
+    This is the comparison the name-only allow-list could not make: it needs a
+    number from our side of the protocol, and those come from
+    ``STATION_FIELD_LENGTHS``.
+    """
+    del payload
+    documents = build_documents(parsed=True)
+    body = body_of(documents["openapi"])
+    node = body["properties"] if field == "did" else signed_lane(body)["properties"]
+    node[field][bound] = value
+
+    assert _projected(documents).state is not DriftState.CURRENT
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_an_empty_range_on_the_payload_field_closes_the_gate(
+    body_of: BodyOf, payload: str
+) -> None:
+    """Emptiness needs no knowledge of what we send.
+
+    ``text`` and ``value`` carry whatever the user writes, so there is no fixed
+    length to compare a bound against - and that is exactly why the check that
+    *does* apply to them must not be skipped along with the one that does not.
+    A range with no values in it rejects every request, ours included.
+    """
+    documents = build_documents(parsed=True)
+    node = body_of(documents["openapi"])["properties"][payload]
+    node["minLength"] = 100
+    node["maxLength"] = 5
+
+    result = _projected(documents)
+    assert result.state is DriftState.DRIFTED
+    assert any(
+        "uzunluk araligi bos" in item.reason for item in result.critical_mismatches
+    )
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_an_ordinary_payload_bound_is_not_a_finding(
+    body_of: BodyOf, payload: str
+) -> None:
+    """The mirror: a payload length limit is normal and must not alarm."""
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["properties"][payload]["maxLength"] = 4096
+
+    assert _projected(documents).state is DriftState.CURRENT
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_bound_that_still_admits_our_value_is_accepted(
+    body_of: BodyOf, payload: str
+) -> None:
+    """The mirror of the row above, so the check is not simply "any bound"."""
+    del payload
+    documents = build_documents(parsed=True)
+    signed_lane(body_of(documents["openapi"]))["properties"]["nonce"]["minLength"] = (
+        NONCE_MIN_DIGITS
+    )
+
+    assert _projected(documents).state is DriftState.CURRENT
+
+
+# --- what the expectations are anchored to ---------------------------------
+
+
+def test_the_nonce_digit_counts_match_the_conformance_pattern() -> None:
+    """The two must not drift apart; the pattern is the authority."""
+    assert f"[0-9]{{{NONCE_MIN_DIGITS},{NONCE_MAX_DIGITS}}}" == NONCE_PATTERN
+
+
+def test_the_sent_lengths_come_from_our_own_contract() -> None:
+    assert STATION_FIELD_LENGTHS["did"] == SentLength(
+        EXPECTED_DID_CHARS, EXPECTED_DID_CHARS
+    )
+    assert STATION_FIELD_LENGTHS["sig"] == SentLength(SIGNATURE_CHARS, SIGNATURE_CHARS)
+    assert STATION_FIELD_LENGTHS["nonce"] == SentLength(
+        NONCE_MIN_DIGITS, NONCE_MAX_DIGITS
+    )
+
+
+def test_the_planned_body_names_the_fields_station_signs() -> None:
+    """Both lanes carry the three credentials plus their own payload field."""
+    credentials = {"did", "sig", "nonce"}
+    assert PLANNED_BODY_FIELDS[Lane.MESSAGE_BODY] == credentials | {"text"}
+    assert PLANNED_BODY_FIELDS[Lane.NOTE_BODY] == credentials | {"value"}
+    assert (
+        PLANNED_BODY_FIELDS[Lane.MESSAGE_SIGNED]
+        == PLANNED_BODY_FIELDS[Lane.MESSAGE_BODY]
+    )
+    assert PLANNED_BODY_FIELDS[Lane.NOTE_SIGNED] == PLANNED_BODY_FIELDS[Lane.NOTE_BODY]
+    # `from` is deliberately absent: the reference ignores it on the signed
+    # lane, so Station does not send it and must not depend on it.
+    assert "from" not in PLANNED_BODY_FIELDS[Lane.MESSAGE_BODY]
+
+
+def test_every_allowed_validation_keyword_is_actually_evaluated() -> None:
+    """An allow-listed keyword that nothing reads would be a silent gap.
+
+    Each name is paired with a mutation that must close the gate, which is the
+    evidence that permitting a keyword and evaluating it are the same list.
+    """
+
+    def probe_type(body: dict[str, Any]) -> None:
+        body["properties"]["did"]["type"] = "integer"
+
+    def probe_pattern(body: dict[str, Any]) -> None:
+        signed_lane(body)["properties"]["sig"]["pattern"] = "^[a-z]+$"
+
+    def probe_min(body: dict[str, Any]) -> None:
+        body["properties"]["did"]["minLength"] = 100
+
+    def probe_max(body: dict[str, Any]) -> None:
+        signed_lane(body)["properties"]["nonce"]["maxLength"] = 0
+
+    probes: dict[str, Callable[[dict[str, Any]], None]] = {
+        "type": probe_type,
+        "pattern": probe_pattern,
+        "minLength": probe_min,
+        "maxLength": probe_max,
+    }
+    assert set(probes) == set(UNDERSTOOD_FIELD_KEYS)
+
+    for name, probe in probes.items():
+        documents = build_documents(parsed=True)
+        probe(message_body_schema(documents["openapi"]))
+        assert _projected(documents).state is not DriftState.CURRENT, (
+            f"{name} is allowed but nothing evaluates it"
+        )
+
+
 # --- comparison must not normalise a difference away -----------------------
 
 
@@ -1214,6 +1624,96 @@ def test_a_network_failure_is_unavailable_and_closes_the_gate(engine: Engine) ->
 
     assert status.state is DriftState.UNAVAILABLE
     assert status.manifest_current is False
+
+
+# ---------------------------------------------------------------------------
+# The 503 the user saw
+#
+# The service answers 503 intermittently. What that must mean depends entirely
+# on *which* document was refused, and these three pin the difference. A 503
+# says the request was not served; it does not say why, and none of these
+# infers load, rate limiting or an outage from it.
+# ---------------------------------------------------------------------------
+
+
+def test_only_health_returning_503_leaves_the_protocol_verdict_intact(
+    engine: Engine,
+) -> None:
+    """``/healthz`` carries no protocol contract, so it cannot decide one.
+
+    The failure is still recorded and shown - it is not swallowed - but the
+    verdict comes from the two required documents.
+    """
+    service = TechnocoreService(
+        engine=engine, client=_client(_handler(status_overrides={"/healthz": 503}))
+    )
+    status = service.refresh()
+
+    assert status.state is DriftState.CURRENT
+    assert status.manifest_current is True
+
+    health = next(item for item in status.sources if item.source_id == "health")
+    assert health.outcome == SnapshotOutcome.FETCH_ERROR
+    assert "503" in health.detail
+
+
+def test_openapi_returning_503_closes_the_gate(engine: Engine) -> None:
+    """A required document that never arrived is not a protocol finding.
+
+    ``unavailable`` rather than ``drifted``: nothing was observed to have
+    changed, and the reason names the document rather than the protocol.
+    """
+    service = TechnocoreService(
+        engine=engine, client=_client(_handler(status_overrides={"/openapi.json": 503}))
+    )
+    status = service.refresh()
+
+    assert status.state is DriftState.UNAVAILABLE
+    assert status.manifest_current is False
+    assert any("openapi" in reason for reason in status.reasons)
+
+
+def test_a_503_after_a_success_shows_the_old_time_but_not_the_old_verdict(
+    engine: Engine,
+) -> None:
+    """The load-bearing one, and the shape of what the user reported.
+
+    The earlier success is still worth showing - it says when the protocol was
+    last confirmed - but it is displayed *beside* the failure, never instead of
+    it, and it cannot reopen the gate.
+    """
+    service = TechnocoreService(engine=engine, client=_client(_handler()))
+    first = service.refresh()
+    assert first.state is DriftState.CURRENT
+    assert first.manifest_current is True
+    earlier_success = first.last_success_at
+    assert earlier_success is not None
+
+    service._client = _client(
+        _handler(status_overrides={"/openapi.json": 503})
+    )
+    second = service.refresh()
+
+    assert second.state is DriftState.UNAVAILABLE
+    assert second.manifest_current is False
+    assert second.last_success_at == earlier_success
+    assert second.last_attempt_at != earlier_success
+
+
+def test_a_required_document_is_retried_a_bounded_number_of_times() -> None:
+    """Three attempts, then it gives up. No unbounded retry to paper over a 503."""
+    attempts = 0
+
+    def flaky(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(503, text="Service Unavailable")
+
+    client = _client(httpx.MockTransport(flaky))
+    with pytest.raises(SourceFetchError):
+        client.fetch(get_source(SourceId.OPENAPI))
+
+    assert attempts == MAX_ATTEMPTS
 
 
 def test_a_later_failure_does_not_inherit_an_earlier_success(engine: Engine) -> None:

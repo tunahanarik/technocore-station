@@ -256,6 +256,73 @@ yalnız `A`, `Q`, `g`, `w` ile bitebilir. Geniş kalıp, üretmediğimiz imzalar
 kabul eden bir sözleşmeyi doğru sayardı. Bu, kendi
 `technocore_conform.signature.SIGNATURE_PATTERN` değerimizle de çelişiyordu.
 
+### Anahtar adı yetmez: değeri de okunur
+
+İzin listesi **hangi** anahtarın görünebileceğini düzeltti; ne dediğini
+okumadı. Tek anahtarlık on bir mutasyon — her biri Station'ın göndereceği
+isteği reddeden bir şema — iki lane'de de `current` raporladı:
+
+- gövde ve koşullu düğümde `type` ile `required` hiç okunmuyordu;
+- yalnız `dependentSchemas.did` bakılıyordu, oysa imzalı gövde `sig`, `nonce`
+  ve payload alanını da taşır — bunlardan birine bağlı bir koşul da bize
+  uygulanır;
+- koşullu `properties` içinde yalnız `sig`/`nonce` okunuyordu, orada duran bir
+  `did` incelenmiyordu;
+- bozuk bir sınır (`"1"`, `null`) **hiç sınır yokmuş gibi** okunuyordu — tahmin
+  edilecek en tehlikeli yön.
+
+Kural: izin listesindeki bir anahtarın **değeri denetlenir ve planlanan imzalı
+gövde üzerindeki etkisi değerlendirilir.**
+
+| Anahtar | Nerede | Beklenen değer tipi | Nasıl değerlendirilir |
+|---|---|---|---|
+| `type` | gövde, koşullu düğüm | string | `"object"` olmalı; değilse bizim JSON nesnemiz reddedilir |
+| `type` | alan düğümü | string | `"string"` olmalı; Station bu alanları string gönderir |
+| `required` | gövde, koşullu düğüm | string listesi | Adların tamamı planlanan gövdede bulunmalı |
+| `required` | `anyOf` dalı | string listesi | En az bir dal planlanan gövdeyle sağlanabilmeli |
+| `pattern` | alan düğümü | string | Tek kalıp; iki farklı kalıp kesişimi hesaplanmaz → okunamaz |
+| `minLength` / `maxLength` | alan düğümü | negatif olmayan tamsayı | Tüm seviyeler birleştirilir; aralık boşsa veya Station'ın gönderdiği uzunluğu dışlıyorsa kapı kapanır |
+
+`bool` uzunluk sayılmaz (Python'da `int` alt sınıfıdır ve `True == 1`).
+`null`, `false` ve `0` eksik anahtardan **ayrılır**; JSON'da her biri belirli
+bir şey söyler ve hiçbiri "bu anahtar yok" demek değildir.
+
+### Planlanan imzalı gövde
+
+Değerlendirmenin ölçütü belge değil, **bizim göndereceğimiz gövdedir**:
+
+| Lane | Alanlar |
+|---|---|
+| Mesaj | `did`, `sig`, `nonce`, `text` |
+| Note | `did`, `sig`, `nonce`, `value` |
+
+`from` bilinçli olarak yoktur: referans onu imzalı lane'de yok sayar, bu yüzden
+Station göndermez ve ona bağlı bir dala güvenemez.
+
+Uzunluklar da kendi sözleşmemizden gelir — `did` tam 56, `sig` tam 86, `nonce`
+1–19 basamak. Bir sınır **alışılmadık olduğu için** değil, **bizim
+göndereceğimiz her değeri dışladığı için** yanlıştır; bu karşılaştırma
+protokolün bizim tarafımızdan bir sayı gerektirir.
+
+### Uygulanan bütün koşullar sayılır
+
+`dependentSchemas` alt şemasını **gövdenin tamamına** uygular. İmzalı gövde üç
+kimlik alanını da taşıdığı için bunlardan herhangi birine anahtarlanmış bir
+koşul devreye girer. Göndermediğimiz bir ada (`from`) anahtarlanmış koşul ise
+bize hiç uygulanmaz ve kapıyı kapatmaz — bunu da bir test sabitler.
+
+### Bozuk şema neden `unavailable`
+
+Önceki sürümde koşullu `sig.maxLength = "86"` **`drifted`** sayılıyordu. Artık
+`unavailable`. Gerekçe: bir string, uzunluk sınırı değildir. Bu **okunabilir
+bir sözleşme farkı değil, bozuk bir şemadır**; "sunucu uzunluğu string-86
+yaptı" demek, elimizde olmayan bir kanıtı iddia etmek olur. Kapı her iki
+sınıflandırmada da kapalıdır; değişen yalnız kullanıcının okuduğu cümledir.
+
+Ayrım kısaca: **`drifted`** = şema iyi biçimli, okunabilir ve bizi reddediyor;
+**`unavailable`** = şema bozuk veya desteklenen biçimin dışında, yani
+değerlendirilemedi.
+
 ### Uyarı (kapıyı kapatmaz)
 
 `limits.message_chars`, `limits.note_chars`, `version`. Künye §14.4 gereği
@@ -430,6 +497,15 @@ verilen altı belge üzerinde çalıştırıldı. UTC 18:29:40–18:29:47.
 
 **Sonuç:** `current`, 26/26 kritik alan eşleşti, 0 değerlendirilemeyen alan,
 **1 uyarı** — `service_version`: beklenen `0.10.0`, görülen `0.11.2`.
+
+> **26 sayısı neyi kanıtlar?** Yalnız şunu: bu projeksiyonun okuduğu 26 kritik
+> alanın tamamı beklenen değeriyle eşleşti ve gövde şemasının desteklenen
+> biçimi içinde bizi reddeden bir kural bulunmadı. **JSON Schema
+> sözleşmesinin tamamının doğrulandığı anlamına gelmez.** Değerlendirici
+> bilinçli olarak dardır: regex kesişimi, sayısal aralık dışındaki genel
+> çelişkiler ve desteklenen biçimin dışındaki bileşik şemalar hesaplanmaz —
+> okunamaz sayılıp kapı kapatılır. Canlı `current` tek başına
+> değerlendiricinin sağlamlığının kanıtı değildir.
 
 Notlar:
 
