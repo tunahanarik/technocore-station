@@ -292,8 +292,14 @@ class ProtocolFieldStatus(StrictModel):
     expected: str
     observed: str
     matches: bool
+    #: Distinguishes a value that is present and different from one that
+    #: could not be read at all. A UI that shows both as "changed" would be
+    #: claiming the server did something the evidence does not support.
+    outcome: Literal["matched", "mismatch", "missing", "unsupported"]
     #: Why a change to this field matters, in plain language.
     rationale: str
+    #: Set when ``outcome`` is ``unsupported``: what could not be read.
+    detail: str = ""
 
 
 class TechnocoreStatusResponse(StrictModel):
@@ -313,6 +319,11 @@ class TechnocoreStatusResponse(StrictModel):
     reasons: list[str]
     sources: list[OfficialSourceStatus]
     fields: list[ProtocolFieldStatus]
+    #: Critical fields that are present and different: real drift.
     critical_mismatch_count: int
+    #: Critical fields that could not be evaluated. The gate closes for these
+    #: too, but the reason shown to the user is "could not verify", not a
+    #: claim about what changed.
+    critical_unevaluable_count: int
     warning_count: int
     origin: str

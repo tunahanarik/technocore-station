@@ -194,6 +194,13 @@ projesinin **pinlenmiş ve değiştirilmemiş** bir kopyasıdır
 olarak kullanılır; uygulama runtime paketine girmez ve Apache-2.0 satırları
 MIT kodumuza kopyalanmaz.
 
+Sekiz dosya vendor'lanmıştır. `scripts/sign.py` ve `src/store.py` Aşama 2B'nin
+imza ve sweep oracle'ıdır; `src/manifest.py` (+ import ettiği `src/didkey.py`,
+`src/config.py` ve sürümü taşıyan `pyproject.toml`) Aşama 3.1'de protokol
+projeksiyonunun referans belgelerini **üretmek** için eklendi. Belgeler elle
+yazılmaz: `tests/conformance/test_manifest_oracle.py` onları yeniden üretip
+bayt bayt karşılaştırır.
+
 Tam lisans haritası: [`NOTICE`](NOTICE).
 Provenans ve hash'ler: [`vendor/technocore-reference/PROVENANCE.md`](vendor/technocore-reference/PROVENANCE.md).
 

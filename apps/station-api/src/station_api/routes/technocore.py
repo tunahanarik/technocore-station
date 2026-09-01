@@ -66,9 +66,11 @@ def to_response(state: TechnocoreStatus) -> TechnocoreStatusResponse:
                 source_id=item.field.source_id.value,
                 json_path=item.field.json_path,
                 severity=item.field.severity.value,
-                expected=item.field.expected,
+                expected=item.field.expected_display,
                 observed=item.observed,
                 matches=item.matches,
+                outcome=item.outcome.value,
+                detail=item.problem,
                 rationale=item.field.rationale,
             )
             for item in projection.observations
@@ -104,6 +106,9 @@ def to_response(state: TechnocoreStatus) -> TechnocoreStatusResponse:
         fields=fields,
         critical_mismatch_count=(
             len(projection.critical_mismatches) if projection is not None else 0
+        ),
+        critical_unevaluable_count=(
+            len(projection.critical_unevaluable) if projection is not None else 0
         ),
         warning_count=len(projection.warnings) if projection is not None else 0,
         origin=TECHNOCORE_ORIGIN,

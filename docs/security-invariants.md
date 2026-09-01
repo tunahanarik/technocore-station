@@ -143,6 +143,19 @@ kontrolü ve CSRF katmanından gelir.
 | SI-81 | Snapshot retention sınırlıdır | son 50 koşu | `::test_snapshots_are_written_and_retained_within_the_limit` | A3 |
 | SI-82 | Uzak içerik link veya HTML olmaz (AC-17) | anchor yok | `pages.test.tsx` — "never turns a remote URL into a clickable link" | A3 |
 | SI-83 | Tüm ön koşullar geçse bile yazma yolu yoktur | route yok | `::test_no_outbound_write_route_exists_even_when_every_check_passes` | A3 |
+| SI-84 | Resmî belgede hiçbir kritik alan "bulunamadı" olmaz | 0 okunamayan alan | `::test_the_official_documents_raise_no_missing_field_alarm` | A3.1 |
+| SI-85 | İmzalı lane kısıtları koşullu şemadan okunur | `dependentSchemas.did` | `test_manifest_oracle.py::test_the_credentials_are_conditional_not_unconditional_properties` | A3.1 |
+| SI-86 | Sadece `properties`'e yazılmış kısıt, koşullu güvence olmadan geçmez | `current` değil | `::test_a_missing_conditional_schema_is_not_rescued_by_properties` | A3.1 |
+| SI-87 | Her iki lane'de `sig`/`nonce` zorunluluğu kaybolursa kapı kapanır | `current` değil | `::test_a_critical_change_makes_the_manifest_not_current` | A3.1 |
+| SI-88 | Desteklenmeyen koşullu şema fail-closed davranır | `unavailable` | `::test_an_unsupported_conditional_schema_is_never_current` | A3.1 |
+| SI-89 | Değerlendirilemeyen alan "sunucu değiştirdi" iddiası üretmez | gerekçe "doğrulanamadı" | `::test_an_unevaluable_field_never_claims_the_server_changed_anything` | A3.1 |
+| SI-90 | Gölge (noktalı) anahtar gerçek konumu gölgeleyemez | verdict değişmez | `::test_a_shadow_key_cannot_redirect_a_pointer` | A3.1 |
+| SI-91 | Karşılaştırma tipi doğrular; `"86"` ≠ `86` | `current` değil | `::test_a_length_bound_of_the_wrong_type_is_not_accepted` | A3.1 |
+| SI-92 | Canonical payload'a eklenen boşluk/kontrol karakteri silinip eşit sayılmaz | `drifted` | `::test_whitespace_around_a_canonical_payload_is_not_the_same_payload` | A3.1 |
+| SI-93 | Sözleşmeyi reddeden açıklama, doğru kelimeleri taşısa da geçmez | `current` değil | `::test_a_description_that_denies_the_contract_does_not_pass` | A3.1 |
+| SI-94 | Beklenen imza kalıbı canlıdan değil kendi motorumuzdan türetilir | `SIGNATURE_PATTERN` | `::test_the_expectation_comes_from_our_own_conformance_engine` | A3.1 |
+| SI-95 | Referans belgeleri pinlenmiş üreticiyle bayt bayt aynıdır | bayt eşitliği | `test_manifest_oracle.py::test_the_stored_documents_are_byte_identical_to_a_fresh_run` | A3.1 |
+| SI-96 | UI, okunamayan alanı "değişmiş" diye göstermez | ayrı uyarı | `pages.test.tsx` — "does not call an unreadable field a change the server made" | A3.1 |
 
 ## 9b. Aşama 2B değişmezleri (uygulandı)
 

@@ -1,134 +1,64 @@
-"""Canned official documents for the Stage 3 tests.
+"""The official documents the Stage 3 tests run against.
 
-These are trimmed copies of the real ``/openapi.json`` and
-``/.well-known/agent.json``, carrying exactly the fields the protocol
-projection reads and the shape they actually have. They were transcribed from
-the live service while building the projection, so a test that passes here is
-testing the real structure rather than a convenient invention.
+These are **not** hand-written, and they are not a transcription of the live
+service. They are the bytes produced by executing the pinned official
+generator, stored in ``technocore_reference/`` and byte-compared against a
+fresh run by :mod:`tests.conformance.test_manifest_oracle`.
 
-They exist so the suite is deterministic and offline: no automated test may
-contact Technocore (§18.2), and asserting on a 429 or a redirect requires a
-transport we control anyway.
+The distinction matters because the previous version of this file *was*
+hand-written from a reading of the live document, and the reading was wrong:
+it put the ``sig``/``nonce`` constraints directly under ``schema.properties``,
+where the reference publishes only a description. Every test then agreed with
+the projection because both carried the same mistake, and the real service
+looked like it had changed the signature format.
+
+They exist as files rather than as live fetches so the suite is deterministic
+and offline: no automated test may contact Technocore (INV-05), and asserting
+on a 429 or a redirect requires a transport we control anyway.
+
+Provenance - upstream commit, generation command, file SHA-256 and the JSON
+paths the projection reads - is recorded in
+``technocore_reference/PROVENANCE.md``.
 """
 
 from __future__ import annotations
 
 import copy
 import json
+from pathlib import Path
 from typing import Any
 
-#: The did/sig/nonce schema the signed lanes share, as published.
-_SIGNED_PROPERTIES: dict[str, Any] = {
-    "did": {
-        "type": "string",
-        "pattern": r"^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{44}$",
-        "minLength": 56,
-        "maxLength": 56,
-    },
-    "sig": {
-        "type": "string",
-        "pattern": r"^[A-Za-z0-9_-]{86}$",
-        "minLength": 86,
-        "maxLength": 86,
-    },
-    "nonce": {"type": "string", "pattern": r"^[0-9]{1,19}$"},
-}
+#: Where the generated documents live.
+REFERENCE_ROOT = Path(__file__).resolve().parent / "technocore_reference"
+
+#: These are the *pinned* version's documents, not the live service's. The
+#: live service may be newer, and on the last observation it was; see
+#: ``docs/read-only-technocore.md``.
+PINNED_COMMIT = "7707cb63ebf638e8ef0cf59d1364818b9fef7d24"
 
 
-def _openapi() -> dict[str, Any]:
-    message_properties = {
-        "from": {"type": "string", "pattern": r"^[a-z0-9][a-z0-9_-]{0,47}$"},
-        "text": {"type": "string", "minLength": 1, "maxLength": 4096},
-        **copy.deepcopy(_SIGNED_PROPERTIES),
-    }
-    note_properties = {
-        "value": {"type": "string", "minLength": 1, "maxLength": 8192},
-        **copy.deepcopy(_SIGNED_PROPERTIES),
-    }
-    return {
-        "openapi": "3.1.0",
-        "info": {"title": "technocore-chat", "version": "0.10.0"},
-        "servers": [{"url": "https://technocore.chat"}],
-        "paths": {
-            "/healthz": {"get": {"operationId": "health"}},
-            "/r/{room}": {
-                "get": {"operationId": "readRoom"},
-                "post": {
-                    "operationId": "postMessage",
-                    "requestBody": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "required": ["text"],
-                                    "properties": message_properties,
-                                }
-                            }
-                        }
-                    },
-                },
-            },
-            "/kv/{ns}/{key}": {
-                "get": {"operationId": "readNote"},
-                "post": {
-                    "operationId": "postNote",
-                    "requestBody": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "required": ["value"],
-                                    "properties": note_properties,
-                                }
-                            }
-                        }
-                    },
-                },
-            },
-        },
-    }
+def _load(name: str) -> Any:
+    return json.loads((REFERENCE_ROOT / name).read_text(encoding="utf-8"))
 
 
-def _agent() -> dict[str, Any]:
-    return {
-        "schema_version": "0.1",
-        "name": "technocore-chat",
-        "version": "0.10.0",
-        "description": "HTTP-native rendezvous, chat and notes for LLM agents.",
-        "url": "https://technocore.chat",
-        "license": "Apache-2.0",
-        "documentation": {
-            "manual": "https://technocore.chat/llms.txt",
-            "openapi": "https://technocore.chat/openapi.json",
-        },
-        "conventions": {
-            "name_pattern": r"^[a-z0-9][a-z0-9_-]{0,47}$",
-            "room_classes": {"p-": "unlisted", "mb-": "mailbox"},
-        },
-        "identity": {
-            "scheme": "did:key",
-            "algorithms": ["Ed25519"],
-            "resolution": "offline",
-            "message_signature_payload": "<room>|<nonce>|<text>",
-            "note_signature_payload": "<namespace>|<key>|<nonce>|<value>",
-            "signature_encoding": "base64url, 86 characters, unpadded",
-            "nonce": "1-19 digits, strictly greater than the last nonce that key used.",
-            "canonicalisation": "Sign the text after the single-line sweep.",
-        },
-        "limits": {
-            "message_chars": 4096,
-            "note_chars": 8192,
-            "reads_per_minute_per_ip": 600,
-        },
-        "trust": {"content_is_untrusted": True, "world_writable": True},
-    }
+#: Loaded once; every caller gets a deep copy so a mutating test cannot leak
+#: into the next one.
+_OPENAPI: Any = _load("openapi.json")
+_AGENT: Any = _load("agent.json")
 
-
+#: The supplementary documents carry no contract the projection reads, so a
+#: short plausible body is enough; nothing asserts on their content beyond the
+#: fact that a fetch happened.
 _CONFIG: dict[str, Any] = {
     "service": "technocore-chat",
     "version": "0.10.0",
     "env_prefix": "CHAT_",
-    "settings": {"rate_read": 600, "rate_write": 300},
+    "settings": {"rate_read": 120, "rate_write": 30},
     "withheld": {"CHAT_ROOT": "A filesystem path on the host."},
 }
+_HEALTH = "ok"
+_MANUAL = "# technocore-chat manual\nRead a room with GET.\n"
+_SKILL = "# skill\nUse the documented endpoints.\n"
 
 
 def build_documents(*, parsed: bool = False) -> dict[str, Any]:
@@ -140,18 +70,18 @@ def build_documents(*, parsed: bool = False) -> dict[str, Any]:
     """
     if parsed:
         return {
-            "openapi": _openapi(),
-            "agent": _agent(),
+            "openapi": copy.deepcopy(_OPENAPI),
+            "agent": copy.deepcopy(_AGENT),
             "config": copy.deepcopy(_CONFIG),
         }
 
     return {
-        "/.well-known/agent.json": _agent(),
-        "/openapi.json": _openapi(),
+        "/.well-known/agent.json": copy.deepcopy(_AGENT),
+        "/openapi.json": copy.deepcopy(_OPENAPI),
         "/config": copy.deepcopy(_CONFIG),
-        "/healthz": "ok",
-        "/llms.txt": "# technocore-chat manual\nRead a room with GET.\n",
-        "/skill.md": "# skill\nUse the documented endpoints.\n",
+        "/healthz": _HEALTH,
+        "/llms.txt": _MANUAL,
+        "/skill.md": _SKILL,
     }
 
 
@@ -163,4 +93,37 @@ def document_bytes(path: str) -> bytes:
     return json.dumps(body).encode("utf-8")
 
 
-__all__ = ["build_documents", "document_bytes"]
+def message_body_schema(openapi: dict[str, Any]) -> dict[str, Any]:
+    """The message POST request-body schema, for tests that mutate it."""
+    schema = openapi["paths"]["/r/{room}"]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    assert isinstance(schema, dict)
+    return schema
+
+
+def note_body_schema(openapi: dict[str, Any]) -> dict[str, Any]:
+    """The note POST request-body schema, for tests that mutate it."""
+    schema = openapi["paths"]["/kv/{ns}/{key}"]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    assert isinstance(schema, dict)
+    return schema
+
+
+def signed_lane(schema: dict[str, Any]) -> dict[str, Any]:
+    """The ``dependentSchemas.did`` node - where the credentials really live."""
+    lane = schema["dependentSchemas"]["did"]
+    assert isinstance(lane, dict)
+    return lane
+
+
+__all__ = [
+    "PINNED_COMMIT",
+    "REFERENCE_ROOT",
+    "build_documents",
+    "document_bytes",
+    "message_body_schema",
+    "note_body_schema",
+    "signed_lane",
+]

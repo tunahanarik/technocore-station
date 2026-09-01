@@ -2,7 +2,7 @@
 
 > Ana karar kaynağı: [`Technocore-Station-Proje-Kunyesi.md`](Technocore-Station-Proje-Kunyesi.md)
 > Çalışma kuralları: [`AGENTS.md`](AGENTS.md) · [`CLAUDE.md`](CLAUDE.md)
-> Son güncelleme: **30 Ağustos 2026** (Aşama 3)
+> Son güncelleme: **1 Eylül 2026** (Aşama 3.1)
 
 ## Aşama checklist
 
@@ -11,6 +11,7 @@
 - [x] **Aşama 2 — Identity & Recovery** — tamamlandı
 - [x] **Aşama 2B — Conformance** — tamamlandı
 - [x] **Aşama 3 — Salt okunur Technocore** — tamamlandı
+- [x] **Aşama 3.1 — Protokol projeksiyonu düzeltmesi** — tamamlandı
 - [ ] **Aşama 4 — Composer & Participation** — sıradaki
 - [ ] **Aşama 5 — Evidence & Audit**
 - [ ] **Aşama 6 — Project Modules**
@@ -613,8 +614,15 @@ GET https://technocore.chat/llms.txt
 GET https://technocore.chat/skill.md
 ```
 
-Sonuç: **`current`**, 0 kritik fark, 0 uyarı. `/config` o koşuda 503 döndü;
-tamamlayıcı kaynak olduğu için verdict'i etkilemedi ve kullanıcıya gösterildi.
+O turda raporlanan sonuç: **`current`**, 0 kritik fark, 0 uyarı.
+
+> **Düzeltme (Aşama 3.1).** Bu iddia **yeniden üretilemedi ve yanlıştı.**
+> Aşama 3 kodu imza/nonce kısıtlarını `schema.properties` altında arıyordu;
+> resmî referans onları orada yayımlamaz. Aşama 3 kodunu 1 Eylül 2026 tarihli
+> gerçek canlı gövdelerle çalıştırmak **`drifted`, 4 kritik uyuşmazlık ve 1
+> uyarı** verir. `properties.sig.pattern` hiç var olmadığı için o kod canlı
+> belgede `current` üretemezdi. Ayrıntı ve düzeltilmiş ölçüm:
+> `docs/read-only-technocore.md` §9.
 
 ---
 
@@ -622,12 +630,134 @@ tamamlayıcı kaynak olduğu için verdict'i etkilemedi ve kullanıcıya göster
 
 | ID | Risk | Durum |
 |---|---|---|
-| C-R1 | `/healthz` ve `/config` **aralıklı 503** dönüyor | Tamamlayıcı sınıfa alındı; verdict zorunlu iki belgeye dayanıyor, durum dürüstçe gösteriliyor |
+| C-R1 | `/healthz`, `/config` ve zaman zaman `agent.json` **aralıklı 503** dönüyor | Tamamlayıcı sınıfa alındı; verdict zorunlu iki belgeye dayanıyor, durum dürüstçe gösteriliyor. 1 Eylül gözleminde `agent.json` bir denemede 503, tekrar denemede 200 verdi — istemcinin sınırlı retry'ı bunu karşılıyor |
 | C-R2 | Projeksiyon canlı belgelerin **bugünkü** yapısına bağlı | Alan yolları koddan okunabilir ve testli; upstream yeniden yapılandırırsa `unavailable`/`drifted` üretir, sessizce geçmez |
 | C-R3 | Beklenen değerler pinlenmiş; canlıya uydurulmuyor | Bilinçli: canlıyı benimseyen bir kontrol sonsuza dek "current" der ve hiçbir şey tespit etmez |
 | C-R4 | Sunucu sertifikası/DNS ele geçirilirse okunan belge yanıltıcı olabilir | TLS doğrulaması zorunlu; kapsam dışı kalan durum `SECURITY.md` §7'de |
 | C-R5 | Rate limit altında art arda denetim `unavailable` üretebilir | Retry sınırlı ve `Retry-After` üst sınırlı; kullanıcı tekrar deneyebilir |
 | C-R6 | Vendor pini hâlâ `7707cb63…`; upstream `main` ilerledi | Bilinçli; yükseltme ayrı ve açık bir karar adımıdır |
+
+---
+
+## Aşama 3.1 — Protokol projeksiyonu düzeltmesi
+
+Ekranda görünen drift alarmı **yanlıştı**, ve denetim aynı anda gerçekten
+hatalı sözleşmeleri kabul edebiliyordu. Kök neden tek bir yanlış varsayımdı:
+imzalı lane'in kısıtlarının `schema.properties` altında yayımlandığı.
+
+### Kök neden
+
+Resmî referans (`manifest.py`, pin `7707cb63…`) `sig` ve `nonce` kısıtlarını
+`schema.dependentSchemas.did` altında yayımlar; `properties.sig` yalnız bir
+`description` taşır. Referansın kendi gerekçesi: DID taşımayan bir gövde
+imzasız bir yazmadır ve üzerindeki `sig`/`nonce` doğrulanmadan yok sayılır,
+bu yüzden kalıpları koşulsuz yayımlamak hiçbir şeyin zorlamadığı bir kısıtı
+belgelemek olurdu.
+
+Aşama 3 fixture'ı canlı servisten **elle yazılmıştı** ve aynı yanlış konumu
+tekrarlıyordu. Fixture ile kod aynı hatayı taşıdığı için testler yeşildi;
+gerçek belgeyle çalıştırıldığında dört kritik alan `<yok>` görünüyordu.
+
+### Düzeltilen kusurlar
+
+| # | Kusur | Sonucu | Düzeltme |
+|---|---|---|---|
+| 1 | İmza/nonce kısıtları `properties` altında aranıyordu | Sahte drift alarmı | `dependentSchemas.did` effective schema çözümü |
+| 2 | Beklenen imza kalıbı `^[A-Za-z0-9_-]{86}$` | Kanonik olmayan son karakterli imzaları kabul eden bir sözleşmeyi doğru sayardı; kendi `SIGNATURE_PATTERN`'ımızla da çelişiyordu | Beklenti `technocore_conform`'dan türetilir: `^[A-Za-z0-9_-]{85}[AQgw]$` |
+| 3 | `signed_fields_required` yalnız `properties` adlarına bakıyordu | Koşullu `required` tamamen kaldırılsa bile geçerdi | `dependentSchemas.did.required` küme eşitliği, **her iki lane** için |
+| 4 | Karşılaştırma `safe_display` çıktısı üzerindeydi | `"86"` = `86`; sonunda newline olan payload = özgün payload | Tipi doğrulanmış, özgün değer karşılaştırması |
+| 5 | `signature_encoding` yalnız kelime içerme kontrolüydü | Sözleşmeyi **reddeden** cümle geçerdi | Sınırlı olumsuzlama listesi + asıl dayanak makine şeması |
+| 6 | Alan yolu noktalı string, en uzun anahtarla çözülüyordu | Uzaktaki düz anahtar gerçek konumu gölgeleyebilirdi | JSON Pointer segmentleri |
+| 7 | Okunamayan alan `drifted` sayılıyordu | Kanıt olmadan "sunucu imza biçimini değiştirdi" iddiası | `MISSING`/`UNSUPPORTED` ayrımı → `unavailable` + "doğrulanamadı" |
+| 8 | Desteklenmeyen koşullu şema sessizce geçebilirdi | Fail-open riski | `$ref`/`allOf`/`oneOf`/`not`/`if` görülürse fail-closed |
+| 9 | Test fixture'ı elle yazılmıştı ve "canlıdan alınmış" deniyordu | Yanlış provenance iddiası | Pinlenmiş üreticiden **üretilir**, bayt bayt karşılaştırılır |
+
+### Yapılanlar
+
+- [x] Pinlenmiş kaynağa **aynı pinde** dört dosya eklendi: `src/manifest.py`,
+      `src/didkey.py`, `src/config.py`, `pyproject.toml`. **Pin değişmedi.**
+- [x] `tests/conformance/manifest_oracle.py` — resmî üreticiyi çalıştırır
+      (`fcntl`/`orjson` yalnız import'u karşılayan shim'lerle; ikisi de yalnız
+      `store.py`'nin çalışma zamanı kalıcılık yollarında kullanılır ve belge
+      üretimi bu yolları çağırmaz).
+- [x] `tests/security/technocore_reference/` — üretilmiş `openapi.json`,
+      `agent.json` ve tam provenance kaydı.
+- [x] `projection.py` yeniden yazıldı: `Lane`/`Derived`/`FieldOutcome`,
+      JSON Pointer segmentleri, `resolve_signed_lane`, tipli karşılaştırma.
+- [x] Kritik alan sayısı **15 → 26**; note lane'i artık mesaj lane'i kadar
+      denetleniyor.
+- [x] API: `outcome` ve `detail` alan bazında, `critical_unevaluable_count`
+      yanıt düzeyinde eklendi.
+- [x] UI: "1. Belge erişimi" ve "2. Protokol değerlendirmesi" ayrıldı;
+      okunamayan alan için "Protokol uyumu doğrulanamadı" uyarısı.
+- [x] `.gitattributes` üretilmiş belgeleri `-text` yapar; bayt karşılaştırması
+      taze klonda da geçerli (Aşama 2B dersi).
+- [x] WriteGate ve API **aynı verdict'i** okumaya devam eder; restart,
+      snapshot ve hata sonrası fail-closed davranışları değişmedi.
+
+### Test sonuçları
+
+| Kapı | Sonuç |
+|---|---|
+| ruff | geçti |
+| mypy strict | 51 dosya, 0 hata |
+| pytest | **596 geçti** |
+| ESLint | geçti |
+| TypeScript + production build | geçti |
+| Vitest | **57 geçti** |
+| vendor SHA-256 | 8/8 OK |
+| conformance self-test | PASS |
+| referans belge bayt karşılaştırması | 2/2 OK |
+
+**Toplam 653 test** (596 backend + 57 frontend). Aşama 3 tabanı 582'ydi.
+
+### Canlı doğrulama — 1 Eylül 2026, UTC 18:29:40–18:29:47
+
+Gerçek istemci, gerçek servis, geçici veri dizini, veritabanı yok. Yalnız izin
+verilen altı belge; hiçbir yazma isteği yok.
+
+| Belge | HTTP | SHA-256 (12) | Bayt |
+|---|---|---|---|
+| `/.well-known/agent.json` | 200 | `fc907a62284a` | 6411 |
+| `/openapi.json` | 200 | `aec05fab20be` | 73391 |
+| `/config` | 200 | `4fd0a99a7d7d` | 4288 |
+| `/healthz` | 503 | — | 0 |
+| `/llms.txt` | 200 | `22eb92a9567d` | 23294 |
+| `/skill.md` | 200 | `abcc8f85e5cc` | 6193 |
+
+**Sonuç: `current`** — 26/26 kritik alan eşleşti, 0 değerlendirilemeyen alan,
+**1 uyarı**: `service_version` beklenen `0.10.0`, görülen `0.11.2`.
+
+Canlı servis (`0.11.2`) ile pin (`0.10.0`) **bütün protokol-kritik alanlarda
+aynıdır**. Sürüm farkı uyarı olarak durur; beklenen sürüm uyarıyı susturmak
+için güncellenmedi.
+
+### Kanıt / çıkarım / doğrulanamayan eski beyan
+
+**Sahip olunan kanıt.** Pinlenmiş `manifest.py` çalıştırıldı ve ürettiği
+belgelerde `dependentSchemas.did` yapısı ile `^[A-Za-z0-9_-]{85}[AQgw]$`
+kalıbı doğrudan gözlendi. Canlı `openapi.json` ve `agent.json` indirildi,
+hash'lendi ve aynı yapıyı taşıdığı doğrulandı. Aşama 3 kodu bu gerçek
+gövdelerle çalıştırılıp `drifted` (4 kritik + 1 uyarı) ürettiği görüldü.
+
+**Çıkarım.** Canlı servisin `0.11.2` olması protokol-kritik alanları
+değiştirmemiştir; bu, gözlenen alan eşleşmelerinden çıkarılmıştır, upstream
+değişiklik günlüğünden değil.
+
+**Doğrulanamayan eski beyan.** Aşama 3 raporundaki "current, 15/15 kritik
+alan eşleşti, 0 uyarı" iddiasını destekleyen bir kanıt bulunamadı ve iddia
+yeniden üretilemedi. Yukarıda ve `docs/read-only-technocore.md` §9'da açıkça
+düzeltilmiştir. O turda gerçekte hangi gövdelerin görüldüğü bilinmemektedir;
+kullanıcı verisi içeren veritabanı bu kaydı aramak için **açılmamıştır**.
+
+### Açık riskler
+
+| ID | Risk | Durum |
+|---|---|---|
+| D-R1 | Olumsuzlama listesi kapalı ve kısa | Bilinçli: genel amaçlı bir dil modeli yok. Asıl dayanak makine şeması; liste gerçek referans metnine karşı testli |
+| D-R2 | `anyOf` desteklenmeyen anahtar sayılmıyor | Aynı seviyedeki anahtarlar konjonktif olduğu için `dependentSchemas`'ı gevşetemez; gerekçe kodda ve belgede yazılı |
+| D-R3 | Vendor pini hâlâ `7707cb63…`, canlı `0.11.2` | Bilinçli; yükseltme ayrı ve açık bir karar adımı. Sürüm uyarısı bu farkı görünür tutuyor |
+| D-R4 | Referans belgeleri pinlenmiş sürümün belgeleridir | Testler ağa çıkmaz; canlı gözlem ayrı ve tarihli tutulur |
 
 ---
 
