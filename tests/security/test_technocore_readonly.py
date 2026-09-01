@@ -1277,6 +1277,40 @@ def test_a_bound_excluding_what_station_sends_closes_the_gate(
 
 
 @pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_an_empty_range_on_the_payload_field_closes_the_gate(
+    body_of: BodyOf, payload: str
+) -> None:
+    """Emptiness needs no knowledge of what we send.
+
+    ``text`` and ``value`` carry whatever the user writes, so there is no fixed
+    length to compare a bound against - and that is exactly why the check that
+    *does* apply to them must not be skipped along with the one that does not.
+    A range with no values in it rejects every request, ours included.
+    """
+    documents = build_documents(parsed=True)
+    node = body_of(documents["openapi"])["properties"][payload]
+    node["minLength"] = 100
+    node["maxLength"] = 5
+
+    result = _projected(documents)
+    assert result.state is DriftState.DRIFTED
+    assert any(
+        "uzunluk araligi bos" in item.reason for item in result.critical_mismatches
+    )
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_an_ordinary_payload_bound_is_not_a_finding(
+    body_of: BodyOf, payload: str
+) -> None:
+    """The mirror: a payload length limit is normal and must not alarm."""
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["properties"][payload]["maxLength"] = 4096
+
+    assert _projected(documents).state is DriftState.CURRENT
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
 def test_a_bound_that_still_admits_our_value_is_accepted(
     body_of: BodyOf, payload: str
 ) -> None:

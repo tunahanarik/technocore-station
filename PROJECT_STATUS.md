@@ -703,15 +703,15 @@ gerçek belgeyle çalıştırıldığında dört kritik alan `<yok>` görünüyo
 |---|---|
 | ruff | geçti |
 | mypy strict | 51 dosya, 0 hata |
-| pytest | **732 geçti**, 0 hata |
+| pytest | **736 geçti**, 0 hata |
 | ESLint | geçti |
 | TypeScript + production build | geçti |
-| Vitest | **58 geçti** |
+| Vitest | **59 geçti** |
 | vendor SHA-256 | 8/8 OK |
 | conformance self-test | PASS |
 | referans belge bayt karşılaştırması | 2/2 OK |
 
-**Toplam 790 test** (732 backend + 58 frontend). Aşama 3 tabanı 582'ydi.
+**Toplam 795 test** (736 backend + 59 frontend). Aşama 3 tabanı 582'ydi.
 
 Not: `test_git_hands_a_fresh_checkout_the_exact_pinned_bytes` çalışma ağacını
 **commit edilmiş blob** ile karşılaştırır, bu yüzden yeni byte-exact dosyalar
@@ -866,6 +866,13 @@ raporladı.
 
 Hepsi iki lane'de de aynı şekilde kırıktı ve aynı şekilde düzeldi:
 **22/22 → 0/22 yanlış `current`.** Önceki 16 kontrol korundu.
+
+PR #9 review'unda aynı ailenin kalan bir kolu bulundu ve düzeltildi: boş
+uzunluk aralığı denetimi yalnız uzunluğunu bildiğimiz alanlar için
+çalışıyordu, bu yüzden `text`/`value` üzerinde `minLength 100, maxLength 5`
+gibi bir çelişki fark edilmiyordu. Aralığın boş olması, ne gönderdiğimizi
+bilmeyi gerektirmez — hiçbir değer sağlayamaz — bu yüzden denetim artık her
+alan için çalışıyor.
 
 **Kök neden (üç P1 bulgusunun ortağı):** izin listesindeki bir anahtarın adı
 denetleniyor, **değeri ve uygulanma anlamı** denetlenmiyordu. Somut sonuçları:

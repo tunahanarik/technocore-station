@@ -517,13 +517,13 @@ def _judge_constraint(name: str, merged: _Constraint) -> Reading:
             )
         )
 
-    sent = STATION_FIELD_LENGTHS.get(name)
-    if sent is None:
-        return Reading(value=merged)
-
     low = max(merged.lows) if merged.lows else 0
     high = min(merged.highs) if merged.highs else None
 
+    # An empty range needs no knowledge of what we send: *no* value satisfies
+    # it. Checking this only for the fields whose length we happen to know
+    # would leave the payload fields - `text` and `value` - able to publish a
+    # contradiction unnoticed, which is the same family of gap again.
     if high is not None and low > high:
         return Reading(
             conflict=(
@@ -531,6 +531,14 @@ def _judge_constraint(name: str, merged: _Constraint) -> Reading:
                 "hicbir deger ikisini birden saglayamaz"
             )
         )
+
+    sent = STATION_FIELD_LENGTHS.get(name)
+    if sent is None:
+        # A payload field: its length varies with what the user writes, so
+        # there is no fixed value to compare a bound against. The emptiness
+        # check above is what can be said about it.
+        return Reading(value=merged)
+
     if low > sent.maximum:
         return Reading(
             conflict=(
