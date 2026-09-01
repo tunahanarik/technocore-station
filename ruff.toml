@@ -1,0 +1,41 @@
+# Ruff configuration for everything without a closer one - in practice, the
+# `tests/` tree.
+#
+# `apps/station-api` and `packages/technocore-conform` each carry their own
+# `[tool.ruff]`, and ruff resolves configuration from the file being checked
+# rather than from the working directory. `tests/` had neither, so it was
+# being linted under ruff's *defaults*: a different, largely disjoint rule set
+# from the one the rest of the repository is held to.
+#
+# That was not a lighter standard so much as a different one. It reported
+# style opinions this project has not adopted (`TRY004`, `FLY002`, `PLE2515`
+# on the deliberately invisible characters the Unicode sweep tests are made
+# of) while missing the rules that are actually required here - `S` in
+# particular. It also produced `RUF100` "unused noqa" on suppressions that are
+# genuinely needed under the real configuration, which is the clearest sign
+# that the wrong configuration was being applied.
+#
+# The same oversight was corrected for `packages/technocore-conform` earlier;
+# see the note in its `pyproject.toml`. This is the last directory that had it.
+
+line-length = 100
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "TID", "RUF", "S"]
+
+# Documentation and user-visible strings in this project are Turkish
+# (AGENTS.md 3), and the dotted/dotless i pair is a real letter here rather
+# than a lookalike for ASCII `i`. Deliberate invisible characters in the
+# Unicode sweep tests are written as escapes instead, so RUF001 stays useful
+# for what it is actually for: a lookalike nobody meant to paste.
+allowed-confusables = ["ı", "İ", "ş", "Ş", "ğ", "Ğ", "ç", "Ç", "ö", "Ö", "ü", "Ü"]
+ignore = [
+    "S101", # assert is the point of a test file
+]
+
+[lint.per-file-ignores]
+# Test-only key material is marked as such by name (AGENTS.md 2.3), and
+# flagging those constants as hardcoded credentials is exactly backwards:
+# naming them loudly is the safety measure.
+"tests/**" = ["S105", "S106"]

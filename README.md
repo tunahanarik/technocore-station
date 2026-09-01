@@ -118,9 +118,28 @@ Kaynak dosya değiştirilmez veya silinmez.
 
 ## Geliştirme komutları
 
+Lint — üç ağacın tamamı, tek komut:
+
 ```bash
 uv run --project apps/station-api ruff check apps/station-api/src packages/technocore-conform/src tests
 ```
+
+> **Ruff yapılandırması nereden geliyor?** Ruff, yapılandırmayı çalışma
+> dizininden değil **denetlenen dosyadan yukarı yürüyerek** bulur.
+> `apps/station-api` ve `packages/technocore-conform` kendi `[tool.ruff]`
+> bloklarını taşır; `tests/` hiçbirini taşımıyordu ve bu yüzden ruff'ın
+> **varsayılan** kural setiyle denetleniyordu — projenin benimsediği setten
+> büyük ölçüde ayrık bir set. Sonuç, benimsenmemiş stil kuralları raporlarken
+> (`TRY004`, `FLY002`) burada gerçekten zorunlu olan `S` kurallarını hiç
+> çalıştırmamaktı; en açık belirti, gerçek yapılandırmada gerekli olan
+> `# noqa: S603` satırlarının "kullanılmayan noqa" diye işaretlenmesiydi.
+> Aşama 3.1'de kök dizine [`ruff.toml`](ruff.toml) eklendi ve `tests/` de
+> aynı kural setine bağlandı. Bulgular bastırılarak veya dosyalar dışlanarak
+> değil, düzeltilerek kapatıldı.
+>
+> [`AGENTS.md`](AGENTS.md) §4'teki `uv run --directory apps/station-api ruff
+> check .` komutu hâlâ geçerlidir, fakat yalnız `apps/station-api` ağacını
+> kapsar. Yukarıdaki komut üçünü birden kapsar.
 
 ```bash
 uv run --project apps/station-api mypy --config-file apps/station-api/pyproject.toml

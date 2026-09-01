@@ -30,7 +30,7 @@ def built_artifacts(repo_root: Path, tmp_path_factory: pytest.TempPathFactory) -
         pytest.fail("uv is not on PATH; it is the project's build tool")
 
     out_dir = tmp_path_factory.mktemp("conform-dist")
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: S603 - fixed argv, no shell
         [
             uv,
             "build",

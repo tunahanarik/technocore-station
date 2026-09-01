@@ -694,6 +694,294 @@ def test_a_shadow_key_cannot_redirect_a_pointer() -> None:
     assert _projected(documents).state is not DriftState.CURRENT
 
 
+# ---------------------------------------------------------------------------
+# The combined meaning of a body schema
+#
+# Finding the right value somewhere in a schema does not establish that the
+# schema accepts our request. Three documents that reject every signed write
+# were reporting `current`, because the projection read the keys it wanted and
+# ignored everything else at the same level. These fix the family, not the
+# three examples: the evaluator works from an allow-list, so a keyword nobody
+# has thought of yet is unevaluable rather than invisible.
+# ---------------------------------------------------------------------------
+
+#: Both lanes go through one evaluator, so both are asserted every time. The
+#: note lane silently losing a check is exactly what a copy-pasted
+#: single-lane test misses.
+_LANES = [
+    pytest.param(message_body_schema, "text", id="message"),
+    pytest.param(note_body_schema, "value", id="note"),
+]
+
+BodyOf = Callable[[dict[str, Any]], dict[str, Any]]
+
+
+def _closed(documents: dict[str, Any]) -> Any:
+    result = _projected(documents)
+    assert result.state is not DriftState.CURRENT, (
+        "this schema rejects every signed request and must not report current"
+    )
+    return result
+
+
+# --- a field node that matches nothing --------------------------------------
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+@pytest.mark.parametrize("credential", ["sig", "nonce"])
+def test_a_negated_credential_schema_is_not_current(
+    body_of: BodyOf, payload: str, credential: str
+) -> None:
+    """``not: {}`` beside a correct pattern accepts nothing at all.
+
+    The pattern, the type and both lengths are still exactly right, and were
+    still being read. ``not: {}`` negates the empty schema, which every value
+    satisfies, so the node matches no value whatsoever - no signature would be
+    accepted, and the check said `current`.
+    """
+    del payload
+    documents = build_documents(parsed=True)
+    signed_lane(body_of(documents["openapi"]))["properties"][credential]["not"] = {}
+
+    result = _closed(documents)
+    assert result.state is DriftState.UNAVAILABLE
+    assert any("not" in item.problem for item in result.critical_unevaluable)
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+@pytest.mark.parametrize(
+    "keyword", ["$ref", "allOf", "oneOf", "if", "enum", "const", "anyOf"]
+)
+def test_any_unreadable_keyword_in_a_field_node_closes_the_gate(
+    body_of: BodyOf, payload: str, keyword: str
+) -> None:
+    """The family, not the three examples.
+
+    The evaluator names what it understands. Anything else - including a
+    keyword this test does not anticipate - makes the node unevaluable.
+    """
+    del payload
+    documents = build_documents(parsed=True)
+    signed_lane(body_of(documents["openapi"]))["properties"]["sig"][keyword] = {}
+
+    assert _closed(documents).state is DriftState.UNAVAILABLE
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_an_unreadable_keyword_on_the_unconditional_did_closes_the_gate(
+    body_of: BodyOf, payload: str
+) -> None:
+    """``did`` selects the signed lane, so its own node is read too."""
+    del payload
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["properties"]["did"]["not"] = {}
+
+    assert _closed(documents).state is DriftState.UNAVAILABLE
+
+
+# --- constraints published at both levels apply together --------------------
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_an_unconditional_length_that_contradicts_the_conditional_one(
+    body_of: BodyOf, payload: str
+) -> None:
+    """``maxLength: 1`` beside a conditional ``minLength: 86``.
+
+    Keywords at a level are conjunctive: both bounds apply, and no string is
+    at once no longer than one character and at least eighty-six. Reported as
+    a mismatch rather than as unsupported, because it was evaluated - this is
+    a demonstrated fact about the document, not a gap in what we can read.
+    """
+    del payload
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["properties"]["sig"]["maxLength"] = 1
+
+    result = _closed(documents)
+    assert result.state is DriftState.DRIFTED
+    assert any(
+        "uzunluk araligi bos" in item.reason for item in result.critical_mismatches
+    )
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_an_unconditional_type_that_contradicts_the_conditional_one(
+    body_of: BodyOf, payload: str
+) -> None:
+    del payload
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["properties"]["nonce"]["type"] = "integer"
+
+    assert _closed(documents).state is DriftState.DRIFTED
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_second_unconditional_pattern_is_not_silently_ignored(
+    body_of: BodyOf, payload: str
+) -> None:
+    """Two regexes on one value intersect; this module does not compute that.
+
+    Unsupported rather than a mismatch: a different pattern is not by itself a
+    contradiction, and calling one would assert more than was checked.
+    """
+    del payload
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["properties"]["sig"]["pattern"] = "^[a-z]+$"
+
+    assert _closed(documents).state is DriftState.UNAVAILABLE
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_repeated_identical_constraint_is_accepted(
+    body_of: BodyOf, payload: str
+) -> None:
+    """Publishing the same rule twice says nothing new, and must not alarm."""
+    del payload
+    documents = build_documents(parsed=True)
+    body = body_of(documents["openapi"])
+    conditional = signed_lane(body)["properties"]["sig"]
+    body["properties"]["sig"] = {
+        "description": "unchanged prose",
+        "type": conditional["type"],
+        "pattern": conditional["pattern"],
+        "minLength": conditional["minLength"],
+        "maxLength": conditional["maxLength"],
+    }
+
+    assert _projected(documents).state is DriftState.CURRENT
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_wider_unconditional_bound_is_not_a_contradiction(
+    body_of: BodyOf, payload: str
+) -> None:
+    """A looser bound leaves the conditional one deciding; nothing is empty."""
+    del payload
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["properties"]["sig"]["minLength"] = 1
+
+    assert _projected(documents).state is DriftState.CURRENT
+
+
+# --- anyOf must leave a branch a signed body can satisfy --------------------
+
+
+def test_the_reference_really_publishes_the_two_branch_any_of() -> None:
+    """The shape the evaluator supports is the shape upstream actually ships.
+
+    Asserted against the generated reference so that supporting exactly this
+    form stays an evidence-backed decision rather than a guess.
+    """
+    documents = build_documents(parsed=True)
+    branches = message_body_schema(documents["openapi"])["anyOf"]
+
+    assert branches == [{"required": ["from"]}, {"required": ["did"]}]
+    assert _projected(documents).state is DriftState.CURRENT
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_an_any_of_that_forbids_the_did_is_not_current(
+    body_of: BodyOf, payload: str
+) -> None:
+    """``anyOf: [{"not": {"required": ["did"]}}]`` forbids the signed lane.
+
+    The previous reasoning was that ``anyOf`` could only *add* a constraint,
+    so it could not loosen ``dependentSchemas`` - true, and beside the point.
+    A constraint it adds can reject us, and this one rejects every body
+    carrying the field that selects the signed lane.
+    """
+    del payload
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["anyOf"] = [{"not": {"required": ["did"]}}]
+
+    assert _closed(documents).state is DriftState.UNAVAILABLE
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_an_any_of_with_no_satisfiable_branch_is_not_current(
+    body_of: BodyOf, payload: str
+) -> None:
+    """Every branch readable, none reachable by a signed body.
+
+    A conflict rather than unsupported: each branch was understood, and none
+    can be met by a body carrying did/sig/nonce and the payload.
+    """
+    del payload
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["anyOf"] = [
+        {"required": ["from"]},
+        {"required": ["apiKey"]},
+    ]
+
+    assert _closed(documents).state is DriftState.DRIFTED
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_the_signed_branch_may_name_the_payload_field(
+    body_of: BodyOf, payload: str
+) -> None:
+    """A branch a signed body does satisfy keeps the verdict current."""
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["anyOf"] = [
+        {"required": ["from"]},
+        {"required": ["did", payload]},
+    ]
+
+    assert _projected(documents).state is DriftState.CURRENT
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_an_any_of_branch_with_an_unreadable_shape_closes_the_gate(
+    body_of: BodyOf, payload: str
+) -> None:
+    del payload
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["anyOf"] = [{"properties": {"did": {}}}]
+
+    assert _closed(documents).state is DriftState.UNAVAILABLE
+
+
+# --- documentation and ordering are still not protocol changes --------------
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_annotations_anywhere_in_the_body_are_not_a_protocol_change(
+    body_of: BodyOf, payload: str
+) -> None:
+    """The allow-list separates prose from constraints, so this must pass.
+
+    A fixed key list that treated ``description`` like a validation keyword
+    would turn every upstream wording change into a closed write gate.
+    """
+    del payload
+    documents = build_documents(parsed=True)
+    body = body_of(documents["openapi"])
+    lane = signed_lane(body)
+
+    for node in (body["properties"]["sig"], body["properties"]["did"], body):
+        node["description"] = "rewritten prose"
+        node["$comment"] = "an editorial note"
+    for node in lane["properties"].values():
+        node["title"] = "Signature"
+        node["examples"] = ["not a constraint"]
+
+    assert _projected(documents).state is DriftState.CURRENT
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_reordering_the_body_schema_keys_is_not_a_protocol_change(
+    body_of: BodyOf, payload: str
+) -> None:
+    del payload
+    documents = build_documents(parsed=True)
+    body = body_of(documents["openapi"])
+    reordered = dict(reversed(list(body.items())))
+    body.clear()
+    body.update(reordered)
+
+    assert _projected(documents).state is DriftState.CURRENT
+
+
 # --- comparison must not normalise a difference away -----------------------
 
 
@@ -705,7 +993,7 @@ def test_a_shadow_key_cannot_redirect_a_pointer() -> None:
         " <room>|<nonce>|<text>",
         "<room>|<nonce>|<text>" + chr(0x200B),  # zero-width space
         "<room>|<nonce>|<text>\x00",
-        "<room>|<nonce>|<text> ",
+        "<room>|<nonce>|<text>\u00a0",
     ],
 )
 def test_whitespace_around_a_canonical_payload_is_not_the_same_payload(
@@ -885,10 +1173,10 @@ def test_remote_values_are_swept_and_truncated() -> None:
 
 def test_the_expectation_comes_from_our_own_conformance_engine() -> None:
     """Not copied from the live document, which would be self-fulfilling."""
-    assert EXPECTED_SIGNATURE_PATTERN == f"^{SIGNATURE_PATTERN}$"
+    assert f"^{SIGNATURE_PATTERN}$" == EXPECTED_SIGNATURE_PATTERN
     assert EXPECTED_SIGNATURE_PATTERN == r"^[A-Za-z0-9_-]{85}[AQgw]$"
-    assert EXPECTED_NONCE_PATTERN == f"^{NONCE_PATTERN}$"
-    assert EXPECTED_NAME_PATTERN == f"^{NAME_PATTERN}$"
+    assert f"^{NONCE_PATTERN}$" == EXPECTED_NONCE_PATTERN
+    assert f"^{NAME_PATTERN}$" == EXPECTED_NAME_PATTERN
 
 
 # ---------------------------------------------------------------------------
@@ -936,7 +1224,7 @@ def test_a_later_failure_does_not_inherit_an_earlier_success(engine: Engine) -> 
     def down(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("no route to host")
 
-    service._client = _client(httpx.MockTransport(down))  # noqa: SLF001
+    service._client = _client(httpx.MockTransport(down))
     after = service.refresh()
 
     assert after.state is DriftState.UNAVAILABLE

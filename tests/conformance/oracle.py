@@ -172,9 +172,12 @@ def official_nonce_pattern(vendor_root: Path) -> str:
         if not (isinstance(function, ast.Attribute) and function.attr == "fullmatch"):
             continue
         first = node.args[0]
-        if isinstance(first, ast.Constant) and isinstance(first.value, str):
-            if "0-9" in first.value:
-                return first.value
+        if (
+            isinstance(first, ast.Constant)
+            and isinstance(first.value, str)
+            and "0-9" in first.value
+        ):
+            return first.value
     raise AssertionError("nonce pattern not found in the pinned sign.py")
 
 

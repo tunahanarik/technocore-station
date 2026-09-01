@@ -286,6 +286,9 @@ serialize edilmez.
 ## 11. Bu aşamada bilinçli olarak yapılmayanlar
 
 - Technocore'a **hiçbir bağlantı** — giden HTTP istemcisi yoktur.
+  *(Aşama 2B durumu. Aşama 3 salt-okunur bir istemci ekledi; uygunluk
+  motoru hâlâ tamamen çevrimdışıdır ve ağ modülü import etmez — bunu
+  `test_conformance_boundary.py` doğrular.)*
 - Identity vault üzerinden operasyonel imzalama (Aşama 4).
 - Compose ekranının gerçek yazma yüzeyine dönüşmesi (Aşama 4).
 - Manifest/config okuma (Aşama 3).

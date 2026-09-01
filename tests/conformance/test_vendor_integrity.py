@@ -160,7 +160,12 @@ def test_conform_package_does_not_import_the_application(repo_root: Path) -> Non
     offenders: list[str] = []
     for path in package.rglob("*.py"):
         text = path.read_text(encoding="utf-8")
-        for forbidden in ("import station_api", "from station_api", "import fastapi", "import sqlalchemy"):
+        for forbidden in (
+            "import station_api",
+            "from station_api",
+            "import fastapi",
+            "import sqlalchemy",
+        ):
             if forbidden in text:
                 offenders.append(f"{path.name}: {forbidden}")
     assert offenders == [], f"conform package reaches into the application: {offenders}"

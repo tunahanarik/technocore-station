@@ -26,7 +26,7 @@ def run_cli(
     *arguments: str, stdin: str = "", timeout: int = 180
 ) -> subprocess.CompletedProcess[str]:
     """Invoke the CLI exactly as a user would."""
-    return subprocess.run(
+    return subprocess.run(  # noqa: S603 - fixed argv, no shell
         [sys.executable, "-m", "technocore_conform", *arguments],
         input=stdin,
         capture_output=True,
@@ -49,7 +49,7 @@ def test_every_required_command_is_present() -> None:
     """The command set named in the Stage 2B scope, checked structurally."""
     parser = build_parser()
     commands: set[str] = set()
-    for action in parser._actions:  # noqa: SLF001
+    for action in parser._actions:
         choices = getattr(action, "choices", None)
         if choices and action.option_strings == []:
             commands |= set(choices)
@@ -302,7 +302,7 @@ def test_no_secret_option_is_declared_anywhere_in_the_parser() -> None:
     seen: list[str] = []
 
     def walk(parser: Any) -> None:
-        for action in parser._actions:  # noqa: SLF001
+        for action in parser._actions:
             seen.extend(action.option_strings)
             choices = getattr(action, "choices", None) or {}
             for name in choices:

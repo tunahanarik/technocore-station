@@ -107,6 +107,12 @@ sürece burada tutulurlar.
 | IMP-240 | `signature_encoding` sınırlı olumsuzlama listesiyle denetlenir | Kelime içerme kontrolü, sözleşmeyi reddeden bir cümleyi reddettiği kelimeler yüzünden geçiriyordu; asıl dayanak makine şemasıdır |
 | IMP-241 | Test referans belgeleri pinlenmiş üreticiden üretilir | Elle yazılmış fixture ile kod aynı hatayı taşıyıp birbirini doğruluyordu; üretim + bayt karşılaştırması bu sınıfı ortadan kaldırır |
 | IMP-242 | Beklenen servis sürümü uyarıyı susturmak için güncellenmez | Bu uyarı, pinin canlı servisin gerisinde kaldığını gösteren tek sinyaldir |
+| IMP-243 | Şema anahtarları blok listesi değil **izin listesi** ile okunur | Reddedilecekleri saymak, düşünülmemiş her anahtarı görünmez yapar; üç ayrı belge her imzayı reddederken `current` raporladı |
+| IMP-244 | Koşulsuz ve koşullu kısıtlar birlikte değerlendirilir | Aynı seviyedeki anahtarlar "ve" ile bağlanır; yalnız koşullu olanı okumak `maxLength: 1` ile `minLength: 86`'yı aynı anda doğru saydı |
+| IMP-245 | Kanıtlanmış çelişki `mismatch`, okunamayan yapı `unsupported` | İkisi de kapıyı kapatır; ayrım kullanıcının okuduğu cümlenin doğru olması içindir |
+| IMP-246 | `anyOf` yalnız referansın yayımladığı `required` dalları biçiminde kabul edilir | "Yalnız kısıt ekleyebilir" doğru fakat konu dışı: eklediği kısıt bizi reddedebilir |
+| IMP-247 | Açıklama anahtarları kısıtlardan ayrı tutulur | Sabit anahtar listesi kullanan bir denetimde bu ayrım olmadan her metin düzeltmesi yazma kapısını kapatırdı |
+| IMP-248 | `tests/` de projenin ruff kural setine bağlandı (kök `ruff.toml`) | Ruff yapılandırmayı dosyadan yukarı yürüyerek bulur; `tests/` varsayılan sete düşüyor, gerçekten zorunlu olan `S` kurallarını hiç çalıştırmıyordu |
 
 ## 3. Yeni ADR nasıl eklenir
 

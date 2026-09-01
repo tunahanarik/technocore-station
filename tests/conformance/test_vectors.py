@@ -120,7 +120,7 @@ def _git(repo_root: Path, *arguments: str) -> subprocess.CompletedProcess[bytes]
     """
     try:
         result = subprocess.run(  # noqa: S603 - fixed argv, no shell
-            ["git", *arguments],
+            ["git", *arguments],  # noqa: S607 - git is resolved from PATH on purpose
             cwd=repo_root,
             capture_output=True,
             timeout=60,

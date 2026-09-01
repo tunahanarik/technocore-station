@@ -156,7 +156,7 @@ def test_the_self_test_runs_without_the_vendor_directory(
     assert (repo_root / "vendor").is_dir()  # present here, and irrelevant
 
     script = "from technocore_conform import run_self_test; r=run_self_test(); print(r.passed)"
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: S603 - fixed argv, no shell
         [sys.executable, "-c", script],
         cwd=tmp_path,
         capture_output=True,
@@ -179,7 +179,7 @@ def test_importing_the_package_runs_no_self_test(tmp_path: Path) -> None:
         "import sys; import technocore_conform; "
         "print('technocore_conform.vectors' in sys.modules)"
     )
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: S603 - fixed argv, no shell
         [sys.executable, "-c", script],
         cwd=tmp_path,
         capture_output=True,

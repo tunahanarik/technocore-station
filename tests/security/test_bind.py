@@ -13,7 +13,7 @@ pytestmark = pytest.mark.security
 
 # Safe to name directly: the scans below cover apps/ only, never tests/, so
 # this file can hold the literal it forbids elsewhere.
-WILDCARD_IPV4 = "0.0.0.0"
+WILDCARD_IPV4 = "0.0.0.0"  # noqa: S104 - the literal under test, never bound
 
 
 def test_loopback_host_constant_is_the_literal_loopback_address() -> None:

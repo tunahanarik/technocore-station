@@ -41,11 +41,11 @@ pytestmark = pytest.mark.conformance
 
 
 def test_name_pattern_matches_the_pinned_reference(vendor_root: Path) -> None:
-    assert OFFICIAL_NAME_PATTERN == official_name_pattern(vendor_root)
+    assert official_name_pattern(vendor_root) == OFFICIAL_NAME_PATTERN
 
 
 def test_nonce_pattern_matches_the_pinned_reference(vendor_root: Path) -> None:
-    assert OFFICIAL_NONCE_PATTERN == official_nonce_pattern(vendor_root)
+    assert official_nonce_pattern(vendor_root) == OFFICIAL_NONCE_PATTERN
 
 
 def test_our_unanchored_pattern_is_the_same_language() -> None:
@@ -115,7 +115,7 @@ def test_valid_names_are_accepted(name: str) -> None:
         "../etc",
         "a/../b",
         "türkçe",
-        "оda",
+        "\u043eda",
         "room​",
         "١٢٣",
     ],
@@ -149,7 +149,7 @@ def test_valid_nonces_are_accepted(nonce: str) -> None:
 
 @pytest.mark.parametrize(
     "nonce",
-    ["", "9" * 20, "-1", "1.0", "1e3", " 1", "1 ", "0x1", "١٢٣", "１２３", "๑", "1\n"],
+    ["", "9" * 20, "-1", "1.0", "1e3", " 1", "1 ", "0x1", "١٢٣", "\uff11\uff12\uff13", "๑", "1\n"],
 )
 def test_invalid_nonces_are_refused(nonce: str) -> None:
     assert not is_valid_nonce(nonce)
@@ -159,7 +159,7 @@ def test_invalid_nonces_are_refused(nonce: str) -> None:
 
 def test_unicode_digits_are_refused_even_though_isdigit_accepts_them() -> None:
     """``str.isdigit()`` is true for these, and that is the trap."""
-    for nonce in ("١٢٣", "１２３"):
+    for nonce in ("١٢٣", "\uff11\uff12\uff13"):
         assert nonce.isdigit()
         assert not is_valid_nonce(nonce)
 
