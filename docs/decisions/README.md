@@ -98,6 +98,15 @@ sürece burada tutulurlar.
 | IMP-231 | Refresh endpoint'i gövde almaz | Kullanıcının yönlendirebileceği bir adres bırakmamak |
 | IMP-232 | Dosya seçici native input'u sarar; input tab sırasından çıkarılır | Çıplak `input[type=file]` görünür sınırı ve adı olmayan bir kontroldür; tek klavye durağı ve gerçek erişilebilir ad daha iyidir |
 | IMP-233 | Identity "sonraki adım" metni backend gate verisinden türetilir | Hardcoded roadmap metni Aşama 2B biter bitmez sessizce yanlış olmuştu |
+| IMP-234 | İmzalı lane kısıtları `dependentSchemas.did` altından okunur | Resmî referans onları `properties` altında yayımlamaz; oradan okumak dört kritik alanı "yok" gösterip yanlış drift alarmı üretti |
+| IMP-235 | Alan yolları JSON Pointer segmentleridir, noktalı string değil | Noktalı yolu en uzun anahtarla çözmek, uzaktaki düz bir anahtarın gerçek konumu gölgelemesine izin veriyordu |
+| IMP-236 | Karşılaştırma özgün ve tipi doğrulanmış değer üzerinde yapılır | `safe_display` çıktısını karşılaştırmak `"86"` ile `86`'yı ve sonunda newline olan payload'ı özgün payload'la eşit sayıyordu |
+| IMP-237 | Beklenen kalıplar `technocore_conform`'dan türetilir | Canlıdan kopyalanan bir beklenti kendini doğrular ve hiçbir şey tespit etmez; ayrıca geniş `{86}` kalıbı kendi motorumuzla çelişiyordu |
+| IMP-238 | Okunamayan alan `drifted` değil `unavailable` üretir | Yokluk ile farklılık aynı şey değildir; kanıt olmadan "sunucu imza biçimini değiştirdi" demek ilk hatanın kaynağıydı |
+| IMP-239 | Desteklenmeyen JSON Schema anahtarında fail-closed | `$ref`/`allOf`/`if` anlamı değiştirebilir; genel bir schema motoru eklemek yerine "okuyamıyorum" demek doğru cevaptır |
+| IMP-240 | `signature_encoding` sınırlı olumsuzlama listesiyle denetlenir | Kelime içerme kontrolü, sözleşmeyi reddeden bir cümleyi reddettiği kelimeler yüzünden geçiriyordu; asıl dayanak makine şemasıdır |
+| IMP-241 | Test referans belgeleri pinlenmiş üreticiden üretilir | Elle yazılmış fixture ile kod aynı hatayı taşıyıp birbirini doğruluyordu; üretim + bayt karşılaştırması bu sınıfı ortadan kaldırır |
+| IMP-242 | Beklenen servis sürümü uyarıyı susturmak için güncellenmez | Bu uyarı, pinin canlı servisin gerisinde kaldığını gösteren tek sinyaldir |
 
 ## 3. Yeni ADR nasıl eklenir
 

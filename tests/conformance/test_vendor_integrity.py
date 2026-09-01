@@ -16,7 +16,16 @@ import pytest
 pytestmark = pytest.mark.conformance
 
 PINNED_COMMIT = "7707cb63ebf638e8ef0cf59d1364818b9fef7d24"
-EXPECTED_FILES = ("LICENSE", "NOTICE", "scripts/sign.py", "src/store.py")
+EXPECTED_FILES = (
+    "LICENSE",
+    "NOTICE",
+    "pyproject.toml",
+    "scripts/sign.py",
+    "src/config.py",
+    "src/didkey.py",
+    "src/manifest.py",
+    "src/store.py",
+)
 
 
 @pytest.fixture(scope="module")

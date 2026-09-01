@@ -6,7 +6,10 @@
 #   * the pinned official reference, whose exact bytes are recorded in
 #     vendor/technocore-reference/SHA256SUMS;
 #   * the conformance vector bundle, whose digest is pinned in
-#     technocore_conform/selftest.py and checked by the runtime self-test.
+#     technocore_conform/selftest.py and checked by the runtime self-test;
+#   * the generated Technocore reference documents, which are byte-compared
+#     against a fresh run of the pinned generator
+#     (tests/conformance/test_manifest_oracle.py).
 #
 # Git's `core.autocrlf` is `true` by default on Windows - this product's only
 # supported platform - which rewrites LF to CRLF *on checkout*. The blobs in
@@ -21,3 +24,4 @@
 
 vendor/technocore-reference/** -text
 packages/technocore-conform/src/technocore_conform/vectors/*.json -text
+tests/security/technocore_reference/*.json -text

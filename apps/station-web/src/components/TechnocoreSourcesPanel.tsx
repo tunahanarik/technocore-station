@@ -2,7 +2,7 @@ import { Alert, Button, Separator } from "@heroui/react";
 import { useCallback, useEffect, useState } from "react";
 
 import { fetchTechnocore, refreshTechnocore } from "../api/client";
-import type { DriftState, TechnocoreStatus } from "../api/types";
+import type { DriftState, FieldOutcome, TechnocoreStatus } from "../api/types";
 import { StatusPill, type StatusTone } from "./StatusPill";
 
 /**
@@ -43,7 +43,29 @@ const STATE_EXPLANATION: Record<DriftState, string> = {
   drifted:
     "Kritik bir alan degismis. Dis yazma kapisi kapali kalir; asagidaki farki inceleyin.",
   unavailable:
-    "Zorunlu bir belge alinamadi veya okunamadi. Kanit olmadigi icin kapi fail-closed davranir.",
+    "Denetim tamamlanamadi. Kanit olmadigi icin kapi fail-closed davranir; asagida hangi adimin tamamlanamadigi yazili.",
+};
+
+/**
+ * What happened to one field.
+ *
+ * `mismatch` is the only outcome that licenses saying the server changed
+ * something. `missing` and `unsupported` mean the value was not read, and a
+ * UI that showed all three as "changed" would be asserting evidence it does
+ * not have - which is exactly the false alarm this panel used to show.
+ */
+const OUTCOME_LABEL: Record<FieldOutcome, string> = {
+  matched: "Ayni",
+  mismatch: "Degismis",
+  missing: "Bulunamadi",
+  unsupported: "Okunamadi",
+};
+
+const OUTCOME_TONE: Record<FieldOutcome, StatusTone> = {
+  matched: "ok",
+  mismatch: "problem",
+  missing: "pending",
+  unsupported: "pending",
 };
 
 const AUTHORITY_LABEL: Record<number, string> = {
@@ -129,6 +151,16 @@ export function TechnocoreSourcesPanel() {
   const criticalFields = fields.filter((field) => field.severity === "critical");
   const changed = fields.filter((field) => !field.matches);
 
+  // Two independent questions, deliberately not merged: could the documents be
+  // fetched, and did the protocol they describe still match. A 503 on a
+  // supplementary document is not a protocol finding, and an unreadable schema
+  // is not a fetch failure.
+  const sources = status?.sources ?? [];
+  const reachable = sources.filter((source) => source.outcome === "ok").length;
+  const fetchFailed = sources.filter((source) => source.outcome !== "ok");
+  const unevaluable = status?.critical_unevaluable_count ?? 0;
+  const mismatched = status?.critical_mismatch_count ?? 0;
+
   return (
     <section aria-label="Resmi kaynak denetimi" className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -166,15 +198,44 @@ export function TechnocoreSourcesPanel() {
         </Alert>
       )}
 
+      {state === "unavailable" && unevaluable > 0 && (
+        <Alert status="warning">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>Protokol uyumu dogrulanamadi</Alert.Title>
+            <Alert.Description>
+              {`Belgeler alindi, fakat ${String(unevaluable)} kritik alan okunamadi.`}{" "}
+              Bu, sunucunun bir seyi degistirdigi anlamina gelmez; yalniz
+              beklenen konumda okunabilir bir deger bulunamadigi anlamina
+              gelir. Kanit olmadigi icin dis yazma kapisi kapali kalir.
+            </Alert.Description>
+          </Alert.Content>
+        </Alert>
+      )}
+
+      {state === "unavailable" && unevaluable === 0 && (
+        <Alert status="warning">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>Zorunlu belge alinamadi</Alert.Title>
+            <Alert.Description>
+              Protokol karsilastirmasi hic calistirilamadi, cunku zorunlu bir
+              belge alinamadi veya okunamadi. Dis yazma kapisi kapali kalir.
+            </Alert.Description>
+          </Alert.Content>
+        </Alert>
+      )}
+
       {state === "drifted" && (
         <Alert status="danger">
           <Alert.Indicator />
           <Alert.Content>
             <Alert.Title>Kritik protokol suruklenmesi</Alert.Title>
             <Alert.Description>
-              Imzanin gecerliligini etkileyen bir alan degismis. Bu durumda
-              uretilen bir imza sunucu tarafindan reddedilebilir veya
-              onaylamadiginiz baytlari kapsayabilir. Dis yazma kapisi kapali.
+              {`Imzanin gecerliligini etkileyen ${String(mismatched)} alan okundu ve beklenenden farkli.`}{" "}
+              Bu durumda uretilen bir imza sunucu tarafindan reddedilebilir
+              veya onaylamadiginiz baytlari kapsayabilir. Dis yazma kapisi
+              kapali.
             </Alert.Description>
           </Alert.Content>
         </Alert>
@@ -197,7 +258,21 @@ export function TechnocoreSourcesPanel() {
       <Separator />
 
       <div className="flex flex-col gap-2">
-        <h4 className="text-sm font-semibold text-foreground">Resmi kaynaklar</h4>
+        <h4 className="text-sm font-semibold text-foreground">
+          1. Belge erisimi
+        </h4>
+        {/* Reachability, on its own. A document that arrived says nothing yet
+            about whether the protocol still matches; that is the section
+            below. Keeping them apart is what stops a 503 from reading as a
+            protocol change, and a schema we cannot parse from reading as a
+            network problem. */}
+        {status !== null && sources.length > 0 && (
+          <p className="text-xs text-muted">
+            {`${String(reachable)}/${String(sources.length)} resmi belge alindi.`}
+            {fetchFailed.length > 0 &&
+              ` Alinamayan: ${fetchFailed.map((source) => source.source_id).join(", ")}.`}
+          </p>
+        )}
         {status === null && <p className="text-xs text-muted">Durum okunuyor...</p>}
         {status !== null && status.sources.length === 0 && (
           <p className="text-xs text-muted">
@@ -251,7 +326,9 @@ export function TechnocoreSourcesPanel() {
         <>
           <Separator />
           <div className="flex flex-col gap-2">
-            <h4 className="text-sm font-semibold text-foreground">Degisen alanlar</h4>
+            <h4 className="text-sm font-semibold text-foreground">
+              2. Protokol degerlendirmesi
+            </h4>
             <ul className="flex flex-col gap-2">
               {changed.map((field) => (
                 <li
@@ -262,20 +339,35 @@ export function TechnocoreSourcesPanel() {
                     <span className="text-sm font-medium text-foreground">
                       {field.label}
                     </span>
-                    <StatusPill
-                      label={field.severity === "critical" ? "Kritik" : "Uyari"}
-                      tone={field.severity === "critical" ? "problem" : "pending"}
-                    />
+                    <span className="flex items-center gap-2">
+                      <StatusPill
+                        label={OUTCOME_LABEL[field.outcome]}
+                        tone={OUTCOME_TONE[field.outcome]}
+                      />
+                      <StatusPill
+                        label={field.severity === "critical" ? "Kritik" : "Uyari"}
+                        tone={field.severity === "critical" ? "problem" : "pending"}
+                      />
+                    </span>
                   </div>
                   <p className="text-xs text-muted">{field.rationale}</p>
+                  {field.outcome === "unsupported" && field.detail !== "" && (
+                    <p className="text-xs text-muted">
+                      {`Okunamama sebebi: ${field.detail}`}
+                    </p>
+                  )}
                   <dl className="flex flex-col gap-1 text-xs text-muted">
                     <div className="flex flex-wrap justify-between gap-2">
                       <dt>Beklenen</dt>
                       <dd className="font-mono">{field.expected}</dd>
                     </div>
                     <div className="flex flex-wrap justify-between gap-2">
-                      <dt>Gorulen</dt>
-                      <dd className="font-mono">{field.observed}</dd>
+                      <dt>{field.outcome === "mismatch" ? "Gorulen" : "Durum"}</dt>
+                      <dd className="font-mono">
+                        {field.outcome === "mismatch"
+                          ? field.observed
+                          : "okunamadi"}
+                      </dd>
                     </div>
                     <div className="flex flex-wrap justify-between gap-2">
                       <dt>Konum</dt>
@@ -291,7 +383,7 @@ export function TechnocoreSourcesPanel() {
 
       {criticalFields.length > 0 && changed.length === 0 && (
         <p className="text-xs text-muted">
-          {`${String(criticalFields.length)} kritik alanin tamami beklenen degerle ayni.`}
+          {`${String(criticalFields.length)} kritik alanin tamami okundu ve beklenen degerle ayni. Bu sonuc yalniz bu denetim anina aittir.`}
         </p>
       )}
 

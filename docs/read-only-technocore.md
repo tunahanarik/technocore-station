@@ -89,40 +89,157 @@ Ham hash karşılaştırması kullanılmaz: her yazım düzeltmesi "drift" derdi
 bir hafta içinde göz ardı edilirdi. Bunun yerine **imzanın geçerliliğinin
 bağlı olduğu** makine-okunabilir alanlar karşılaştırılır.
 
+### İmzalı lane nerede yayımlanıyor (Aşama 3.1 düzeltmesi)
+
+Aşama 3 `sig` ve `nonce` kısıtlarını `schema.properties` altında aradı.
+Resmî referans onları orada yayımlamaz. Gerçek konum:
+
+```jsonc
+schema: {
+  "properties": {
+    "did":   { "type": "string", "pattern": "^did:key:z6Mk…$", "maxLength": 56 },
+    "sig":   { "description": "…" },          // yalnız açıklama, kısıt yok
+    "nonce": { "description": "…" }           // yalnız açıklama, kısıt yok
+  },
+  "required": ["text"],                        // sig/nonce burada yok
+  "dependentSchemas": {
+    "did": {                                   // DID varsa uygulanır
+      "required": ["sig", "nonce"],
+      "properties": {
+        "sig":   { "type": "string", "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$",
+                   "minLength": 86, "maxLength": 86 },
+        "nonce": { "type": "string", "pattern": "^[0-9]{1,19}$" }
+      }
+    }
+  }
+}
+```
+
+Referansın kendi gerekçesi: DID taşımayan bir gövde imzasız bir yazmadır ve
+üzerindeki `sig`/`nonce` doğrulanmaz, yok sayılır. Kalıpları koşulsuz
+yayımlamak, hiçbir şeyin zorlamadığı bir kısıtı belgelemek olurdu.
+
+Sonuç: eski projeksiyon dört kritik alanı `<yok>` olarak gördü ve **yanlış
+bir drift alarmı** üretti. Alanlar kaybolmamıştı; yanlış yerde aranıyordu.
+
+Projeksiyon artık **DID ile seçilen effective schema**'yı çözer. Anlamı
+değiştirebilecek bir anahtar (`$ref`, `$dynamicRef`, `allOf`, `oneOf`,
+`not`, `if`) görürse şemayı okumaz ve **doğrulanamadı** der. `anyOf`
+bilinçli olarak listede değildir: referans bir tane yayımlar
+(`from` ya da `did` zorunlu) ve aynı seviyedeki anahtarlar birbirine "ve" ile
+bağlandığı için `dependentSchemas`'ı gevşetemez, yalnız kısıt ekleyebilir.
+
 ### Kritik (kapıyı kapatır)
+
+Her iki lane (mesaj ve note) için ayrı ayrı denetlenir. Konumlar JSON Pointer
+olarak, gövde şeması kökünden sonrası:
 
 | Alan | Kaynak | Konum |
 |---|---|---|
-| İmzalı mesaj lane'i | openapi | `paths./r/{room}.post` |
-| İmzalı note lane'i | openapi | `paths./kv/{ns}/{key}.post` |
-| DID kalıbı ve uzunluğu | openapi | `…schema.properties.did.pattern` / `.maxLength` |
-| İmza kalıbı ve uzunluğu | openapi | `…schema.properties.sig.pattern` / `.maxLength` |
-| Nonce kalıbı | openapi | `…schema.properties.nonce.pattern` |
-| Note imza kalıbı | openapi | note lane'inin `sig.pattern` değeri |
-| Zorunlu imza alanları | openapi | `did`, `sig`, `nonce` birlikte |
-| Mesaj canonical biçimi | agent.json | `identity.message_signature_payload` |
-| Note canonical biçimi | agent.json | `identity.note_signature_payload` |
-| İmza kodlaması | agent.json | `identity.signature_encoding` |
-| Kimlik şeması / algoritma | agent.json | `identity.scheme` / `identity.algorithms` |
-| İsim kalıbı | agent.json | `conventions.name_pattern` |
+| İmzalı mesaj lane'i | openapi | `/paths/~1r~1{room}/post` |
+| İmzalı note lane'i | openapi | `/paths/~1kv~1{ns}~1{key}/post` |
+| DID kalıbı | openapi | `/properties/did/pattern` |
+| DID uzunluğu | openapi | `/properties/did/maxLength` (sayı) |
+| İmza alan tipi | openapi | `/dependentSchemas/did/properties/sig/type` |
+| İmza kalıbı | openapi | `/dependentSchemas/did/properties/sig/pattern` |
+| İmza min/max uzunluk | openapi | `…/sig/minLength`, `…/sig/maxLength` (sayı) |
+| Nonce alan tipi | openapi | `/dependentSchemas/did/properties/nonce/type` |
+| Nonce kalıbı | openapi | `/dependentSchemas/did/properties/nonce/pattern` |
+| Zorunlu imza alanları | openapi | `/dependentSchemas/did/required` = `sig`, `nonce` |
+| Mesaj canonical biçimi | agent.json | `/identity/message_signature_payload` |
+| Note canonical biçimi | agent.json | `/identity/note_signature_payload` |
+| İmza kodlaması açıklaması | agent.json | `/identity/signature_encoding` |
+| Kimlik şeması / algoritma | agent.json | `/identity/scheme`, `/identity/algorithms` |
+| İsim kalıbı | agent.json | `/conventions/name_pattern` |
+
+**Zorunluluk `properties` üyeliğinden çıkarılmaz.** İki adın `properties`
+altında görünmesi onların zorunlu olduğunu kanıtlamaz; koşullu `required`
+ayrıca okunur.
 
 **Kritiklik gerekçesi:** bu alanlardan biri değişirse Station'ın ürettiği bir
 imza sunucu tarafından reddedilebilir veya — daha kötüsü — kullanıcının
 onaylamadığı baytlar üzerinde kabul edilebilir.
+
+### Beklenen değerler nereden geliyor
+
+Canlıdan **kopyalanmaz**; kopyalansaydı denetim kendini doğrular ve hiçbir
+şey tespit etmezdi. Kalıplar `technocore_conform` — yani gerçekte imzalayan
+motor — üzerinden türetilir:
+
+| Beklenen | Kaynak |
+|---|---|
+| `^[A-Za-z0-9_-]{85}[AQgw]$` | `SIGNATURE_PATTERN` |
+| `^[0-9]{1,19}$` | `NONCE_PATTERN` |
+| `^[a-z0-9][a-z0-9_-]{0,47}$` | `NAME_PATTERN` |
+| `86` | `SIGNATURE_CHARS` |
+| `56` | `len(DID_KEY_PREFIX) + MULTIBASE_LENGTH` |
+| `4096` / `8192` | `MAX_MESSAGE_CHARS` / `MAX_NOTE_VALUE_CHARS` |
+
+Aşama 3'ün beklediği `^[A-Za-z0-9_-]{86}$` **fazla genişti**: 64 baytlık bir
+imzanın son karakterinde dört boş bit kalır ve bunlar her zaman sıfırdır, yani
+yalnız `A`, `Q`, `g`, `w` ile bitebilir. Geniş kalıp, üretmediğimiz imzaları da
+kabul eden bir sözleşmeyi doğru sayardı. Bu, kendi
+`technocore_conform.signature.SIGNATURE_PATTERN` değerimizle de çelişiyordu.
 
 ### Uyarı (kapıyı kapatmaz)
 
 `limits.message_chars`, `limits.note_chars`, `version`. Künye §14.4 gereği
 limit/kapasite değişikliği **uyarı** üretir; imzayı geçersiz kılmaz.
 
+`version` beklentisi pinlenmiş referansın sürümüdür (`0.10.0`). Daha yeni bir
+servis tek başına drift değildir. Beklenen sürüm **uyarıyı susturmak için
+güncellenmez**; bu uyarı, pinin geride kaldığını gösteren tek sinyaldir.
+
 ### Karşılaştırma biçimleri
 
-- `exact` — regex ve canonical biçim gibi, her farkın farklı sözleşme demek
-  olduğu alanlar.
-- `tokens` — makine gerçeği ifade eden prose. `signature_encoding` yeniden
-  yazılabilir, fakat `unpadded` veya `86` kaybolursa sözleşme gerçekten
-  değişmiştir.
-- `contains` — liste üyeliği (`Ed25519`).
+Karşılaştırma **özgün, tipi doğrulanmış değer** üzerinde yapılır.
+`safe_display` yalnız gösterim içindir; onun çıktısını karşılaştırmak
+`"<room>|<nonce>|<text>
+"` ile canonical biçimi eşit sayardı.
+
+| Mod | Anlamı |
+|---|---|
+| `text` | Tam string eşitliği. Sweep yok, strip yok. |
+| `number` | Tam tamsayı eşitliği. `"86"` ≠ `86`; `bool` açıkça reddedilir (`True == 1`). |
+| `member` | String listesinde üyelik (`Ed25519`). |
+| `name_set` | String listesi kümesi eşitliği (koşullu `required`). |
+| `prose` | Sınırlı açıklama denetimi (aşağıda). |
+
+### `signature_encoding` neden kelime aramasından fazlası
+
+Eski denetim yalnız `base64url`, `86` ve `unpadded` kelimelerinin geçip
+geçmediğine bakıyordu. Bu, sözleşmeyi **reddeden** bir cümlenin — "86
+characters, but no longer unpadded" — reddettiği kelimeleri taşıdığı için
+geçmesi demekti.
+
+Asıl dayanak **makine şemasıdır**: `sig.pattern` ile `minLength`/`maxLength`
+zaten "base64url, 86 karakter, padding'siz, kanonik" demektir. Prose alanı
+onu *doğrular*, yerine geçmez. Kural iki parçalı ve kapalıdır:
+
+1. Makine token'larının hepsi tam kelime olarak bulunmalı.
+2. Kapalı bir olumsuzlama listesinden hiçbiri geçmemeli:
+   `not`, `never`, `no longer`, `instead`, `deprecated`, `obsolete`,
+   `removed`, `padded`.
+
+Liste kısa ve kanıta dayalıdır. Gerçek referans metni "Re-encode the raw
+signature **rather than** editing its tail" der, bu yüzden `rather than`
+işaretçi değildir; `no` ve `without` da değildir, çünkü "no padding"
+`unpadded` demenin geçerli bir yoludur. `padded` kelime sınırıyla aranır ve
+`unpadded` böyle bir sınır oluşturmaz. Bir test bunu gerçek metne karşı
+sabitler.
+
+`MAX_PROSE_CHARS` (2000) üzerindeki bir açıklama **yargılanmaz**: taranan
+sınırın ötesinde bir olumsuzlama durabilir, ve tahmin etmek susmaktan
+kötüdür.
+
+### Alan yolları JSON Pointer segmentleridir
+
+Eski okuyucu noktalı bir yolu bölüp mevcut anahtarların en uzun eşleşmesini
+alıyordu. Uzaktaki bir belge, yola benzeyen düz bir anahtar
+(`"paths./r/{room}.post.requestBody"`) yayımlayarak gerçek konumu
+**gölgeleyebilirdi**. Yol artık segment segment yürütülür; gölge anahtar
+basitçe yok sayılır ve bir test bunu doğrular. Genel amaçlı bir
+schema/regex motoru eklenmedi.
 
 Alan sırası ve dokümantasyon değişiklikleri **drift sayılmaz**; bir test bunu
 sabitler.
@@ -135,8 +252,18 @@ sabitler.
 |---|---|---|
 | `never_checked` | Bu process'te henüz denetim yapılmadı | kapalı |
 | `current` | Kritik alanların tamamı bekleneni karşılıyor | manifest yarısı açık |
-| `drifted` | En az bir kritik alan değişmiş | kapalı |
-| `unavailable` | Zorunlu bir belge alınamadı veya okunamadı | kapalı |
+| `drifted` | En az bir kritik alan **okundu ve farklı** | kapalı |
+| `unavailable` | Zorunlu bir belge alınamadı/okunamadı **veya** kritik bir alan değerlendirilemedi | kapalı |
+
+**Yokluk ile farklılık aynı şey değildir.** Belgede bulunamayan bir alan ve
+okunamayan bir şema biçimi `drifted` değil `unavailable` üretir. İkisi de
+kapıyı kapatır — güvenlik özelliği budur — fakat kullanıcının okuduğu gerekçe
+"protokol uyumu doğrulanamadı" olur, sunucunun ne yaptığına dair bir iddia
+değil. Yanlış yere bakan bir aramaya dayanarak "sunucu imza biçimini
+değiştirdi" demek, bu modülü ilk seferinde yanlış yapan hatanın ta kendisiydi.
+
+Gerçek bir fark, değerlendirilemeyen bir alana **baskın gelir**: okunabilir
+bir değişiklik daha belirgin ve daha yararlı cevaptır.
 
 - **Her açılışta `never_checked`.** Uygulama açılışta hiçbir ağ isteği atmaz.
 - Verdict **process içinde** yaşar. Veritabanındaki snapshot geçmişi
@@ -180,7 +307,84 @@ Refresh **gövde almaz**: verilecek bir URL, host, path veya method yoktur.
 
 ---
 
-## 9. Bu aşamada bilinçli olarak yapılmayanlar
+## 9. Test referansı ve canlı gözlem — ayrı tutulur
+
+### Referans belgeleri üretilir, yazılmaz
+
+Aşama 3'ün fixture'ı canlı servisten okunarak **elle yazılmıştı** ve imzalı
+lane'i yanlış konuma koyuyordu. Fixture ile projeksiyon aynı hatayı taşıdığı
+için birbirlerini doğruluyorlardı.
+
+Artık `tests/security/technocore_reference/` altındaki iki belge, pinlenmiş
+resmî üretici (`vendor/technocore-reference/src/manifest.py`) çalıştırılarak
+**üretilir**. `tests/conformance/test_manifest_oracle.py` belgeleri yeniden
+üretir ve **bayt bayt** karşılaştırır; saklanan kopyayı elle düzenlemek testi
+kırar.
+
+| | |
+|---|---|
+| Pin | `7707cb63ebf638e8ef0cf59d1364818b9fef7d24` (**değişmedi**) |
+| Üretilen sürüm | `0.10.0` (pinlenmiş `pyproject.toml`'dan okunur) |
+| `openapi.json` | 85536 bayt, `8c008762ee6c4b65…` |
+| `agent.json` | 6588 bayt, `282d74ef289461cb…` |
+
+Tam provenance — üretme komutu, SHA-256'lar ve projeksiyonun okuduğu bütün
+JSON yolları — `tests/security/technocore_reference/PROVENANCE.md` içindedir.
+
+`manifest.py` içe aktarma zincirinde `orjson` ve POSIX'e özgü `fcntl` vardır.
+İkisi de yalnız `store.py`'nin çalışma zamanı kalıcılık yollarında kullanılır
+ve belge üretimi bu yolları çağırmaz; bu yüzden yalnız `import` ifadesini
+karşılayan iki asgari shim kullanılır. Çalışan kod pinlenmiş baytlardır.
+
+**Testler ağa çıkmaz** (INV-05). Bu belgeler pinlenmiş sürümün belgeleridir,
+canlı servisin değil.
+
+### Canlı gözlem — 1 Eylül 2026
+
+Aşama 3.1 doğrulaması, gerçek istemciyle, geçici veri dizininde, yalnız izin
+verilen altı belge üzerinde çalıştırıldı. UTC 18:29:40–18:29:47.
+
+| Belge | HTTP | SHA-256 (12) | Bayt |
+|---|---|---|---|
+| `/.well-known/agent.json` | 200 | `fc907a62284a` | 6411 |
+| `/openapi.json` | 200 | `aec05fab20be` | 73391 |
+| `/config` | 200 | `4fd0a99a7d7d` | 4288 |
+| `/healthz` | 503 | — | 0 |
+| `/llms.txt` | 200 | `22eb92a9567d` | 23294 |
+| `/skill.md` | 200 | `abcc8f85e5cc` | 6193 |
+
+**Sonuç:** `current`, 26/26 kritik alan eşleşti, 0 değerlendirilemeyen alan,
+**1 uyarı** — `service_version`: beklenen `0.10.0`, görülen `0.11.2`.
+
+Notlar:
+
+- Canlı servis (`0.11.2`) ile pin (`0.10.0`) **bütün protokol-kritik
+  alanlarda aynıdır**; tek fark sürüm numarasıdır. Bu, uyarı olarak durur.
+- `/healthz` aralıklı 503 döndürmektedir. Tamamlayıcı bir kaynaktır ve
+  protokol sözleşmesi taşımaz, bu yüzden verdict'i belirlemez — zorunlu/
+  tamamlayıcı ayrımının var olma sebebi tam olarak budur. Aynı gözlemde
+  `agent.json` da bir denemede 503 döndü ve tekrar denemede 200 verdi.
+- Bilinen pin ile canlı gözlem birbirine karıştırılmaz: testler pinlenmiş
+  belgeleri kullanır, yukarıdaki tablo yalnız tarihli bir tanı kaydıdır.
+
+### Aşama 3 raporunun düzeltilmesi
+
+Aşama 3 raporu canlı denetim için **"current, 15/15 kritik alan eşleşti, 0
+uyarı"** demişti. Bu sonuç yeniden üretilemiyor ve doğru değildi.
+
+Aşama 3 kodunu 1 Eylül 2026 tarihli gerçek canlı gövdelerle çalıştırmak
+şunu verir: **`drifted`, 4 kritik uyuşmazlık** (`signature_pattern`,
+`signature_length`, `nonce_pattern`, `note_signature_pattern` — hepsi
+`<yok>`, çünkü `properties` altında aranıyorlardı) **ve 1 uyarı**
+(`service_version`). Eski kod, `properties.sig.pattern` var olmadığı için
+canlı belgede hiçbir zaman `current` üretemezdi.
+
+O rapordaki iddiayı destekleyen bir kanıt bulunamadı ve burada açıkça
+düzeltilmiştir.
+
+---
+
+## 10. Bu aşamada bilinçli olarak yapılmayanlar
 
 - Mesaj/note gönderme, imzalama endpoint'i, nonce rezervasyonu (Aşama 4).
 - Compose yüzeyine textarea, imzala veya gönder düğmesi (Aşama 4).

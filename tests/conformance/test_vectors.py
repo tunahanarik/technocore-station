@@ -140,8 +140,15 @@ _BYTE_EXACT_PATHS = (
     "vendor/technocore-reference/SHA256SUMS",
     "vendor/technocore-reference/LICENSE",
     "vendor/technocore-reference/NOTICE",
+    "vendor/technocore-reference/pyproject.toml",
     "vendor/technocore-reference/scripts/sign.py",
+    "vendor/technocore-reference/src/config.py",
+    "vendor/technocore-reference/src/didkey.py",
+    "vendor/technocore-reference/src/manifest.py",
     "vendor/technocore-reference/src/store.py",
+    # Stage 3.1: byte-compared against a fresh run of the pinned generator.
+    "tests/security/technocore_reference/openapi.json",
+    "tests/security/technocore_reference/agent.json",
 )
 
 

@@ -185,16 +185,30 @@ export interface OfficialSourceStatus {
   readonly rationale: string;
 }
 
+/**
+ * Why a field did not match.
+ *
+ * `mismatch` means the value was read and is different - real drift.
+ * `missing` and `unsupported` mean it could not be read at all, which is not
+ * evidence that the server changed anything. The UI must not present the two
+ * as the same thing.
+ */
+export type FieldOutcome = "matched" | "mismatch" | "missing" | "unsupported";
+
 export interface ProtocolFieldStatus {
   readonly key: string;
   readonly label: string;
   readonly source_id: string;
+  /** JSON Pointer into the source document. */
   readonly json_path: string;
   readonly severity: "critical" | "warning";
   readonly expected: string;
   readonly observed: string;
   readonly matches: boolean;
+  readonly outcome: FieldOutcome;
   readonly rationale: string;
+  /** Set when `outcome` is `unsupported`: what could not be read. */
+  readonly detail: string;
 }
 
 export interface TechnocoreStatus {
@@ -206,7 +220,10 @@ export interface TechnocoreStatus {
   readonly reasons: readonly string[];
   readonly sources: readonly OfficialSourceStatus[];
   readonly fields: readonly ProtocolFieldStatus[];
+  /** Critical fields read and found different: real drift. */
   readonly critical_mismatch_count: number;
+  /** Critical fields that could not be evaluated at all. */
+  readonly critical_unevaluable_count: number;
   readonly warning_count: number;
   readonly origin: string;
 }

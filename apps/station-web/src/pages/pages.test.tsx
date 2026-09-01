@@ -148,15 +148,21 @@ const TECHNOCORE_CURRENT: TechnocoreStatus = {
       key: "signature_pattern",
       label: "Imza bicimi",
       source_id: "openapi",
-      json_path: "paths./r/{room}.post",
+      // The real location and the real pattern. The earlier fixture carried
+      // the wrong ones on both counts, which is what Stage 3.1 fixed.
+      json_path:
+        "/paths/~1r~1{room}/post/requestBody/content/application~1json/schema/dependentSchemas/did/properties/sig/pattern",
       severity: "critical",
-      expected: "^[A-Za-z0-9_-]{86}$",
-      observed: "^[A-Za-z0-9_-]{86}$",
+      expected: "^[A-Za-z0-9_-]{85}[AQgw]$",
+      observed: "^[A-Za-z0-9_-]{85}[AQgw]$",
       matches: true,
-      rationale: "Padding'siz base64url, tam 86 karakter.",
+      outcome: "matched",
+      rationale: "Padding'siz base64url, tam 86 karakter, son karakter AQgw.",
+      detail: "",
     },
   ],
   critical_mismatch_count: 0,
+  critical_unevaluable_count: 0,
   warning_count: 0,
   origin: "https://technocore.chat",
 };
@@ -177,15 +183,45 @@ const TECHNOCORE_DRIFTED: TechnocoreStatus = {
   state: "drifted",
   manifest_current: false,
   last_success_at: null,
-  reasons: ["Imza bicimi: beklenen '^[A-Za-z0-9_-]{86}$', gorulen '^[A-Za-z0-9+/]{88}$'"],
+  reasons: [
+    "Imza bicimi: beklenen '^[A-Za-z0-9_-]{85}[AQgw]$', gorulen '^[A-Za-z0-9+/]{88}$'",
+  ],
   fields: [
     {
       ...TECHNOCORE_CURRENT.fields[0]!,
       observed: "^[A-Za-z0-9+/]{88}$",
       matches: false,
+      outcome: "mismatch",
     },
   ],
   critical_mismatch_count: 1,
+};
+
+/**
+ * A check that reached the documents but could not read a critical field.
+ *
+ * The distinction the UI has to keep: this is not evidence that the server
+ * changed anything, and the panel must not say it is.
+ */
+const TECHNOCORE_UNEVALUABLE: TechnocoreStatus = {
+  ...TECHNOCORE_CURRENT,
+  state: "unavailable",
+  manifest_current: false,
+  last_success_at: null,
+  reasons: [
+    "Imza bicimi: sema bicimi okunamadi (desteklenmeyen sema anahtari: $ref); protokol uyumu dogrulanamadi",
+  ],
+  fields: [
+    {
+      ...TECHNOCORE_CURRENT.fields[0]!,
+      observed: "<yok>",
+      matches: false,
+      outcome: "unsupported",
+      detail: "desteklenmeyen sema anahtari: $ref",
+    },
+  ],
+  critical_mismatch_count: 0,
+  critical_unevaluable_count: 1,
 };
 
 const NOT_CONFORMANT: ConformanceStatus = {
@@ -623,6 +659,47 @@ describe("Read-only Technocore monitoring", () => {
     expect(await screen.findByText("Suruklenme tespit edildi")).toBeInTheDocument();
     expect(screen.getByText("Kritik protokol suruklenmesi")).toBeInTheDocument();
     expect(screen.getByText("Kritik")).toBeInTheDocument();
+  });
+
+  it("does not call an unreadable field a change the server made", async () => {
+    // The Stage 3.1 regression, at the UI. A critical field that could not be
+    // read must be reported as unverified - not as "the server changed the
+    // signature format", which the panel used to say on exactly this input.
+    stubIdentity(NO_IDENTITY, CONFORMANT, TECHNOCORE_UNEVALUABLE);
+    const { container } = render(<EvidencePage />);
+
+    expect(await screen.findByText("Protokol uyumu dogrulanamadi")).toBeInTheDocument();
+    expect(screen.getByText("Okunamadi")).toBeInTheDocument();
+    expect(
+      screen.getByText(/desteklenmeyen sema anahtari/),
+    ).toBeInTheDocument();
+
+    const text = (container.textContent ?? "").toLowerCase();
+    expect(text).not.toContain("kritik protokol suruklenmesi");
+    expect(text).not.toContain("degismis");
+  });
+
+  it("reports document access separately from the protocol verdict", async () => {
+    // Two independent questions. A fetched document does not yet mean the
+    // protocol matches, and an unreadable schema is not a network problem.
+    stubIdentity(NO_IDENTITY, CONFORMANT, TECHNOCORE_UNEVALUABLE);
+    render(<EvidencePage />);
+    await screen.findByText("Protokol uyumu dogrulanamadi");
+
+    expect(screen.getByText("1. Belge erisimi")).toBeInTheDocument();
+    expect(screen.getByText("1/1 resmi belge alindi.")).toBeInTheDocument();
+    expect(screen.getByText("2. Protokol degerlendirmesi")).toBeInTheDocument();
+  });
+
+  it("shows the real signed-lane pointer, not the properties one", async () => {
+    // The wrong pointer is what produced the false alarm; the UI shows where
+    // the value was actually looked for, so the claim is checkable by hand.
+    stubIdentity(NO_IDENTITY, CONFORMANT, TECHNOCORE_DRIFTED);
+    render(<EvidencePage />);
+    await screen.findByText("Suruklenme tespit edildi");
+
+    expect(screen.getByText(/dependentSchemas/)).toBeInTheDocument();
+    expect(screen.getByText("^[A-Za-z0-9_-]{85}[AQgw]$")).toBeInTheDocument();
   });
 
   it("states plainly that the check only reads", async () => {
