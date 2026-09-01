@@ -379,6 +379,15 @@ _LANE_POINTERS: Final[dict[Lane, tuple[str, ...]]] = {
 }
 
 
+def _label(prefix: str, base: str) -> str:
+    """``"Note imza bicimi"`` for the note lane, ``"Imza bicimi"`` for the other.
+
+    The lane prefix carries the capital when there is one, so the base text is
+    written lowercase and capitalised only when it starts the label.
+    """
+    return f"{prefix}{base}" if prefix else base[0].upper() + base[1:]
+
+
 def _signed_lane_fields(
     lane: Lane, prefix: str, label_prefix: str
 ) -> tuple[ProtocolField, ...]:
@@ -392,7 +401,7 @@ def _signed_lane_fields(
     return (
         ProtocolField(
             key=f"{prefix}signature_type",
-            label=f"{label_prefix}imza alan tipi",
+            label=_label(label_prefix, "imza alan tipi"),
             source_id=source,
             lane=lane,
             pointer=("sig", "type"),
@@ -406,7 +415,7 @@ def _signed_lane_fields(
         ),
         ProtocolField(
             key=f"{prefix}signature_pattern",
-            label=f"{label_prefix}imza bicimi",
+            label=_label(label_prefix, "imza bicimi"),
             source_id=source,
             lane=lane,
             pointer=("sig", "pattern"),
@@ -423,7 +432,7 @@ def _signed_lane_fields(
         ),
         ProtocolField(
             key=f"{prefix}signature_min_length",
-            label=f"{label_prefix}imza en az uzunluk",
+            label=_label(label_prefix, "imza en az uzunluk"),
             source_id=source,
             lane=lane,
             pointer=("sig", "minLength"),
@@ -437,7 +446,7 @@ def _signed_lane_fields(
         ),
         ProtocolField(
             key=f"{prefix}signature_max_length",
-            label=f"{label_prefix}imza en fazla uzunluk",
+            label=_label(label_prefix, "imza en fazla uzunluk"),
             source_id=source,
             lane=lane,
             pointer=("sig", "maxLength"),
@@ -448,7 +457,7 @@ def _signed_lane_fields(
         ),
         ProtocolField(
             key=f"{prefix}nonce_type",
-            label=f"{label_prefix}nonce alan tipi",
+            label=_label(label_prefix, "nonce alan tipi"),
             source_id=source,
             lane=lane,
             pointer=("nonce", "type"),
@@ -462,7 +471,7 @@ def _signed_lane_fields(
         ),
         ProtocolField(
             key=f"{prefix}nonce_pattern",
-            label=f"{label_prefix}nonce bicimi",
+            label=_label(label_prefix, "nonce bicimi"),
             source_id=source,
             lane=lane,
             pointer=("nonce", "pattern"),
@@ -476,7 +485,7 @@ def _signed_lane_fields(
         ),
         ProtocolField(
             key=f"{prefix}signed_fields_required",
-            label=f"{label_prefix}zorunlu imza alanlari",
+            label=_label(label_prefix, "zorunlu imza alanlari"),
             source_id=source,
             lane=lane,
             pointer=(),
@@ -501,7 +510,7 @@ def _did_fields(
     return (
         ProtocolField(
             key=f"{prefix}did_pattern",
-            label=f"{label_prefix}DID bicimi",
+            label=_label(label_prefix, "DID bicimi"),
             source_id=SourceId.OPENAPI,
             lane=lane,
             pointer=("properties", "did", "pattern"),
@@ -515,7 +524,7 @@ def _did_fields(
         ),
         ProtocolField(
             key=f"{prefix}did_max_length",
-            label=f"{label_prefix}DID uzunlugu",
+            label=_label(label_prefix, "DID uzunlugu"),
             source_id=SourceId.OPENAPI,
             lane=lane,
             pointer=("properties", "did", "maxLength"),
