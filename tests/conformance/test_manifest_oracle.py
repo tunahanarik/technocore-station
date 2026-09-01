@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+import types
 from pathlib import Path
 from typing import Any
 
@@ -180,3 +181,38 @@ def test_generation_leaves_no_upstream_module_imported(
     del generated
     for name in ("config", "didkey", "store", "manifest"):
         assert name not in sys.modules, f"{name} leaked into sys.modules"
+
+
+def test_generation_leaves_no_import_shim_behind(vendor_root: Path) -> None:
+    """A shim that outlives generation would silently weaken later tests.
+
+    ``orjson`` is not a dependency of this project and POSIX ``fcntl`` does not
+    exist on Windows. A leftover fake makes a later ``import orjson`` succeed
+    with a two-function stub instead of failing honestly, and makes an
+    assertion that ``fcntl`` is unavailable stop testing anything.
+    """
+    for name in ("fcntl", "orjson"):
+        sys.modules.pop(name, None)
+
+    generate_documents(vendor_root)
+
+    for name in ("fcntl", "orjson"):
+        assert name not in sys.modules, f"{name} shim outlived generation"
+
+
+def test_a_pre_existing_module_is_not_removed(vendor_root: Path) -> None:
+    """Only what this oracle installed is taken away again.
+
+    On a platform where ``fcntl`` is real, generation must hand it back rather
+    than unloading someone else's module.
+    """
+    sentinel = types.ModuleType("fcntl")
+    sentinel.LOCK_EX = 2  # type: ignore[attr-defined]
+    sentinel.LOCK_UN = 8  # type: ignore[attr-defined]
+    sentinel.flock = lambda *args, **kwargs: None  # type: ignore[attr-defined]
+    sys.modules["fcntl"] = sentinel
+    try:
+        generate_documents(vendor_root)
+        assert sys.modules.get("fcntl") is sentinel
+    finally:
+        sys.modules.pop("fcntl", None)

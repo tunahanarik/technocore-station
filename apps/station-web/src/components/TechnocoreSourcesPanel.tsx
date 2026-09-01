@@ -68,6 +68,21 @@ const OUTCOME_TONE: Record<FieldOutcome, StatusTone> = {
   unsupported: "pending",
 };
 
+/**
+ * What to show where the observed value would go.
+ *
+ * `missing` and `unsupported` both mean "not compared", but they are not the
+ * same finding: one says the document does not carry the field, the other
+ * says it carries a shape this build cannot read. Collapsing them into one
+ * word sends whoever is debugging to the wrong place.
+ */
+const OUTCOME_VALUE: Record<FieldOutcome, string> = {
+  matched: "",
+  mismatch: "",
+  missing: "belgede bulunamadi",
+  unsupported: "sema okunamadi",
+};
+
 const AUTHORITY_LABEL: Record<number, string> = {
   1: "Seviye 1 · makine-okunabilir resmi belge",
   2: "Seviye 2 · resmi dokumantasyon",
@@ -362,11 +377,11 @@ export function TechnocoreSourcesPanel() {
                       <dd className="font-mono">{field.expected}</dd>
                     </div>
                     <div className="flex flex-wrap justify-between gap-2">
-                      <dt>{field.outcome === "mismatch" ? "Gorulen" : "Durum"}</dt>
+                      <dt>{OUTCOME_VALUE[field.outcome] === "" ? "Gorulen" : "Durum"}</dt>
                       <dd className="font-mono">
-                        {field.outcome === "mismatch"
+                        {OUTCOME_VALUE[field.outcome] === ""
                           ? field.observed
-                          : "okunamadi"}
+                          : OUTCOME_VALUE[field.outcome]}
                       </dd>
                     </div>
                     <div className="flex flex-wrap justify-between gap-2">
