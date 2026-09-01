@@ -701,15 +701,15 @@ gerçek belgeyle çalıştırıldığında dört kritik alan `<yok>` görünüyo
 |---|---|
 | ruff | geçti |
 | mypy strict | 51 dosya, 0 hata |
-| pytest | **603 geçti**, 0 hata |
+| pytest | **605 geçti**, 0 hata |
 | ESLint | geçti |
 | TypeScript + production build | geçti |
-| Vitest | **57 geçti** |
+| Vitest | **58 geçti** |
 | vendor SHA-256 | 8/8 OK |
 | conformance self-test | PASS |
 | referans belge bayt karşılaştırması | 2/2 OK |
 
-**Toplam 660 test** (603 backend + 57 frontend). Aşama 3 tabanı 582'ydi.
+**Toplam 663 test** (605 backend + 58 frontend). Aşama 3 tabanı 582'ydi.
 
 Not: `test_git_hands_a_fresh_checkout_the_exact_pinned_bytes` çalışma ağacını
 **commit edilmiş blob** ile karşılaştırır, bu yüzden yeni byte-exact dosyalar
@@ -754,6 +754,22 @@ alan eşleşti, 0 uyarı" iddiasını destekleyen bir kanıt bulunamadı ve iddi
 yeniden üretilemedi. Yukarıda ve `docs/read-only-technocore.md` §9'da açıkça
 düzeltilmiştir. O turda gerçekte hangi gövdelerin görüldüğü bilinmemektedir;
 kullanıcı verisi içeren veritabanı bu kaydı aramak için **açılmamıştır**.
+
+### PR review'unda bulunan ve düzeltilen iki kusur
+
+GitHub Copilot review'u (PR #5) iki gerçek sorun buldu; ikisi de regresyon
+testiyle birlikte düzeltildi (PR #6):
+
+1. **UI, `missing` ile `unsupported` ayrımını gösterirken kayboluyordu.** Pill
+   doğru etiketi ("Bulunamadi" / "Okunamadi") veriyordu, fakat değer satırı
+   her ikisinde de "okunamadi" yazıyordu. İki bulgu farklı yere bakmayı
+   gerektirir; artık "belgede bulunamadi" ve "sema okunamadi" ayrı gösterilir.
+2. **`fcntl`/`orjson` shim'leri `sys.modules` içinde kalıyordu.** Üretim
+   sonrası temizlenmedikleri için sonraki bir test `import orjson` yaptığında
+   iki fonksiyonluk sahte modülü alabilir, `fcntl`'in Windows'ta bulunmadığını
+   iddia eden bir test de sessizce hiçbir şeyi test etmez hâle gelirdi. Artık
+   yalnız **bu çağrının kurduğu** shim'ler geri alınır; hâlihazırda yüklü bir
+   modüle dokunulmaz.
 
 ### Açık riskler
 

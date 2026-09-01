@@ -20,8 +20,8 @@ Why the two shims
 persistence functions** - ``flock`` around the counter file, ``orjson`` for
 the record log - and document generation calls none of them. Two minimal
 modules satisfy the imports so the real generator can run on Windows; no
-shimmed behaviour is exercised while a document is produced. The bytes that
-run are the pinned bytes.
+shimmed behaviour is exercised while a document is produced, and both are
+removed again afterwards. The bytes that run are the pinned bytes.
 
 ``didkey`` additionally imports PyNaCl, which this project already carries as
 a test-only dependency for the AC-05 independent verifier. It is not shimmed.
@@ -55,14 +55,25 @@ MAX_BODY_BYTES = 256 << 10
 _MODULE_NAMES = ("config", "didkey", "store", "manifest")
 
 
-def _install_shims() -> None:
-    """Satisfy two imports whose behaviour document generation never uses."""
+def _install_shims() -> set[str]:
+    """Satisfy two imports whose behaviour document generation never uses.
+
+    Returns the names this call actually installed, so the caller can remove
+    exactly those again. A shim left in ``sys.modules`` would outlive the
+    generation that needed it: a later test importing ``orjson`` would get a
+    two-function fake instead of failing honestly, and one asserting that
+    POSIX-only ``fcntl`` is unavailable on Windows would quietly stop testing
+    anything. Nothing that was already imported is touched.
+    """
+    installed: set[str] = set()
+
     if "fcntl" not in sys.modules:
         fcntl = types.ModuleType("fcntl")
         fcntl.LOCK_EX = 2  # type: ignore[attr-defined]
         fcntl.LOCK_UN = 8  # type: ignore[attr-defined]
         fcntl.flock = lambda *args, **kwargs: None  # type: ignore[attr-defined]
         sys.modules["fcntl"] = fcntl
+        installed.add("fcntl")
 
     if "orjson" not in sys.modules:
         orjson = types.ModuleType("orjson")
@@ -70,6 +81,9 @@ def _install_shims() -> None:
         orjson.loads = lambda raw, *a, **k: json.loads(raw)  # type: ignore[attr-defined]
         orjson.JSONDecodeError = ValueError  # type: ignore[attr-defined]
         sys.modules["orjson"] = orjson
+        installed.add("orjson")
+
+    return installed
 
 
 def pinned_version(vendor_root: Path) -> str:
@@ -93,7 +107,7 @@ def generate_documents(vendor_root: Path) -> dict[str, Any]:
     against a modified reference, exactly like the sweep and signer oracles.
     """
     verify_vendor_hashes(vendor_root)
-    _install_shims()
+    shims = _install_shims()
 
     source_root = vendor_root / "src"
     saved = {name: sys.modules.pop(name, None) for name in _MODULE_NAMES}
@@ -122,6 +136,10 @@ def generate_documents(vendor_root: Path) -> dict[str, Any]:
             sys.modules.pop(name, None)
             if saved[name] is not None:
                 sys.modules[name] = saved[name]
+        # The shims go too. The pinned modules that referenced them have just
+        # been dropped, so nothing is left holding one.
+        for name in shims:
+            sys.modules.pop(name, None)
 
     return {"openapi": openapi, "agent": agent, "version": version}
 

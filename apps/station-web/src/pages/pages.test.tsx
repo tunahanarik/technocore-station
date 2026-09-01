@@ -224,6 +224,21 @@ const TECHNOCORE_UNEVALUABLE: TechnocoreStatus = {
   critical_unevaluable_count: 1,
 };
 
+/** Same verdict, different cause: the field is simply not in the document. */
+const TECHNOCORE_FIELD_MISSING: TechnocoreStatus = {
+  ...TECHNOCORE_UNEVALUABLE,
+  reasons: [
+    "Imza bicimi: belgede bulunamadi (/paths/~1r~1{room}/post/...); protokol uyumu dogrulanamadi",
+  ],
+  fields: [
+    {
+      ...TECHNOCORE_UNEVALUABLE.fields[0]!,
+      outcome: "missing",
+      detail: "",
+    },
+  ],
+};
+
 const NOT_CONFORMANT: ConformanceStatus = {
   ...CONFORMANT,
   passed: false,
@@ -659,6 +674,19 @@ describe("Read-only Technocore monitoring", () => {
     expect(await screen.findByText("Suruklenme tespit edildi")).toBeInTheDocument();
     expect(screen.getByText("Kritik protokol suruklenmesi")).toBeInTheDocument();
     expect(screen.getByText("Kritik")).toBeInTheDocument();
+  });
+
+  it("distinguishes a missing field from an unreadable schema", async () => {
+    // Both mean "not compared", but they send a reader to different places:
+    // one says the document does not carry the field, the other says it
+    // carries a shape this build cannot read.
+    stubIdentity(NO_IDENTITY, CONFORMANT, TECHNOCORE_FIELD_MISSING);
+    render(<EvidencePage />);
+    await screen.findByText("Protokol uyumu dogrulanamadi");
+
+    expect(screen.getByText("Bulunamadi")).toBeInTheDocument();
+    expect(screen.getByText("belgede bulunamadi")).toBeInTheDocument();
+    expect(screen.queryByText("sema okunamadi")).not.toBeInTheDocument();
   });
 
   it("does not call an unreadable field a change the server made", async () => {
