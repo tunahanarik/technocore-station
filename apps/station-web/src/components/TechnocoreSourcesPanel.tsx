@@ -2,7 +2,12 @@ import { Alert, Button, Separator } from "@heroui/react";
 import { useCallback, useEffect, useState } from "react";
 
 import { fetchTechnocore, refreshTechnocore } from "../api/client";
-import type { DriftState, FieldOutcome, TechnocoreStatus } from "../api/types";
+import type {
+  DriftState,
+  FieldOutcome,
+  ProtocolFieldStatus,
+  TechnocoreStatus,
+} from "../api/types";
 import { StatusPill, type StatusTone } from "./StatusPill";
 
 /**
@@ -82,6 +87,26 @@ const OUTCOME_VALUE: Record<FieldOutcome, string> = {
   missing: "belgede bulunamadi",
   unsupported: "sema okunamadi",
 };
+
+/**
+ * A mismatch does not always have a value to show.
+ *
+ * Most are a plain difference and print what the document said. Some are a
+ * demonstrated contradiction - two bounds that cannot both hold, a type that
+ * refuses what we send - and there is no single observed value behind them.
+ * Printing the reader's `<yok>` there would say "the field is missing", which
+ * is a different and wrong finding; the explanation sits in `detail`.
+ */
+function fieldValueLabel(field: ProtocolFieldStatus): string {
+  if (OUTCOME_VALUE[field.outcome] !== "") return "Durum";
+  return field.detail === "" ? "Gorulen" : "Durum";
+}
+
+function fieldValueText(field: ProtocolFieldStatus): string {
+  const byOutcome = OUTCOME_VALUE[field.outcome];
+  if (byOutcome !== "") return byOutcome;
+  return field.detail === "" ? field.observed : "sema kendisiyle celisiyor";
+}
 
 const AUTHORITY_LABEL: Record<number, string> = {
   1: "Seviye 1 · makine-okunabilir resmi belge",
@@ -366,9 +391,11 @@ export function TechnocoreSourcesPanel() {
                     </span>
                   </div>
                   <p className="text-xs text-muted">{field.rationale}</p>
-                  {field.outcome === "unsupported" && field.detail !== "" && (
+                  {field.detail !== "" && (
                     <p className="text-xs text-muted">
-                      {`Okunamama sebebi: ${field.detail}`}
+                      {field.outcome === "unsupported"
+                        ? `Okunamama sebebi: ${field.detail}`
+                        : `Celiski: ${field.detail}`}
                     </p>
                   )}
                   <dl className="flex flex-col gap-1 text-xs text-muted">
@@ -377,12 +404,8 @@ export function TechnocoreSourcesPanel() {
                       <dd className="font-mono">{field.expected}</dd>
                     </div>
                     <div className="flex flex-wrap justify-between gap-2">
-                      <dt>{OUTCOME_VALUE[field.outcome] === "" ? "Gorulen" : "Durum"}</dt>
-                      <dd className="font-mono">
-                        {OUTCOME_VALUE[field.outcome] === ""
-                          ? field.observed
-                          : OUTCOME_VALUE[field.outcome]}
-                      </dd>
+                      <dt>{fieldValueLabel(field)}</dt>
+                      <dd className="font-mono">{fieldValueText(field)}</dd>
                     </div>
                     <div className="flex flex-wrap justify-between gap-2">
                       <dt>Konum</dt>

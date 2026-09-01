@@ -165,6 +165,20 @@ kontrolü ve CSRF katmanından gelir.
 | SI-103 | Yalnız açıklama/başlık/örnek değişimi protokol alarmı üretmez | `current` | `::test_annotations_anywhere_in_the_body_are_not_a_protocol_change` | A3.1 |
 | SI-104 | Gövde şeması anahtar sırası değişimi drift değildir | `current` | `::test_reordering_the_body_schema_keys_is_not_a_protocol_change` | A3.1 |
 | SI-105 | Her iki lane aynı değerlendiriciden geçer | mesaj + note parametrik | `::test_*` (`_LANES` ile parametrik) | A3.1 |
+| SI-106 | Gövde/koşullu düğüm `type` değeri okunur; `"object"` değilse kapı kapanır | `drifted` | `::test_a_schema_that_refuses_the_signed_body_is_never_current[body-type-not-object]` | A3.1 |
+| SI-107 | Gövde `required` planlanan gövdede olmayan ad isterse kapı kapanır | `drifted` | `::test_a_schema_that_refuses_the_signed_body_is_never_current[body-requires-unknown-field]` | A3.1 |
+| SI-108 | İmzalı gövdenin taşıdığı **her** alana bağlı `dependentSchemas` uygulanır | `drifted` | `::test_a_dependency_on_any_carried_field_applies` | A3.1 |
+| SI-109 | Koşullu `properties` içindeki `did` de denetlenir | `unavailable` | `::test_a_schema_that_refuses_the_signed_body_is_never_current[conditional-did-negated]` | A3.1 |
+| SI-110 | Bozuk uzunluk sınırı "sınır yok" diye okunmaz | `unavailable` | `::test_a_malformed_bound_is_not_read_as_no_bound` | A3.1 |
+| SI-111 | `null`/`false`/`0` eksik anahtardan ayrılır | `unavailable` | `::test_a_type_that_is_not_a_string_is_unreadable`, `::test_a_required_list_that_is_not_a_list_of_names_is_unreadable` | A3.1 |
+| SI-112 | `bool` uzunluk olarak kabul edilmez | `unavailable` | `::test_a_boolean_is_not_accepted_as_a_length` | A3.1 |
+| SI-113 | Negatif uzunluk sınırı geçersizdir | `unavailable` | `::test_a_negative_length_bound_is_unreadable` | A3.1 |
+| SI-114 | Station'ın gönderdiği uzunluğu dışlayan sınır kapıyı kapatır | `current` değil | `::test_a_bound_excluding_what_station_sends_closes_the_gate` | A3.1 |
+| SI-115 | İzin verilen her doğrulama anahtarı fiilen değerlendirilir | her anahtar için kapanma | `::test_every_allowed_validation_keyword_is_actually_evaluated` | A3.1 |
+| SI-116 | Yalnız `/healthz` 503 iken protokol verdict'i etkilenmez | `current`, kaynak hatası görünür | `::test_only_health_returning_503_leaves_the_protocol_verdict_intact` | A3.1 |
+| SI-117 | `/openapi.json` 503 iken kapı kapanır | `unavailable` | `::test_openapi_returning_503_closes_the_gate` | A3.1 |
+| SI-118 | Başarılı kontrolden sonra gelen 503 eski verdict'i geri getirmez | `unavailable`, eski zaman görünür | `::test_a_503_after_a_success_shows_the_old_time_but_not_the_old_verdict` | A3.1 |
+| SI-119 | Zorunlu belge denemesi sınırlıdır | 3 deneme | `::test_a_required_document_is_retried_a_bounded_number_of_times` | A3.1 |
 
 ## 9b. Aşama 2B değişmezleri (uygulandı)
 

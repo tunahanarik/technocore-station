@@ -239,6 +239,23 @@ const TECHNOCORE_FIELD_MISSING: TechnocoreStatus = {
   ],
 };
 
+/** A mismatch proved by contradiction rather than by a differing value. */
+const TECHNOCORE_CONFLICT: TechnocoreStatus = {
+  ...TECHNOCORE_DRIFTED,
+  reasons: [
+    "DID bicimi: did: uzunluk araligi bos (en az 100, en fazla 56); hicbir deger ikisini birden saglayamaz",
+  ],
+  fields: [
+    {
+      ...TECHNOCORE_DRIFTED.fields[0]!,
+      observed: "<yok>",
+      outcome: "mismatch",
+      detail:
+        "did: uzunluk araligi bos (en az 100, en fazla 56); hicbir deger ikisini birden saglayamaz",
+    },
+  ],
+};
+
 const NOT_CONFORMANT: ConformanceStatus = {
   ...CONFORMANT,
   passed: false,
@@ -674,6 +691,19 @@ describe("Read-only Technocore monitoring", () => {
     expect(await screen.findByText("Suruklenme tespit edildi")).toBeInTheDocument();
     expect(screen.getByText("Kritik protokol suruklenmesi")).toBeInTheDocument();
     expect(screen.getByText("Kritik")).toBeInTheDocument();
+  });
+
+  it("does not print a missing-value marker for a demonstrated contradiction", async () => {
+    // A conflict is a mismatch with no single observed value behind it.
+    // Showing the reader's `<yok>` would say "the field is missing", which is
+    // a different finding; the explanation belongs in the detail line.
+    stubIdentity(NO_IDENTITY, CONFORMANT, TECHNOCORE_CONFLICT);
+    const { container } = render(<EvidencePage />);
+    await screen.findByText("Suruklenme tespit edildi");
+
+    expect(screen.getByText("sema kendisiyle celisiyor")).toBeInTheDocument();
+    expect(screen.getByText(/^Celiski: /)).toBeInTheDocument();
+    expect(container.textContent ?? "").not.toContain("<yok>");
   });
 
   it("distinguishes a missing field from an unreadable schema", async () => {

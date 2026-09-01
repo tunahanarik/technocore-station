@@ -113,6 +113,11 @@ sürece burada tutulurlar.
 | IMP-246 | `anyOf` yalnız referansın yayımladığı `required` dalları biçiminde kabul edilir | "Yalnız kısıt ekleyebilir" doğru fakat konu dışı: eklediği kısıt bizi reddedebilir |
 | IMP-247 | Açıklama anahtarları kısıtlardan ayrı tutulur | Sabit anahtar listesi kullanan bir denetimde bu ayrım olmadan her metin düzeltmesi yazma kapısını kapatırdı |
 | IMP-248 | `tests/` de projenin ruff kural setine bağlandı (kök `ruff.toml`) | Ruff yapılandırmayı dosyadan yukarı yürüyerek bulur; `tests/` varsayılan sete düşüyor, gerçekten zorunlu olan `S` kurallarını hiç çalıştırmıyordu |
+| IMP-249 | İzin listesindeki anahtarın **değeri** de denetlenir | Adı denetleyip değerini atlamak, tek anahtarlık on bir mutasyonun `current` raporlamasına yol açtı |
+| IMP-250 | Değerlendirmenin ölçütü **planlanan imzalı gövdedir** | Bir kısıt alışılmadık olduğu için değil, göndereceğimiz değeri dışladığı için yanlıştır; bu karşılaştırma kendi sözleşmemizden bir sayı gerektirir |
+| IMP-251 | İmzalı gövdenin taşıdığı her alana bağlı `dependentSchemas` uygulanır | `did` dışındaki bağımlılıklar otomatik olarak etkisiz değildir; imzalı gövde `sig`, `nonce` ve payload alanını da taşır |
+| IMP-252 | Bozuk şema `drifted` değil `unavailable` | `maxLength: "86"` okunabilir bir sözleşme farkı değil, bozuk bir şemadır; "sunucu şunu yaptı" demek elimizde olmayan kanıtı iddia etmektir |
+| IMP-253 | `null`/`false`/`0` eksik anahtardan ayrılır | JSON'da her biri belirli bir şey söyler; "yok" saymak permissive yönde tahmin etmektir |
 
 ## 3. Yeni ADR nasıl eklenir
 

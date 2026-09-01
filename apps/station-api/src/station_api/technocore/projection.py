@@ -67,7 +67,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Final, assert_never
+from typing import Any, Final, assert_never, cast
 
 from technocore_conform import (
     DID_KEY_PREFIX,
@@ -365,153 +365,218 @@ def _unknown_keys(node: dict[str, Any], understood: frozenset[str]) -> list[str]
     return sorted(set(node) - understood - ANNOTATION_KEYS)
 
 
-def _constraints(node: dict[str, Any]) -> dict[str, Any]:
-    """A field node with its annotations removed."""
-    return {key: value for key, value in node.items() if key not in ANNOTATION_KEYS}
+def _read_type(node: dict[str, Any], where: str) -> Reading:
+    """``type`` if present, checked as a value rather than as a name.
+
+    Absent is fine - the reference does not put a ``type`` on every node. A
+    ``type`` that is not a string is a malformed schema, not a missing key:
+    ``null``, ``0`` and ``false`` all mean something specific in JSON and none
+    of them is a type.
+    """
+    if "type" not in node:
+        return Reading(value=None)
+    published = node["type"]
+    if not isinstance(published, str):
+        return Reading(problem=f"{where}.type bir string degil: {published!r}")
+    return Reading(value=published)
+
+
+def _read_name_list(node: dict[str, Any], key: str, where: str) -> Reading:
+    """A list-of-names keyword, checked as a value.
+
+    ``required: null`` is not the same as no ``required`` at all, and treating
+    the two alike is how a malformed schema slipped through as valid.
+    """
+    if key not in node:
+        return Reading(value=None)
+    published = node[key]
+    if not isinstance(published, list) or not all(
+        isinstance(name, str) for name in published
+    ):
+        return Reading(problem=f"{where}.{key} bir ad listesi degil: {published!r}")
+    return Reading(value=published)
+
+
+def _read_bound(node: dict[str, Any], key: str, where: str) -> Reading:
+    """A length bound, checked as a value.
+
+    Returning "no bound" for a malformed one would be the dangerous reading:
+    ``maxLength: "1"`` would then look like no ceiling at all. ``bool`` is
+    rejected explicitly because it is an ``int`` subclass in Python and
+    ``True == 1``; a published ``true`` is not a length.
+    """
+    if key not in node:
+        return Reading(value=None)
+    published = node[key]
+    if isinstance(published, bool) or not isinstance(published, int):
+        return Reading(problem=f"{where}.{key} bir sayi degil: {published!r}")
+    if published < 0:
+        return Reading(problem=f"{where}.{key} negatif: {published!r}")
+    return Reading(value=published)
 
 
 def _check_field_node(node: object, where: str) -> Reading:
-    """A single field's schema carries only keywords we can read.
+    """One field's schema: allowed keywords, and every value they carry.
 
-    This is what stops ``"sig": {"pattern": ..., "not": {}}`` from passing.
-    The pattern is right there and correct; the node still matches nothing.
+    Naming the keywords was only half of it. ``pattern: null`` and
+    ``maxLength: "1"`` both sit under allowed names and neither is a
+    constraint this module can honour, so both make the node unreadable.
     """
     if not isinstance(node, dict):
         return Reading(problem=f"{where} bir nesne degil")
+
     unknown = _unknown_keys(node, UNDERSTOOD_FIELD_KEYS)
     if unknown:
         return Reading(
             problem=f"{where} degerlendirilemeyen anahtar tasiyor: {', '.join(unknown)}"
         )
+
+    published_type = _read_type(node, where)
+    if published_type.problem:
+        return published_type
+
+    if "pattern" in node and not isinstance(node["pattern"], str):
+        return Reading(problem=f"{where}.pattern bir string degil: {node['pattern']!r}")
+
+    for key in ("minLength", "maxLength"):
+        bound = _read_bound(node, key, where)
+        if bound.problem:
+            return bound
+
     return Reading(value=node)
 
 
-def _bound(node: dict[str, Any], key: str) -> int | None:
-    """A length bound, only when it is really a number."""
-    value = node.get(key)
-    if isinstance(value, bool) or not isinstance(value, int):
-        return None
-    return value
+@dataclass(frozen=True, slots=True)
+class _Constraint:
+    """One field's effective schema, gathered from every level that applies."""
 
+    types: tuple[str, ...] = ()
+    patterns: tuple[str, ...] = ()
+    lows: tuple[int, ...] = ()
+    highs: tuple[int, ...] = ()
+    origins: tuple[str, ...] = ()
 
-def _reconcile(
-    unconditional: object, conditional: dict[str, Any], where: str
-) -> Reading:
-    """Constraints published at both levels apply to the same value together.
-
-    The reference publishes ``properties.sig`` carrying a description and
-    nothing else, so the usual answer is "nothing to reconcile". When the
-    unconditional node does carry constraints, they are not an alternative to
-    the conditional ones - both apply - and this is where ``maxLength: 1``
-    beside a conditional ``minLength: 86`` is caught.
-
-    Only three outcomes are possible, and none of them intersects regexes or
-    computes a general schema conjunction:
-
-    * an identical, repeated constraint is fine;
-    * length bounds are merged, and an empty range is a **conflict**;
-    * anything else this module cannot combine is a **problem**.
-    """
-    if not isinstance(unconditional, dict):
-        return Reading(problem=f"{where} bir nesne degil")
-
-    unknown = _unknown_keys(unconditional, UNDERSTOOD_FIELD_KEYS)
-    if unknown:
-        return Reading(
-            problem=f"{where} degerlendirilemeyen anahtar tasiyor: {', '.join(unknown)}"
+    def merge(self, node: dict[str, Any], where: str) -> _Constraint:
+        published = node.get("type")
+        pattern = node.get("pattern")
+        low = node.get("minLength")
+        high = node.get("maxLength")
+        return _Constraint(
+            types=(*self.types, *((published,) if isinstance(published, str) else ())),
+            patterns=(*self.patterns, *((pattern,) if isinstance(pattern, str) else ())),
+            lows=(
+                *self.lows,
+                *((low,) if isinstance(low, int) and not isinstance(low, bool) else ()),
+            ),
+            highs=(
+                *self.highs,
+                *(
+                    (high,)
+                    if isinstance(high, int) and not isinstance(high, bool)
+                    else ()
+                ),
+            ),
+            origins=(*self.origins, where),
         )
 
-    extra = _constraints(unconditional)
-    if not extra:
-        return Reading(value=unconditional)
 
-    outer_type, inner_type = extra.get("type"), conditional.get("type")
-    if outer_type is not None and inner_type is not None and outer_type != inner_type:
+def _judge_constraint(name: str, merged: _Constraint) -> Reading:
+    """Can the value Station actually sends satisfy this field's schema?
+
+    Every level that applies has been folded in, so the question is finally
+    answerable. Three ways it can fail:
+
+    * two different ``type`` values - nothing satisfies both;
+    * two different ``pattern`` values - the intersection is a regex problem
+      this module does not solve, so it says so rather than guessing;
+    * a length range that excludes what Station sends. That is the check the
+      earlier version could not make: a bound is not wrong for being unusual,
+      it is wrong for excluding every value we would put in the field.
+    """
+    distinct_types = set(merged.types)
+    if len(distinct_types) > 1:
         return Reading(
             conflict=(
-                f"{where}.type ({outer_type!r}) kosullu tip ({inner_type!r}) ile "
-                "ayni anda saglanamaz"
+                f"{name}: iki farkli tip ayni anda saglanamaz "
+                f"({', '.join(sorted(distinct_types))})"
+            )
+        )
+    if distinct_types and distinct_types != {"string"}:
+        return Reading(
+            conflict=(
+                f"{name}: tip {next(iter(distinct_types))!r}, Station bu alani "
+                "string olarak gonderir"
             )
         )
 
-    outer_pattern, inner_pattern = extra.get("pattern"), conditional.get("pattern")
-    if (
-        outer_pattern is not None
-        and inner_pattern is not None
-        and outer_pattern != inner_pattern
-    ):
+    if len(set(merged.patterns)) > 1:
         return Reading(
             problem=(
-                f"{where}.pattern kosullu kaliptan farkli; iki kalibin kesisimi "
+                f"{name}: birden fazla farkli kalip yayimlanmis; kesisimleri "
                 "degerlendirilmedi"
             )
         )
 
-    # Both levels bound the same string, so the effective range is the
-    # intersection. An empty one is a demonstrated contradiction: no value
-    # satisfies the schema, which means no signature would be accepted.
-    lows = [
-        bound
-        for bound in (
-            _bound(unconditional, "minLength"),
-            _bound(conditional, "minLength"),
-        )
-        if bound is not None
-    ]
-    highs = [
-        bound
-        for bound in (
-            _bound(unconditional, "maxLength"),
-            _bound(conditional, "maxLength"),
-        )
-        if bound is not None
-    ]
-    if lows and highs and max(lows) > min(highs):
+    sent = STATION_FIELD_LENGTHS.get(name)
+    if sent is None:
+        return Reading(value=merged)
+
+    low = max(merged.lows) if merged.lows else 0
+    high = min(merged.highs) if merged.highs else None
+
+    if high is not None and low > high:
         return Reading(
             conflict=(
-                f"{where} uzunluk araligi bos: en az {max(lows)}, en fazla "
-                f"{min(highs)}; hicbir deger ikisini birden saglayamaz"
+                f"{name}: uzunluk araligi bos (en az {low}, en fazla {high}); "
+                "hicbir deger ikisini birden saglayamaz"
             )
         )
+    if low > sent.maximum:
+        return Reading(
+            conflict=(
+                f"{name}: en az {low} karakter isteniyor, Station en fazla "
+                f"{sent.maximum} karakter gonderir"
+            )
+        )
+    if high is not None and high < sent.minimum:
+        return Reading(
+            conflict=(
+                f"{name}: en fazla {high} karaktere izin veriliyor, Station en az "
+                f"{sent.minimum} karakter gonderir"
+            )
+        )
+    return Reading(value=merged)
 
-    return Reading(value=unconditional)
 
-
-def _check_any_of(branches: object, payload_field: str) -> Reading:
+def _check_any_of(branches: object, fields: frozenset[str]) -> Reading:
     """``anyOf`` must leave a branch a signed body can actually satisfy.
 
     The reference publishes ``[{"required": ["from"]}, {"required": ["did"]}]``
-    - name yourself or sign - and the signed branch is the one Station takes.
-    That is the only shape read here. A branch shaped differently is not
-    accepted merely for sitting inside a key called ``anyOf``: the previous
-    version reasoned that ``anyOf`` could only add constraints, which is true
-    and beside the point, because a constraint it adds can reject us.
+    - name yourself or sign - and Station takes the signed branch. That is the
+    only shape read here. A branch is not accepted for sitting inside a key
+    called ``anyOf``: the constraint ``anyOf`` adds can reject us.
     """
     if not isinstance(branches, list) or not branches:
         return Reading(problem="anyOf bos veya bir liste degil")
 
-    accepted = frozenset({*_SIGNED_BODY_FIELDS, payload_field})
     satisfiable = False
     for index, branch in enumerate(branches):
+        where = f"anyOf[{index}]"
         if not isinstance(branch, dict):
-            return Reading(problem=f"anyOf[{index}] bir nesne degil")
+            return Reading(problem=f"{where} bir nesne degil")
         unknown = _unknown_keys(branch, UNDERSTOOD_BRANCH_KEYS)
         if unknown:
             return Reading(
                 problem=(
-                    f"anyOf[{index}] degerlendirilemeyen anahtar tasiyor: "
-                    f"{', '.join(unknown)}"
+                    f"{where} degerlendirilemeyen anahtar tasiyor: {', '.join(unknown)}"
                 )
             )
-        names = branch.get("required")
-        if names is None:
+        names = _read_name_list(branch, "required", where)
+        if names.problem:
+            return names
+        if names.value is None:
             satisfiable = True  # an empty branch accepts anything
-            continue
-        if not isinstance(names, list) or not all(
-            isinstance(name, str) for name in names
-        ):
-            return Reading(problem=f"anyOf[{index}].required bir ad listesi degil")
-        if set(names) <= accepted:
+        elif set(cast("list[str]", names.value)) <= fields:
             satisfiable = True
 
     if not satisfiable:
@@ -524,36 +589,79 @@ def _check_any_of(branches: object, payload_field: str) -> Reading:
     return Reading(value=branches)
 
 
-def evaluate_signed_body(schema: object, payload_field: str) -> Reading:
+def _check_object_node(
+    node: dict[str, Any], understood: frozenset[str], fields: frozenset[str], where: str
+) -> Reading:
+    """``type`` and ``required`` on a body-shaped node, as values.
+
+    Used for the request body and for every conditional subschema a signed
+    body switches on, because ``dependentSchemas`` applies its subschema to
+    the *whole* body - a ``type`` or ``required`` in there is as binding as
+    one written at the top.
+    """
+    unknown = _unknown_keys(node, understood)
+    if unknown:
+        return Reading(
+            problem=f"{where} degerlendirilemeyen anahtar tasiyor: {', '.join(unknown)}"
+        )
+
+    published = _read_type(node, where)
+    if published.problem:
+        return published
+    if published.value is not None and published.value != "object":
+        return Reading(
+            conflict=(
+                f"{where}.type {published.value!r}, Station bir JSON nesnesi gonderir"
+            )
+        )
+
+    required = _read_name_list(node, "required", where)
+    if required.problem:
+        return required
+    if required.value is not None:
+        missing = sorted(set(cast("list[str]", required.value)) - fields)
+        if missing:
+            return Reading(
+                conflict=(
+                    f"{where}.required Station'in gondermedigi alani zorunlu "
+                    f"kiliyor: {', '.join(missing)}"
+                )
+            )
+
+    properties = node.get("properties")
+    if properties is not None and not isinstance(properties, dict):
+        return Reading(problem=f"{where}.properties bir nesne degil")
+
+    return Reading(value=node)
+
+
+def evaluate_signed_body(schema: object, fields: frozenset[str]) -> Reading:
     """Read a request-body schema as a whole, or refuse to.
 
-    Returns a :class:`SignedBodyView` when every part of the schema that bears
-    on a signed write is one this module can read and none of them contradict.
-    Otherwise a ``problem`` (cannot evaluate) or a ``conflict`` (evaluated, and
-    impossible to satisfy).
+    ``fields`` is the set of names Station will actually put in a signed body,
+    derived from our own contract rather than from the document. Everything
+    below is judged against it: a constraint is not wrong for being unusual,
+    it is wrong for rejecting what we would send.
 
-    ``payload_field`` is ``text`` on the message lane and ``value`` on the note
-    lane; both lanes go through here, so neither can quietly stop being
-    checked.
+    Returns a :class:`SignedBodyView` when every part of the schema that bears
+    on a signed write is one this module can read, and none of them rejects
+    us. Otherwise a ``problem`` (cannot evaluate - the schema is malformed or
+    uses a form outside the supported shape) or a ``conflict`` (evaluated, and
+    our request would be refused).
     """
     if not isinstance(schema, dict):
         return Reading(problem="istek govdesi semasi bir nesne degil")
 
-    unknown = _unknown_keys(schema, UNDERSTOOD_BODY_KEYS)
-    if unknown:
-        return Reading(
-            problem=(
-                "istek govdesi degerlendirilemeyen anahtar tasiyor: "
-                f"{', '.join(unknown)}"
-            )
-        )
+    body = _check_object_node(schema, UNDERSTOOD_BODY_KEYS, fields, "istek govdesi")
+    if body.problem or body.conflict:
+        return body
 
     properties = schema.get("properties")
     if not isinstance(properties, dict):
         return Reading(problem="istek govdesi properties bir nesne degil")
 
     if "anyOf" in schema:
-        branches = _check_any_of(schema["anyOf"], payload_field)
+        branches = _check_any_of(schema["anyOf"], fields)
         if branches.problem or branches.conflict:
             return branches
 
@@ -566,46 +674,59 @@ def evaluate_signed_body(schema: object, payload_field: str) -> Reading:
     lane = dependent.get("did")
     if lane is None:
         return Reading(problem="dependentSchemas.did yok")
-    if not isinstance(lane, dict):
+
+    # Every dependency keyed on a field the signed body carries switches on.
+    # Reading only `did` was the gap: a signed body also carries `sig`, `nonce`
+    # and its payload field, so a dependency on any of those applies to us just
+    # as hard.
+    applicable: list[dict[str, Any]] = []
+    for name in sorted(set(dependent) & fields):
+        where = f"dependentSchemas.{name}"
+        subschema = dependent[name]
+        if not isinstance(subschema, dict):
+            return Reading(problem=f"{where} bir nesne degil")
+        checked = _check_object_node(subschema, UNDERSTOOD_LANE_KEYS, fields, where)
+        if checked.problem or checked.conflict:
+            return checked
+        applicable.append(subschema)
+
+    if not isinstance(lane, dict):  # pragma: no cover - the loop above covers it
         return Reading(problem="dependentSchemas.did bir nesne degil")
-
-    lane_unknown = _unknown_keys(lane, UNDERSTOOD_LANE_KEYS)
-    if lane_unknown:
-        return Reading(
-            problem=(
-                "dependentSchemas.did degerlendirilemeyen anahtar tasiyor: "
-                f"{', '.join(lane_unknown)}"
-            )
-        )
-
     credentials = lane.get("properties")
     if not isinstance(credentials, dict):
         return Reading(problem="dependentSchemas.did.properties bir nesne degil")
 
-    # Every field that decides whether a signed write is accepted: the two
-    # credentials inside the conditional schema, the did that selects it, and
-    # whatever the body says about the same names unconditionally.
     for name in ("sig", "nonce"):
-        node = credentials.get(name)
-        if node is None:
+        if credentials.get(name) is None:
             return Reading(problem=f"dependentSchemas.did.properties.{name} yok")
-        checked = _check_field_node(node, f"dependentSchemas.did.properties.{name}")
-        if checked.problem or checked.conflict:
-            return checked
+    if properties.get("did") is None:
+        return Reading(problem="properties.did yok")
 
+    # Gather every schema that applies to each field Station sends: the
+    # unconditional one and one per triggered dependency. Reading only the
+    # names we expected to find there is what let a `did` inside the
+    # conditional properties carry a `not` unnoticed.
+    for name in sorted(fields):
+        merged = _Constraint()
+        sources: list[tuple[object, str]] = []
         published = properties.get(name)
         if published is not None:
-            assert isinstance(node, dict)
-            reconciled = _reconcile(published, node, f"properties.{name}")
-            if reconciled.problem or reconciled.conflict:
-                return reconciled
+            sources.append((published, f"properties.{name}"))
+        for index, subschema in enumerate(applicable):
+            nested = subschema.get("properties")
+            if isinstance(nested, dict) and nested.get(name) is not None:
+                sources.append((nested[name], f"kosullu[{index}].properties.{name}"))
 
-    did_node = properties.get("did")
-    if did_node is None:
-        return Reading(problem="properties.did yok")
-    did_checked = _check_field_node(did_node, "properties.did")
-    if did_checked.problem or did_checked.conflict:
-        return did_checked
+        for node, where in sources:
+            checked = _check_field_node(node, where)
+            if checked.problem or checked.conflict:
+                return checked
+            merged = merged.merge(cast("dict[str, Any]", node), where)
+
+        if merged.origins:
+            judged = _judge_constraint(name, merged)
+            if judged.problem or judged.conflict:
+                return judged
 
     return Reading(value=SignedBodyView(body=schema, lane=lane, credentials=credentials))
 
@@ -632,6 +753,41 @@ EXPECTED_NAME_PATTERN: Final = f"^{NAME_PATTERN}$"
 #: newer service is a warning, never drift: the protocol facts above are what
 #: decide whether a signature stays valid.
 PINNED_SERVICE_VERSION: Final = "0.10.0"
+
+#: The digit counts ``NONCE_PATTERN`` allows. A test pins these against the
+#: pattern itself so the two cannot drift apart.
+NONCE_MIN_DIGITS: Final = 1
+NONCE_MAX_DIGITS: Final = 19
+
+
+@dataclass(frozen=True, slots=True)
+class SentLength:
+    """How long the value Station puts in a field can be."""
+
+    minimum: int
+    maximum: int
+
+
+#: What Station actually sends, from our own contract rather than from the
+#: document. A published bound is not wrong for being unusual - it is wrong
+#: for excluding every value we would put in the field, and that comparison
+#: needs a number from *our* side of the protocol.
+STATION_FIELD_LENGTHS: Final[dict[str, SentLength]] = {
+    "did": SentLength(EXPECTED_DID_CHARS, EXPECTED_DID_CHARS),
+    "sig": SentLength(SIGNATURE_CHARS, SIGNATURE_CHARS),
+    "nonce": SentLength(NONCE_MIN_DIGITS, NONCE_MAX_DIGITS),
+}
+
+#: The field names a signed request body carries, per lane. The credentials
+#: are the same on both; the payload field is not. Everything the evaluator
+#: judges is judged against this set: a schema that requires a name absent
+#: here is a schema our request cannot satisfy.
+PLANNED_BODY_FIELDS: Final[dict[Lane, frozenset[str]]] = {
+    Lane.MESSAGE_BODY: frozenset({"did", "sig", "nonce", "text"}),
+    Lane.MESSAGE_SIGNED: frozenset({"did", "sig", "nonce", "text"}),
+    Lane.NOTE_BODY: frozenset({"did", "sig", "nonce", "value"}),
+    Lane.NOTE_SIGNED: frozenset({"did", "sig", "nonce", "value"}),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -682,16 +838,6 @@ _LANE_POINTERS: Final[dict[Lane, tuple[str, ...]]] = {
     Lane.NOTE_SIGNED: NOTE_BODY_POINTER,
 }
 
-#: The body field each lane carries beside the credentials. Needed to judge an
-#: ``anyOf`` branch: a branch requiring ``text`` is one a signed message can
-#: satisfy, and one requiring ``from`` is not.
-_LANE_PAYLOAD_FIELD: Final[dict[Lane, str]] = {
-    Lane.DOCUMENT: "",
-    Lane.MESSAGE_BODY: "text",
-    Lane.MESSAGE_SIGNED: "text",
-    Lane.NOTE_BODY: "value",
-    Lane.NOTE_SIGNED: "value",
-}
 
 
 def _label(prefix: str, base: str) -> str:
@@ -1222,7 +1368,7 @@ def _lane_root(field: ProtocolField, document: dict[str, Any]) -> Reading:
     if isinstance(body, _Absent):
         return Reading()
 
-    evaluated = evaluate_signed_body(body, _LANE_PAYLOAD_FIELD[field.lane])
+    evaluated = evaluate_signed_body(body, PLANNED_BODY_FIELDS[field.lane])
     if evaluated.problem or evaluated.conflict:
         return evaluated
     view = evaluated.value
@@ -1359,10 +1505,15 @@ __all__ = [
     "MESSAGE_BODY_POINTER",
     "MISSING",
     "NEGATION_MARKERS",
+    "NONCE_MAX_DIGITS",
+    "NONCE_MIN_DIGITS",
     "NOTE_BODY_POINTER",
     "PINNED_SERVICE_VERSION",
+    "PLANNED_BODY_FIELDS",
     "PROTOCOL_FIELDS",
+    "STATION_FIELD_LENGTHS",
     "UNDERSTOOD_BODY_KEYS",
+    "UNDERSTOOD_BRANCH_KEYS",
     "UNDERSTOOD_FIELD_KEYS",
     "UNDERSTOOD_LANE_KEYS",
     "Compare",
@@ -1374,6 +1525,7 @@ __all__ = [
     "ProjectionResult",
     "ProtocolField",
     "Reading",
+    "SentLength",
     "Severity",
     "SignedBodyView",
     "evaluate_signed_body",
