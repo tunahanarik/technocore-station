@@ -1,34 +1,38 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-09-02T18:44:45Z",
+  "updated_utc": "2026-09-02T19:22:09Z",
   "base_sha": "5411171dd2302c6fea5a2af22695503859317c27",
   "note": "Kayit ile gercek Git/GitHub durumu celisirse Git/GitHub kaniti esastir.",
   "stages": [
     {
       "id": "A",
       "name": "Baslangic, kapsam eki, tekrarlanabilir test/CI",
-      "status": "testing",
+      "status": "merged",
       "branch": "stage-a-foundation",
-      "pr": null,
-      "reviewed_sha": null,
-      "tested_sha": null,
-      "merge_sha": null,
-      "findings": [],
+      "pr": 10,
+      "reviewed_sha": "bf0d50b42817c82d04a4cc618377025925a8805e",
+      "tested_sha": "bf0d50b42817c82d04a4cc618377025925a8805e",
+      "merge_sha": "65cfc7bf9a64a390849e59c561a066fc3b61831c",
+      "findings": [
+        "CI ilk koşuda 5 gerçek ortam hatası yakaladı (CLI locale-stdin ürün hatası dahil); kökten düzeltildi",
+        "Copilot review kota-bloklu; temiz bağlamlı reviewer subagent kullanıldı (insan incelemesi DEĞİL)",
+        "Negatif kanıt: backend sahici fail (run 33669302148), frontend staged 6d76929+revert"
+      ],
       "failed_attempts": 0,
-      "next_safe_step": "PR ac; CI'nin PR uzerinde gercekten kostugunu ve fail edebildigini (negatif kanit) dogrula; sonra merge"
+      "next_safe_step": null
     },
     {
       "id": "B",
       "name": "Asama 3.1 son kapanis",
-      "status": "planned",
-      "branch": null,
+      "status": "implementing",
+      "branch": "stage-b-schema-closure",
       "pr": null,
       "reviewed_sha": null,
       "tested_sha": null,
       "merge_sha": null,
       "findings": [],
       "failed_attempts": 0,
-      "next_safe_step": null
+      "next_safe_step": "12 mutasyon x 2 lane'i mevcut kodda yeniden uret; kunye 14.4'e gore payload limitleri icin uyari+etkin limit tasarimi; yapisal cozum"
     },
     {
       "id": "C",
