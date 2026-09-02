@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-09-02T19:22:09Z",
+  "updated_utc": "2026-09-03T00:45:00Z",
   "base_sha": "5411171dd2302c6fea5a2af22695503859317c27",
   "note": "Kayit ile gercek Git/GitHub durumu celisirse Git/GitHub kaniti esastir.",
   "stages": [
@@ -24,28 +24,32 @@
     {
       "id": "B",
       "name": "Asama 3.1 son kapanis",
-      "status": "implementing",
+      "status": "merged",
       "branch": "stage-b-schema-closure",
-      "pr": null,
-      "reviewed_sha": null,
-      "tested_sha": null,
-      "merge_sha": null,
-      "findings": [],
+      "pr": 11,
+      "reviewed_sha": "afc76d60168c9432cfb8fcd5232805e93816d0d9",
+      "tested_sha": "afc76d60168c9432cfb8fcd5232805e93816d0d9",
+      "merge_sha": "277a97c888e5c7b4f923c0062608b7a2a2e2cb14",
+      "findings": [
+        "24/24 senaryo yeniden uretildi (hepsi yanlislikla current); kok nedenler: null=yokluk esitlemesi, SOME-exclusion sorulmamasi, pattern derlenmemesi, teklik denetimsizligi",
+        "Kunye 14.4 uyari yolu: 4 yeni WARNING alani + effective_payload_limits (tavan 4096/8192) Paket D composer'ina ihrac",
+        "Bagimsiz inceleme (insan DEGIL): P2-1 OverflowError, P2-2 properties:null sizintisi, P3-1 null mesaji, P3-2 rapor sayimlari, P3-3 bos limits — hepsi merge oncesi duzeltildi; 804 pytest"
+      ],
       "failed_attempts": 0,
-      "next_safe_step": "12 mutasyon x 2 lane'i mevcut kodda yeniden uret; kunye 14.4'e gore payload limitleri icin uyari+etkin limit tasarimi; yapisal cozum"
+      "next_safe_step": null
     },
     {
       "id": "C",
       "name": "Dashboard kabugu ve hata sozlesmesi",
-      "status": "planned",
-      "branch": null,
+      "status": "implementing",
+      "branch": "stage-c-dashboard-shell",
       "pr": null,
       "reviewed_sha": null,
       "tested_sha": null,
       "merge_sha": null,
       "findings": [],
       "failed_attempts": 0,
-      "next_safe_step": null
+      "next_safe_step": "Mevcut station-web yapisini kesfet; HeroUI v3 API'lerini MCP'den dogrula; 9 bolumluk sol nav + hata sozlesmesi + docs/ui-action-map.md; browser QA YOK (7.2)"
     },
     {
       "id": "D",
