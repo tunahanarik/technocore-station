@@ -91,7 +91,14 @@ gerçek ortam-taşınabilirlik hatası:
 Düzeltme sonrası yerel suite: **739 pytest** (736 + 3 yeni) + 59 Vitest.
 Hiçbir test silinmedi/gevşetilmedi; ACL testi güçlendirildi.
 
-**Frontend işi için staged kanıt:** (PR üzerinde uygulanıp buraya işlenecek.)
+**Frontend işi için staged kanıt (uygulandı):** bilerek kırık Vitest testi
+`6d76929b850e906e5b70a8d565b15c385477a285` commit'iyle itildi → CI sonucu
+`frontend gates (windows): failure`, `backend gates (windows): success` →
+normal revert commit'iyle geri alındı. İki commit de tarihçede duruyor;
+gizlenmedi.
+
+Böylece her iki CI işinin de gerçekten fail edebildiği kanıtlandı: backend
+sahici hatalarla (run 33669302148), frontend staged örnekle.
 
 ## Sınırlar
 
