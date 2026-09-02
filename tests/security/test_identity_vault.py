@@ -227,7 +227,11 @@ def test_atomic_write_leaves_no_temporary_file(vault: DpapiVault, tmp_path: Path
 @windows_only
 def test_acl_is_restricted_to_the_current_user_and_system(vault: DpapiVault) -> None:
     """Read the DACL back and prove only two principals are granted."""
-    from station_api.vault.windows_acl import current_user_sid, describe_acl
+    from station_api.vault.windows_acl import (
+        acl_grantee_sids,
+        current_user_sid,
+        describe_acl,
+    )
 
     identity_id = new_identity_id()
     path = vault.store(
@@ -243,10 +247,14 @@ def test_acl_is_restricted_to_the_current_user_and_system(vault: DpapiVault) -> 
     granted = [entry for entry in sddl.split("(") if entry.startswith("A;")]
     assert len(granted) == 2, f"expected exactly two allow ACEs, got {sddl}"
 
-    assert current_user_sid() in sddl
-    assert ";SY)" in sddl
-    for wide in (";WD)", ";AU)", ";BU)", ";IU)"):
-        assert wide not in sddl, f"vault ACL grants a broad principal: {sddl}"
+    # Compare the real trustee SIDs, not SDDL text: SDDL abbreviates
+    # well-known accounts (the built-in Administrator renders as `LA`, not as
+    # its S-1-5-21-...-500 string), so a substring check would fail on such
+    # accounts even though the ACL is exactly right - and, worse, could pass
+    # on text that does not mean what it looks like. Exact set equality on
+    # resolved SIDs is the stronger claim: SYSTEM and the current user, and
+    # nobody else.
+    assert sorted(acl_grantee_sids(path)) == sorted(("S-1-5-18", current_user_sid()))
 
 
 def test_identity_id_cannot_traverse_the_filesystem(vault: DpapiVault) -> None:

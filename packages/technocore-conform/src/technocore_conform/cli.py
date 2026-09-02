@@ -69,8 +69,22 @@ _TOOL = "technocore-conform"
 
 
 def _read_stdin() -> str:
-    """Read the value, dropping one shell line terminator."""
-    data = sys.stdin.read()
+    """Read the value as UTF-8, dropping one shell line terminator.
+
+    Read from the byte stream and decoded explicitly: ``sys.stdin.read()``
+    would decode with the console's locale codepage, and on a cp1252 console
+    that turns UTF-8 input into mojibake *silently* - an invisible-only
+    message became visible garbage there and swept "successfully". The
+    canonical contract is UTF-8 bytes, so the tool's input is UTF-8 by
+    contract on every console. Non-UTF-8 input is a stated usage error,
+    never a traceback.
+    """
+    raw = sys.stdin.buffer.read()
+    try:
+        data = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        print(f"{_TOOL}: stdin is not valid UTF-8: {exc}", file=sys.stderr)
+        raise SystemExit(EXIT_USAGE) from exc
     if data.endswith("\r\n"):
         return data[:-2]
     if data.endswith("\n"):
@@ -333,6 +347,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point. Returns an exit code rather than calling ``sys.exit``."""
+    # Output mirrors the input contract: UTF-8 regardless of the console
+    # codepage, so JSON and messages carry the same bytes everywhere.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8")
     parser = build_parser()
     args = parser.parse_args(argv)
     # Only some sub-commands define --stored; normalise so handlers can read it.

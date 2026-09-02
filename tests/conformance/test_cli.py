@@ -8,6 +8,7 @@ stdin, so shell quoting cannot change the wire semantics.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from typing import Any
@@ -35,6 +36,59 @@ def run_cli(
         timeout=timeout,
         check=False,
     )
+
+
+def run_cli_on_legacy_console(
+    *arguments: str, stdin_bytes: bytes, timeout: int = 180
+) -> subprocess.CompletedProcess[bytes]:
+    """Invoke the CLI the way a cp1252 console would.
+
+    ``PYTHONIOENCODING=cp1252`` recreates the environment where this class of
+    bug actually fired (a GitHub Windows runner, and any user machine without
+    UTF-8 mode): UTF-8 stdin decoded by the locale layer became mojibake, an
+    invisible-only message turned visible, and the sweep "succeeded". The CLI
+    now reads stdin bytes and decodes UTF-8 itself, so the console codepage
+    must not matter - which is exactly what these tests pin.
+    """
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0"}
+    return subprocess.run(  # noqa: S603 - fixed argv, no shell
+        [sys.executable, "-m", "technocore_conform", *arguments],
+        input=stdin_bytes,
+        capture_output=True,
+        timeout=timeout,
+        check=False,
+        env=env,
+    )
+
+
+def test_invisible_text_is_refused_even_on_a_legacy_console() -> None:
+    """The exact failure the first real CI run caught, pinned forever."""
+    result = run_cli_on_legacy_console(
+        "sweep", "message", stdin_bytes="\u200b\u200b".encode()
+    )
+    assert result.returncode == EXIT_FAILURE
+    assert b"sweep" in result.stderr
+
+
+def test_utf8_text_round_trips_regardless_of_console_codepage() -> None:
+    result = run_cli_on_legacy_console(
+        "--json", "canonical", "message", "--room", "r", "--nonce", "1",
+        stdin_bytes="t\u00fcrk\u00e7e".encode(),
+    )
+    assert result.returncode == EXIT_OK
+    payload = json.loads(result.stdout.decode("utf-8"))
+    assert payload["canonical"] == "r|1|t\u00fcrk\u00e7e"
+
+
+def test_stdin_that_is_not_utf8_is_a_stated_usage_error() -> None:
+    """Malformed bytes are refused with a message, never a traceback."""
+    result = run_cli_on_legacy_console(
+        "sweep", "message", stdin_bytes=bytes([0xFF, 0xFE, 0xFA])
+    )
+    assert result.returncode == EXIT_USAGE
+    stderr = result.stderr.decode("utf-8", errors="replace")
+    assert "UTF-8" in stderr
+    assert "Traceback" not in stderr
 
 
 def json_output(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:

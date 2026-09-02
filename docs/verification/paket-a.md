@@ -77,7 +77,21 @@ kalır; bu dürüst kanıttır, gizlenmez. Sonuç SHA'larıyla bu rapora eklenec
 
 ## Negatif kanıt sonucu
 
-(PR açıldıktan sonra doldurulacak.)
+**Backend işi için sahici kanıt (planlanandan güçlü):** PR #10'un ilk head'i
+`c44f3c9` üzerindeki ilk gerçek CI koşusu (run 33669302148) backend işinde
+**failure** üretti — staged bir kırılma değil, runner ortamının yakaladığı 5
+gerçek ortam-taşınabilirlik hatası:
+
+| Hata | Kök neden | Düzeltme |
+|---|---|---|
+| 3 CLI testi exit 0 (beklenen ≠0) | `_read_stdin()` konsolun locale kodlamasıyla okuyordu; cp1252 runner'da UTF-8 girdi mojibake olup görünür karaktere dönüşüyor, sweep "başarılı" çıkıyordu — **gerçek ürün hatası**, UTF-8 olmayan konsollu her kullanıcıda tetiklenir | CLI stdin'i sözleşme gereği bayt akışından UTF-8 okur; UTF-8 olmayan girdi traceback değil açık mesajla `EXIT_USAGE`; stdout/stderr UTF-8'e reconfigure edilir. 3 yeni regresyon testi runner koşulunu `PYTHONIOENCODING=cp1252` ile birebir üretir |
+| ACL testi | SDDL, iyi bilinen hesapları kısaltır (runner'ın Administrator'ı `LA` diye yazılır); substring araması hesaba bağımlıydı | `windows_acl.acl_grantee_sids()` eklendi: DACL ACE'leri gerçekten yürünüp SID'ler string'e çevrilir; test artık **çözümlenmiş SID kümesi eşitliği** kurar (`{S-1-5-18, current_user_sid()}`) — daha güçlü iddia |
+| `test_tests_never_touch_the_real_installation` | 8.3 kısa yol (`RUNNER~1`) ile `resolve()` uzun yolu uyuşmuyor | Karşılaştırmanın iki tarafı da `Path(...).resolve()` ile normalize edilir |
+
+Düzeltme sonrası yerel suite: **739 pytest** (736 + 3 yeni) + 59 Vitest.
+Hiçbir test silinmedi/gevşetilmedi; ACL testi güçlendirildi.
+
+**Frontend işi için staged kanıt:** (PR üzerinde uygulanıp buraya işlenecek.)
 
 ## Sınırlar
 

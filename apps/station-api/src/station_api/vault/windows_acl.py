@@ -252,7 +252,120 @@ def describe_acl(path: Path) -> str:
         kernel32.LocalFree(descriptor)
 
 
+_ACCESS_ALLOWED_ACE_TYPE = 0
+#: Offset of SidStart inside ACCESS_ALLOWED_ACE: ACE_HEADER (4 bytes) + Mask.
+_SID_START_OFFSET = 8
+
+
+class _AclSizeInformation(ctypes.Structure):
+    _fields_ = [
+        ("AceCount", wintypes.DWORD),
+        ("AclBytesInUse", wintypes.DWORD),
+        ("AclBytesFree", wintypes.DWORD),
+    ]
+
+
+def acl_grantee_sids(path: Path) -> tuple[str, ...]:
+    """The actual SIDs the file's DACL grants access to, in string form.
+
+    SDDL abbreviates well-known principals - the built-in Administrator
+    renders as ``LA``, not as its ``S-1-5-21-...-500`` string - so substring
+    checks against :func:`describe_acl` output are account-dependent. This
+    walks the real ACEs and converts each trustee SID directly, which makes
+    "exactly SYSTEM and the current user" checkable as SID equality on any
+    account. Only ACCESS_ALLOWED entries are returned; any other ACE type in
+    a vault DACL is unexpected and raises.
+    """
+    if not is_windows():
+        raise VaultAclError("windows acl support is unavailable on this platform")
+
+    advapi32 = _advapi32()
+    kernel32 = _kernel32()
+
+    advapi32.GetNamedSecurityInfoW.argtypes = [
+        wintypes.LPCWSTR,
+        ctypes.c_int,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    advapi32.GetNamedSecurityInfoW.restype = wintypes.DWORD
+
+    dacl = ctypes.c_void_p()
+    descriptor = ctypes.c_void_p()
+    result = advapi32.GetNamedSecurityInfoW(
+        str(path),
+        _SE_FILE_OBJECT,
+        _DACL_SECURITY_INFORMATION,
+        None,
+        None,
+        ctypes.byref(dacl),
+        None,
+        ctypes.byref(descriptor),
+    )
+    if result != _ERROR_SUCCESS:
+        raise VaultAclError(f"could not read the vault ACL (win32 error {result})")
+
+    try:
+        if not dacl:
+            raise VaultAclError("the vault has no DACL to inspect")
+
+        advapi32.GetAclInformation.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.c_int,
+        ]
+        advapi32.GetAclInformation.restype = wintypes.BOOL
+        info = _AclSizeInformation()
+        # 2 = AclSizeInformation
+        if not advapi32.GetAclInformation(
+            dacl, ctypes.byref(info), ctypes.sizeof(info), 2
+        ):
+            raise VaultAclError("could not size the vault DACL")
+
+        advapi32.GetAce.argtypes = [
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        advapi32.GetAce.restype = wintypes.BOOL
+        advapi32.ConvertSidToStringSidW.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_wchar_p),
+        ]
+        advapi32.ConvertSidToStringSidW.restype = wintypes.BOOL
+
+        sids: list[str] = []
+        for index in range(info.AceCount):
+            ace = ctypes.c_void_p()
+            if not advapi32.GetAce(dacl, index, ctypes.byref(ace)):
+                raise VaultAclError(f"could not read vault ACE {index}")
+            ace_type = ctypes.cast(ace, ctypes.POINTER(ctypes.c_ubyte))[0]
+            if ace_type != _ACCESS_ALLOWED_ACE_TYPE:
+                raise VaultAclError(
+                    f"unexpected ACE type {ace_type} in the vault DACL"
+                )
+            sid_pointer = ctypes.c_void_p((ace.value or 0) + _SID_START_OFFSET)
+            text = ctypes.c_wchar_p()
+            if not advapi32.ConvertSidToStringSidW(sid_pointer, ctypes.byref(text)):
+                raise VaultAclError(f"could not convert the SID of vault ACE {index}")
+            try:
+                if not text.value:
+                    raise VaultAclError(f"empty SID on vault ACE {index}")
+                sids.append(text.value)
+            finally:
+                kernel32.LocalFree(text)
+        return tuple(sids)
+    finally:
+        kernel32.LocalFree(descriptor)
+
+
 __all__ = [
+    "acl_grantee_sids",
     "current_user_sid",
     "describe_acl",
     "is_windows",
