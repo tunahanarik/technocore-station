@@ -311,6 +311,39 @@ kimlik alanını da taşıdığı için bunlardan herhangi birine anahtarlanmı�
 koşul devreye girer. Göndermediğimiz bir ada (`from`) anahtarlanmış koşul ise
 bize hiç uygulanmaz ve kapıyı kapatmaz — bunu da bir test sabitler.
 
+### Aşama B kapanışı: değer okumanın son boşlukları
+
+12 yeni sınır türü × 2 lane (24 senaryo) daha önce `current` sızdırıyordu;
+hepsi kapatıldı. Kurallar:
+
+- **null ≠ yokluk, şema üyelerinde de.** `properties.text = null`,
+  `properties.sig = null`, koşullu `properties.did = null` veya tetiklenen bir
+  bağımlılığın içindeki null üye **geçersiz şema üyesidir** → `unavailable`.
+  Üyenin tamamen silinmesi ayrı bir durumdur: koşulsuz payload/sig düğümünün
+  yokluğu kısıt yayımlamamaktır (zorunlu üyeler ayrıca korunur) ve mesajları
+  farklıdır ("null - gecersiz sema uyesi" ile "yok").
+- **`required`/`anyOf.required` ad listeleri tekrarsız olmalı.** JSON Schema
+  metaşeması tekliği şart koşar; kendi metaşemasını kıran belge "doğru
+  okundu" diye sunulmaz → `unavailable`.
+- **Pattern değerleri artık derlenir** (`re.compile`, asla uzak girdiyle
+  ÇALIŞTIRILMAZ; `MAX_PATTERN_CHARS` üstü değerlendirilmez). Derlenemeyen
+  kalıp → `unavailable`. **Payload alanında yayımlanan herhangi bir kalıp**
+  da `unavailable`: keyfî bir regex'in keyfî kullanıcı metninden neyi kabul
+  ettiğine karar vermiyoruz ve pinli sözleşme orada kalıp yayımlamaz.
+- **Kimlik alanlarında SOME-exclusion.** Station'ın meşru gönderdiği
+  değerlerin *bir kısmını* dışlamak da reddedilen istektir: nonce 1-19
+  basamağın her uzunluğunda gerçekten üretilir (sayaç küçük başlar; ms-saati
+  ~13 hane), bu yüzden yayımlanan aralık (1,19)'u **kapsamak** zorundadır —
+  kesişmek yetmez. `minLength=5` veya `maxLength=5` → `drifted`. did/sig tek
+  uzunluk olduğu için bu kural eski tam-dışlama denetimine indirgenir.
+- **Payload sınırları künye §14.4'e göre uyarıdır, kapanma değildir.**
+  Yayımlanan `text`/`value` uzunluk sınırı pinli beklentiden farklıysa
+  `payload_*_length` UYARI alanları ateşlenir, durum `current` kalır ve
+  **etkin limitler** (`ProjectionResult.effective_payload_limits`, kendi
+  tavanımızla kırpılmış) composer'ın gerçek istekte uygulayacağı değer olarak
+  dışa verilir — "kodda sabit limit yok" ilkesinin makine karşılığı. Dejenere
+  yayın (boş aralık) yine `drifted`.
+
 ### Bozuk şema neden `unavailable`
 
 Önceki sürümde koşullu `sig.maxLength = "86"` **`drifted`** sayılıyordu. Artık

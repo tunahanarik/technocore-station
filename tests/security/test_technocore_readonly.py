@@ -53,6 +53,7 @@ from station_api.technocore.projection import (
     EXPECTED_NAME_PATTERN,
     EXPECTED_NONCE_PATTERN,
     EXPECTED_SIGNATURE_PATTERN,
+    MAX_PATTERN_CHARS,
     MAX_PROSE_CHARS,
     NONCE_MAX_DIGITS,
     NONCE_MIN_DIGITS,
@@ -81,6 +82,8 @@ from station_api.technocore.sources import (
     required_sources,
 )
 from technocore_conform import (
+    MAX_MESSAGE_CHARS,
+    MAX_NOTE_VALUE_CHARS,
     NAME_PATTERN,
     NONCE_PATTERN,
     SIGNATURE_CHARS,
@@ -1392,6 +1395,83 @@ def test_every_allowed_validation_keyword_is_actually_evaluated() -> None:
         )
 
 
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_an_overflowing_repetition_pattern_is_refused_not_raised(
+    body_of: BodyOf, payload: str
+) -> None:
+    """PR #11 review P2-1: ``a{4294967296}`` raises OverflowError, not re.error.
+
+    Thirteen characters, far under the size cap, and it escaped the compile
+    guard entirely - project() raised instead of answering. A compile failure
+    is a compile failure whatever exception class CPython picks.
+    """
+    del payload
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["properties"]["did"]["pattern"] = "a{4294967296}"
+
+    result = _projected(documents)
+    assert result.state is DriftState.UNAVAILABLE
+    assert any("derlenemiyor" in item.problem for item in result.critical_unevaluable)
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_null_properties_member_in_a_triggered_dependency_is_unreadable(
+    body_of: BodyOf, payload: str
+) -> None:
+    """PR #11 review P2-2: ``dependentSchemas.<payload> = {properties: null}``.
+
+    Body-level and did-lane null properties were caught; a triggered non-did
+    dependency's null slipped through as absence and read current.
+    """
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["dependentSchemas"][payload] = {"properties": None}
+
+    result = _projected(documents)
+    assert result.state is DriftState.UNAVAILABLE
+    assert any("null" in item.problem for item in result.critical_unevaluable)
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+@pytest.mark.parametrize(
+    ("mutate_key", "expected_token"),
+    [
+        pytest.param("null", "null", id="null-member"),
+        pytest.param("absent", "yok", id="absent-member"),
+    ],
+)
+def test_dependent_schemas_did_null_and_absent_read_differently(
+    body_of: BodyOf, payload: str, mutate_key: str, expected_token: str
+) -> None:
+    """PR #11 review P3-1: the null/absent message discipline holds here too."""
+    del payload
+    documents = build_documents(parsed=True)
+    body = body_of(documents["openapi"])
+    if mutate_key == "null":
+        body["dependentSchemas"]["did"] = None
+    else:
+        del body["dependentSchemas"]["did"]
+
+    result = _projected(documents)
+    assert result.state is DriftState.UNAVAILABLE
+    assert any(expected_token in item.problem for item in result.critical_unevaluable)
+    if expected_token == "yok":
+        assert not any("null" in item.problem for item in result.critical_unevaluable)
+
+
+def test_effective_payload_limits_default_safely_on_an_unavailable_verdict() -> None:
+    """PR #11 review P3-3: a fetch-failure verdict still answers both keys.
+
+    A Paket D consumer indexing limits["text"] after an unavailable check must
+    get the pinned safe default, never a KeyError. The gate is shut on such a
+    verdict anyway; these values only ever tighten local acceptance.
+    """
+    from station_api.technocore.projection import SentLength, unavailable
+
+    limits = unavailable(("belge alinamadi",)).effective_payload_limits
+    assert limits["text"] == SentLength(1, MAX_MESSAGE_CHARS)
+    assert limits["value"] == SentLength(1, MAX_NOTE_VALUE_CHARS)
+
+
 # --- comparison must not normalise a difference away -----------------------
 
 
@@ -1983,3 +2063,443 @@ def test_tests_never_touch_the_real_installation(
     temp_root = str(Path(tempfile.gettempdir()).resolve()).lower()
     assert resolved.startswith(temp_root)
     assert "technocorestation" not in resolved
+
+
+# --- Stage B: schema boundaries closed for good ---
+#
+# The remaining edges of the evaluator, pinned one by one. Null is not absent:
+# a member that is present and ``null`` is a malformed schema, while a member
+# that is simply not there publishes no constraint at all - and only the
+# mandatory members (the conditional ``sig``/``nonce``, ``properties.did``)
+# may close the gate by being absent. A duplicate in a name list breaks the
+# document's own metaschema, a payload pattern is never evaluable, and a
+# published credential bound is accepted only when it *covers* everything
+# Station legitimately sends - intersecting the range is not acceptance.
+# Capacity bounds on the payload fields are the deliberate exception: the
+# charter (14.4) classifies them as runtime data, surfaced as warnings and
+# enforced by the composer, so their acceptance, clamping and contradiction
+# cases are pinned here too.
+
+#: The charter ceiling per payload field: what the composer may never exceed,
+#: whatever the server publishes.
+_PAYLOAD_CEILINGS = {"text": MAX_MESSAGE_CHARS, "value": MAX_NOTE_VALUE_CHARS}
+
+
+def _warning_key(payload: str, suffix: str) -> str:
+    """``payload_*`` on the message lane, ``note_payload_*`` on the note lane."""
+    return ("note_payload_" if payload == "value" else "payload_") + suffix
+
+
+# --- null is a published value, not a missing key ---------------------------
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_null_payload_node_is_unreadable_not_absent(
+    body_of: BodyOf, payload: str
+) -> None:
+    """``properties.text: null`` is a malformed member, not an absent one.
+
+    Reading it as "no constraint published here" would be the permissive
+    guess; a schema member that is present and null sits outside the
+    document's own metaschema, so the honest verdict is that it was not read.
+    """
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["properties"][payload] = None
+
+    result = _projected(documents)
+    assert result.state is DriftState.UNAVAILABLE
+    assert any("null" in item.problem for item in result.critical_unevaluable)
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_null_unconditional_sig_node_is_unreadable(
+    body_of: BodyOf, payload: str
+) -> None:
+    """The description-only ``properties.sig`` going null is still malformed.
+
+    The pinned node carries nothing but prose, so nulling it removes no
+    constraint - and that is exactly why it must not pass: the verdict has to
+    come from the shape being readable, not from the shape being harmless.
+    """
+    del payload
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["properties"]["sig"] = None
+
+    result = _projected(documents)
+    assert result.state is DriftState.UNAVAILABLE
+    assert any("null" in item.problem for item in result.critical_unevaluable)
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_null_conditional_did_node_is_unreadable(
+    body_of: BodyOf, payload: str
+) -> None:
+    """A ``did`` sitting inside the signed lane's properties may not be null.
+
+    The mandatory-member guard names only ``sig`` and ``nonce``; this pins
+    that the per-field walk still refuses a null on any node it would merge.
+    """
+    del payload
+    documents = build_documents(parsed=True)
+    signed_lane(body_of(documents["openapi"]))["properties"]["did"] = None
+
+    result = _projected(documents)
+    assert result.state is DriftState.UNAVAILABLE
+    assert any("null" in item.problem for item in result.critical_unevaluable)
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_null_node_inside_a_triggered_dependency_is_unreadable(
+    body_of: BodyOf, payload: str
+) -> None:
+    """A dependency keyed on the payload field applies, nulls included.
+
+    A signed body carries its payload field, so the dependency switches on
+    and its properties are merged - a null there is as malformed as one at
+    the top level, and must not vanish into the merge.
+    """
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["dependentSchemas"][payload] = {
+        "properties": {payload: None}
+    }
+
+    result = _projected(documents)
+    assert result.state is DriftState.UNAVAILABLE
+    assert any("null" in item.problem for item in result.critical_unevaluable)
+
+
+# --- a duplicate name breaks the document's own metaschema ------------------
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_duplicated_name_in_the_body_required_list_is_unreadable(
+    body_of: BodyOf, payload: str
+) -> None:
+    """``required: ["text", "text"]`` is not a required list this module read.
+
+    The duplicate does not change what the keyword means, but a document that
+    breaks its own metaschema is not one whose meaning was verified.
+    """
+    del payload
+    documents = build_documents(parsed=True)
+    body = body_of(documents["openapi"])
+    body["required"] = [*body["required"], body["required"][0]]
+
+    result = _projected(documents)
+    assert result.state is DriftState.UNAVAILABLE
+    assert any("tekrarli" in item.problem for item in result.critical_unevaluable)
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_duplicated_name_in_an_any_of_branch_is_unreadable(
+    body_of: BodyOf, payload: str
+) -> None:
+    """The same rule inside an ``anyOf`` branch: a broken list is not read."""
+    del payload
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["anyOf"] = [{"required": ["did", "did"]}]
+
+    result = _projected(documents)
+    assert result.state is DriftState.UNAVAILABLE
+    assert any("tekrarli" in item.problem for item in result.critical_unevaluable)
+
+
+# --- a pattern on a payload field is never evaluable ------------------------
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_any_pattern_on_a_payload_field_is_unevaluable(
+    body_of: BodyOf, payload: str
+) -> None:
+    """Even a well-formed payload pattern closes the gate as unevaluable.
+
+    ``(?!)`` compiles and rejects everything, but that is not why it fails:
+    no module here can decide what an arbitrary regex accepts of arbitrary
+    user text, and the pinned contract publishes no payload pattern at all.
+    """
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["properties"][payload]["pattern"] = "(?!)"
+
+    result = _projected(documents)
+    assert result.state is DriftState.UNAVAILABLE
+    assert any(
+        "payload alaninda kalip" in item.problem
+        for item in result.critical_unevaluable
+    )
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_pattern_that_does_not_compile_is_unreadable(
+    body_of: BodyOf, payload: str
+) -> None:
+    """``pattern: "["`` is a schema nobody can honour, not a missing pattern."""
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["properties"][payload]["pattern"] = "["
+
+    result = _projected(documents)
+    assert result.state is DriftState.UNAVAILABLE
+    assert any("derlenemiyor" in item.problem for item in result.critical_unevaluable)
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_an_oversized_pattern_is_refused_before_compiling(
+    body_of: BodyOf, payload: str
+) -> None:
+    """A pattern past the size cap is not even handed to the compiler.
+
+    The pinned contract's longest pattern is well under the cap, so anything
+    bigger is not a constraint this module evaluates - and refusing early
+    keeps a remote document from choosing what ``re.compile`` chews on.
+    """
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["properties"][payload]["pattern"] = "x" * (
+        MAX_PATTERN_CHARS + 88
+    )
+
+    result = _projected(documents)
+    assert result.state is DriftState.UNAVAILABLE
+    assert any("uzunlukta" in item.problem for item in result.critical_unevaluable)
+
+
+# --- payload capacity: warnings, clamping, and the one contradiction --------
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_the_pinned_payload_bounds_are_current_with_no_warnings(
+    body_of: BodyOf, payload: str
+) -> None:
+    """Publishing exactly the pinned bounds is agreement, not a finding.
+
+    The anchor for every warning below: the unmutated reference already
+    carries ``minLength: 1`` and the charter ceiling, and the effective
+    limits the composer reads back are exactly our own contract (14.4).
+    """
+    documents = build_documents(parsed=True)
+    node = body_of(documents["openapi"])["properties"][payload]
+    assert node["minLength"] == 1
+    assert node["maxLength"] == _PAYLOAD_CEILINGS[payload]
+
+    result = _projected(documents)
+    assert result.state is DriftState.CURRENT
+    assert result.warnings == ()
+    assert result.effective_payload_limits == {
+        "text": SentLength(1, MAX_MESSAGE_CHARS),
+        "value": SentLength(1, MAX_NOTE_VALUE_CHARS),
+    }
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_tighter_payload_ceiling_is_a_warning_with_an_effective_limit(
+    body_of: BodyOf, payload: str
+) -> None:
+    """A lower payload ceiling warns and becomes the limit the composer uses.
+
+    The charter (14.4) classifies capacity as runtime data: a signature stays
+    valid, the user sees the difference, and the composer enforces the
+    published bound on the real request rather than a hard-coded one.
+    """
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["properties"][payload]["maxLength"] = 5
+
+    result = _projected(documents)
+    assert result.state is DriftState.CURRENT
+    assert _warning_key(payload, "max_length") in {
+        item.field.key for item in result.warnings
+    }
+    assert result.effective_payload_limits[payload] == SentLength(1, 5)
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_higher_payload_floor_is_a_warning_with_an_effective_limit(
+    body_of: BodyOf, payload: str
+) -> None:
+    """A raised payload floor is the same story from the other side (14.4)."""
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["properties"][payload]["minLength"] = 100
+
+    result = _projected(documents)
+    assert result.state is DriftState.CURRENT
+    assert _warning_key(payload, "min_length") in {
+        item.field.key for item in result.warnings
+    }
+    assert result.effective_payload_limits[payload] == SentLength(
+        100, _PAYLOAD_CEILINGS[payload]
+    )
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_ceiling_above_our_contract_is_warned_and_clamped(
+    body_of: BodyOf, payload: str
+) -> None:
+    """A server offering more than the charter allows does not raise our limit.
+
+    The published bound is still a warning - it differs from the pin - but
+    the effective limit is clamped to our own ceiling: the composer never
+    exceeds Station's contract on the strength of a generous remote document.
+    """
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["properties"][payload]["maxLength"] = 999999
+
+    result = _projected(documents)
+    assert result.state is DriftState.CURRENT
+    assert _warning_key(payload, "max_length") in {
+        item.field.key for item in result.warnings
+    }
+    assert result.effective_payload_limits[payload] == SentLength(
+        1, _PAYLOAD_CEILINGS[payload]
+    )
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_contradictory_payload_bounds_are_drift_not_a_warning(
+    body_of: BodyOf, payload: str
+) -> None:
+    """Two warnings that together reject every request are not two warnings.
+
+    Each bound alone is a capacity change (14.4). Combined they leave no
+    satisfiable length, which rejects our request whatever the user writes -
+    an evaluated contradiction, so the gate closes as drift.
+    """
+    documents = build_documents(parsed=True)
+    node = body_of(documents["openapi"])["properties"][payload]
+    node["minLength"] = 100
+    node["maxLength"] = 5
+
+    result = _projected(documents)
+    assert result.state is DriftState.DRIFTED
+    assert any(
+        "uzunluk araligi bos" in item.reason for item in result.critical_mismatches
+    )
+
+
+# --- a credential bound must cover the sent range, not intersect it ---------
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_nonce_ceiling_below_the_sent_range_is_drift(
+    body_of: BodyOf, payload: str
+) -> None:
+    """``maxLength: 5`` on the conditional nonce refuses real nonces.
+
+    A millisecond clock is ~13 digits, so values Station legitimately sends
+    are refused even though five-digit nonces would pass. Evaluated and
+    contradicted, not unreadable - the reason states the published number.
+    """
+    del payload
+    documents = build_documents(parsed=True)
+    signed_lane(body_of(documents["openapi"]))["properties"]["nonce"]["maxLength"] = 5
+
+    result = _projected(documents)
+    assert result.state is DriftState.DRIFTED
+    assert any("en fazla 5" in item.reason for item in result.critical_mismatches)
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_nonce_floor_above_the_sent_range_is_drift(
+    body_of: BodyOf, payload: str
+) -> None:
+    """``minLength: 5`` refuses the small counters a fresh key starts with."""
+    del payload
+    documents = build_documents(parsed=True)
+    signed_lane(body_of(documents["openapi"]))["properties"]["nonce"]["minLength"] = 5
+
+    result = _projected(documents)
+    assert result.state is DriftState.DRIFTED
+    assert any("en az 5" in item.reason for item in result.critical_mismatches)
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+@pytest.mark.parametrize(
+    ("side", "value", "expected_state"),
+    [
+        ("minLength", NONCE_MIN_DIGITS, DriftState.CURRENT),
+        ("minLength", NONCE_MIN_DIGITS + 1, DriftState.DRIFTED),
+        ("minLength", NONCE_MAX_DIGITS, DriftState.DRIFTED),
+        ("minLength", NONCE_MAX_DIGITS + 1, DriftState.DRIFTED),
+        ("maxLength", NONCE_MAX_DIGITS, DriftState.CURRENT),
+        ("maxLength", NONCE_MAX_DIGITS - 1, DriftState.DRIFTED),
+        ("maxLength", 6, DriftState.DRIFTED),
+        ("maxLength", 1, DriftState.DRIFTED),
+        ("maxLength", 0, DriftState.DRIFTED),
+    ],
+)
+def test_a_published_nonce_bound_must_cover_the_whole_sent_range(
+    body_of: BodyOf, payload: str, side: str, value: int, expected_state: DriftState
+) -> None:
+    """The published range must cover (1, 19); merely intersecting is refusal.
+
+    Every length in the range is a value Station really produces - a counter
+    starts small, a millisecond clock is ~13 digits - so a bound excluding
+    *some* of them already refuses real requests. Only the exact boundary
+    values are acceptable bounds.
+    """
+    del payload
+    documents = build_documents(parsed=True)
+    signed_lane(body_of(documents["openapi"]))["properties"]["nonce"][side] = value
+
+    assert _projected(documents).state is expected_state
+
+
+# --- absent is not null: deletion publishes nothing -------------------------
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_deleting_the_payload_node_is_absence_not_null(
+    body_of: BodyOf, payload: str
+) -> None:
+    """An absent unconditional payload node publishes no constraint at all.
+
+    Nothing to read means nothing to refuse: the pinned expectation stands in
+    for the unpublished bounds (14.4), and the mandatory-member guards cover
+    only ``sig``, ``nonce`` and ``did``. Above all, deletion must not be
+    reported with the null message - the two are different facts.
+    """
+    documents = build_documents(parsed=True)
+    del body_of(documents["openapi"])["properties"][payload]
+
+    result = _projected(documents)
+    assert result.state is DriftState.CURRENT
+    assert not any("null" in item.problem for item in result.observations)
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_deleting_the_unconditional_sig_node_is_not_an_alarm(
+    body_of: BodyOf, payload: str
+) -> None:
+    """The pinned ``properties.sig`` carries only prose, so losing it is fine.
+
+    The constraints live on the conditional lane, which still carries them;
+    an absent annotation-only node changes nothing a signature depends on.
+    """
+    del payload
+    documents = build_documents(parsed=True)
+    del body_of(documents["openapi"])["properties"]["sig"]
+
+    assert _projected(documents).state is DriftState.CURRENT
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_null_mandatory_member_and_an_absent_one_read_differently(
+    body_of: BodyOf, payload: str
+) -> None:
+    """A conditional ``sig`` that is null and one that is gone both close.
+
+    Two different messages on purpose: null is a malformed member, absence is
+    a lane that no longer names the credential at all. Reporting one as the
+    other would be a claim the evidence does not support.
+    """
+    del payload
+    nulled = build_documents(parsed=True)
+    signed_lane(body_of(nulled["openapi"]))["properties"]["sig"] = None
+
+    result = _projected(nulled)
+    assert result.state is DriftState.UNAVAILABLE
+    assert any("null" in item.problem for item in result.critical_unevaluable)
+
+    absent = build_documents(parsed=True)
+    del signed_lane(body_of(absent["openapi"]))["properties"]["sig"]
+
+    result = _projected(absent)
+    assert result.state is DriftState.UNAVAILABLE
+    assert any("yok" in item.problem for item in result.critical_unevaluable)
+    assert not any("null" in item.problem for item in result.critical_unevaluable)
