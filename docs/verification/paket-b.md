@@ -60,7 +60,8 @@ metaşeması `required` tekliğini şart koşar (IMP-258).
 
 ## Testler
 
-Aşama B bölümü: **17 test fonksiyonu / 50 parametrik senaryo**, iki lane'de.
+Aşama B bölümü: **20 test fonksiyonu / 56 parametrik senaryo**, iki lane'de
+(bağımsız inceleme sayımıyla düzeltildi; ilk kayıt 17/50 diyordu).
 Nonce sınır matrisi (min 1/2/19/20, max 19/18/6/1/0) kapsama kuralını sabitler;
 null-vs-silinmiş ayrımı iki farklı mesajla ("null - gecersiz sema uyesi" /
 "yok") ayrıca test edilir; tavan üstü yayının kırpılması dahil. Hiçbir mevcut
@@ -68,8 +69,8 @@ test silinmedi/gevşetilmedi.
 
 | Kapı | Sonuç |
 |---|---|
-| pytest | **795 geçti** (Paket A sonrası 739 + Aşama B senaryoları) |
-| ruff (üç ağaç) / mypy strict | geçti / 53 dosya 0 hata |
+| pytest | **804 geçti** (739 + Aşama B 56 + inceleme regresyonları 9) |
+| ruff (üç ağaç) / mypy strict | geçti / 51 dosya 0 hata |
 | Vitest | 59 geçti |
 | `git diff --check` | 0 |
 
@@ -86,9 +87,24 @@ test silinmedi/gevşetilmedi.
 
 ## Bağımsız inceleme sonucu
 
-(PR üzerinde doldurulacak — Copilot kota durumu ne olursa olsun temiz
-bağlamlı reviewer subagent koşulacak; bu insan güvenlik incelemesi değildir,
-ADR-0001 §5 kalan risk.)
+Temiz bağlamlı, yazardan ayrı bir Claude reviewer subagent'ı head `2ed92c9`
+diffini inceledi ve **21 karşı-probu fiilen çalıştırdı** (null varyantları,
+tekrarlı `dependentSchemas.did.required`, 512/513 sınırındaki pattern'ler,
+nonce kapsama matrisi geniş/dar/negatif, koşullu-tek `maxLength:7` birleşimi,
+main'in eski değerlendiricisine karşı önce-durumu doğrulaması dahil).
+
+Bulgular ve merge öncesi yapılanlar:
+
+| Bulgu | Düzeltme |
+|---|---|
+| **P2-1:** `re.compile("a{4294967296}")` `re.error` değil `OverflowError` fırlatır — 13 karakterlik uzak pattern `project()`'i patlatıyordu (servis geniş `except` ile fail-closed kalıyordu ama gözlemsiz) | Guard `(re.error, OverflowError)` yakalar; regresyon testi eklendi |
+| **P2-2:** tetiklenen non-did bağımlılığında `properties: null` yokluk gibi okunup `current` sızdırıyordu | `_check_object_node` null'u "gecersiz sema uyesi" olarak ayırır; regresyon testi eklendi |
+| **P3-1:** `dependentSchemas`/`dependentSchemas.did` null iken "yok/eksik" mesajı veriliyordu | null/absent mesaj disiplini bu iki noktada da uygulanır; parametrik test eklendi |
+| **P3-2:** bu raporun ilk sürümündeki sayımlar (17/50, mypy 53) hatalıydı | 20/56 ve 51 olarak düzeltildi; düzeltme notu bırakıldı |
+| **P3-3:** `unavailable()` verdict'inde `effective_payload_limits` `{}` dönüyordu → gelecekteki D tüketicisinde KeyError | Her iki anahtar pinli güvenli varsayılanla daima döner; testi eklendi |
+
+Düzeltmeler sonrası tam suite: **804 pytest** + 59 Vitest. P0/P1 yok. Bu
+inceleme bir **insan güvenlik incelemesi değildir** (ADR-0001 §5 kalan risk).
 
 ## Sınırlar
 

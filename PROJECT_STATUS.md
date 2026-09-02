@@ -963,7 +963,8 @@ sonu özetlerini almaya devam eder.
 - [x] Payload limitleri künye §14.4 gereği **uyarı + etkin limit**:
       `effective_payload_limits` composer'ın (Paket D) uygulayacağı, tavanla
       kırpılmış değerleri dışa verir. 4 yeni WARNING alanı.
-- [x] 17 test fonksiyonu / 50 parametrik senaryo; **795 pytest** + 59 Vitest.
+- [x] 20 test fonksiyonu / 56 parametrik senaryo; **795 pytest** + 59 Vitest
+      (inceleme düzeltmeleriyle 801'e çıktı; aşağıda).
 - [x] SI-120…SI-124, IMP-254…IMP-258.
 
 ## Sonraki aşama: Aşama 4 — Composer & Participation

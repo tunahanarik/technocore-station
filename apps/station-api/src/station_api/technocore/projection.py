@@ -467,9 +467,10 @@ def _check_field_node(node: object, where: str) -> Reading:
             # Compiled only, never executed against remote-chosen input: a
             # pattern that does not even compile is an unusable schema, and
             # saying "could not read it" beats letting it pass as if it
-            # constrained nothing.
+            # constrained nothing. OverflowError is real: a 13-character
+            # pattern like a{4294967296} raises it instead of re.error.
             re.compile(pattern)
-        except re.error as exc:
+        except (re.error, OverflowError) as exc:
             return Reading(problem=f"{where}.pattern derlenemiyor: {exc}")
 
     for key in ("minLength", "maxLength"):
@@ -688,9 +689,14 @@ def _check_object_node(
                 )
             )
 
-    properties = node.get("properties")
-    if properties is not None and not isinstance(properties, dict):
-        return Reading(problem=f"{where}.properties bir nesne degil")
+    if "properties" in node:
+        properties = node["properties"]
+        if properties is None:
+            return Reading(
+                problem=f"{where}.properties null - gecersiz sema uyesi"
+            )
+        if not isinstance(properties, dict):
+            return Reading(problem=f"{where}.properties bir nesne degil")
 
     return Reading(value=node)
 
@@ -725,15 +731,19 @@ def evaluate_signed_body(schema: object, fields: frozenset[str]) -> Reading:
         if branches.problem or branches.conflict:
             return branches
 
-    dependent = schema.get("dependentSchemas")
-    if dependent is None:
+    if "dependentSchemas" not in schema:
         return Reading(problem="imzali lane kosullu semasi yok (dependentSchemas eksik)")
+    dependent = schema["dependentSchemas"]
+    if dependent is None:
+        return Reading(problem="dependentSchemas null - gecersiz sema uyesi")
     if not isinstance(dependent, dict):
         return Reading(problem="dependentSchemas bir nesne degil")
 
-    lane = dependent.get("did")
-    if lane is None:
+    if "did" not in dependent:
         return Reading(problem="dependentSchemas.did yok")
+    lane = dependent["did"]
+    if lane is None:
+        return Reading(problem="dependentSchemas.did null - gecersiz sema uyesi")
 
     # Every dependency keyed on a field the signed body carries switches on.
     # Reading only `did` was the gap: a signed body also carries `sig`, `nonce`
@@ -1439,12 +1449,18 @@ class ProjectionResult:
             if isinstance(value, int):
                 bounds.setdefault(name, {})[side] = value
         ceilings = {"text": MAX_MESSAGE_CHARS, "value": MAX_NOTE_VALUE_CHARS}
+        # Both keys are always present, falling back to the pinned contract
+        # when a check never produced observations (an unavailable verdict):
+        # a consumer indexing limits["text"] after a fetch failure should get
+        # the safe default, not a KeyError. The gate is shut on such a
+        # verdict anyway; these values only ever tighten what the composer
+        # would accept locally.
         return {
             name: SentLength(
-                max(1, sides.get("low", 1)),
-                min(sides.get("high", ceilings[name]), ceilings[name]),
+                max(1, bounds.get(name, {}).get("low", 1)),
+                min(bounds.get(name, {}).get("high", ceiling), ceiling),
             )
-            for name, sides in bounds.items()
+            for name, ceiling in ceilings.items()
         }
 
     @property

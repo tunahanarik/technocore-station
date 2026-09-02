@@ -1395,6 +1395,83 @@ def test_every_allowed_validation_keyword_is_actually_evaluated() -> None:
         )
 
 
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_an_overflowing_repetition_pattern_is_refused_not_raised(
+    body_of: BodyOf, payload: str
+) -> None:
+    """PR #11 review P2-1: ``a{4294967296}`` raises OverflowError, not re.error.
+
+    Thirteen characters, far under the size cap, and it escaped the compile
+    guard entirely - project() raised instead of answering. A compile failure
+    is a compile failure whatever exception class CPython picks.
+    """
+    del payload
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["properties"]["did"]["pattern"] = "a{4294967296}"
+
+    result = _projected(documents)
+    assert result.state is DriftState.UNAVAILABLE
+    assert any("derlenemiyor" in item.problem for item in result.critical_unevaluable)
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+def test_a_null_properties_member_in_a_triggered_dependency_is_unreadable(
+    body_of: BodyOf, payload: str
+) -> None:
+    """PR #11 review P2-2: ``dependentSchemas.<payload> = {properties: null}``.
+
+    Body-level and did-lane null properties were caught; a triggered non-did
+    dependency's null slipped through as absence and read current.
+    """
+    documents = build_documents(parsed=True)
+    body_of(documents["openapi"])["dependentSchemas"][payload] = {"properties": None}
+
+    result = _projected(documents)
+    assert result.state is DriftState.UNAVAILABLE
+    assert any("null" in item.problem for item in result.critical_unevaluable)
+
+
+@pytest.mark.parametrize(("body_of", "payload"), _LANES)
+@pytest.mark.parametrize(
+    ("mutate_key", "expected_token"),
+    [
+        pytest.param("null", "null", id="null-member"),
+        pytest.param("absent", "yok", id="absent-member"),
+    ],
+)
+def test_dependent_schemas_did_null_and_absent_read_differently(
+    body_of: BodyOf, payload: str, mutate_key: str, expected_token: str
+) -> None:
+    """PR #11 review P3-1: the null/absent message discipline holds here too."""
+    del payload
+    documents = build_documents(parsed=True)
+    body = body_of(documents["openapi"])
+    if mutate_key == "null":
+        body["dependentSchemas"]["did"] = None
+    else:
+        del body["dependentSchemas"]["did"]
+
+    result = _projected(documents)
+    assert result.state is DriftState.UNAVAILABLE
+    assert any(expected_token in item.problem for item in result.critical_unevaluable)
+    if expected_token == "yok":
+        assert not any("null" in item.problem for item in result.critical_unevaluable)
+
+
+def test_effective_payload_limits_default_safely_on_an_unavailable_verdict() -> None:
+    """PR #11 review P3-3: a fetch-failure verdict still answers both keys.
+
+    A Paket D consumer indexing limits["text"] after an unavailable check must
+    get the pinned safe default, never a KeyError. The gate is shut on such a
+    verdict anyway; these values only ever tighten local acceptance.
+    """
+    from station_api.technocore.projection import SentLength, unavailable
+
+    limits = unavailable(("belge alinamadi",)).effective_payload_limits
+    assert limits["text"] == SentLength(1, MAX_MESSAGE_CHARS)
+    assert limits["value"] == SentLength(1, MAX_NOTE_VALUE_CHARS)
+
+
 # --- comparison must not normalise a difference away -----------------------
 
 
