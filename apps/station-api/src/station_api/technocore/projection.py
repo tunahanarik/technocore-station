@@ -86,6 +86,11 @@ from station_api.technocore.sources import SourceId
 #: small to be a useful smuggling channel.
 MAX_OBSERVED_CHARS = 200
 
+#: Longest pattern value this module will even try to compile. The pinned
+#: contract's longest pattern is well under this; anything bigger is not a
+#: constraint we evaluate.
+MAX_PATTERN_CHARS = 512
+
 #: Longest prose value this module will even try to read. A description
 #: beyond this is not judged - it is reported as unevaluable, because a
 #: negation could be hiding past any bound we did scan.
@@ -191,6 +196,9 @@ class Derived(StrEnum):
     LANE_PRESENT = "lane_present"
     #: The set of field names the signed lane makes *required*.
     SIGNED_REQUIRED = "signed_required"
+    #: A merged published length bound of the lane's payload field. Absent
+    #: bounds observe as the pinned expectation, so only a real change warns.
+    PAYLOAD_BOUND = "payload_bound"
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +366,13 @@ class SignedBodyView:
     lane: dict[str, Any]
     #: ``lane["properties"]`` - the credential field schemas.
     credentials: dict[str, Any]
+    #: The merged published length bounds of the payload field (``text`` or
+    #: ``value``), ``None`` where no bound is published at any level. The
+    #: charter (14.4) treats capacity limits as runtime data, never as
+    #: hard-coded constants: these are what the composer must enforce on the
+    #: real request, and what the payload-bound warning fields observe.
+    payload_low: int | None = None
+    payload_high: int | None = None
 
 
 def _unknown_keys(node: dict[str, Any], understood: frozenset[str]) -> list[str]:
@@ -394,6 +409,11 @@ def _read_name_list(node: dict[str, Any], key: str, where: str) -> Reading:
         isinstance(name, str) for name in published
     ):
         return Reading(problem=f"{where}.{key} bir ad listesi degil: {published!r}")
+    if len(set(published)) != len(published):
+        # JSON Schema requires the names to be unique. A duplicate does not
+        # change what the keyword means, but a document that breaks its own
+        # metaschema is not one this module claims to have read correctly.
+        return Reading(problem=f"{where}.{key} tekrarli ad iceriyor: {published!r}")
     return Reading(value=published)
 
 
@@ -435,8 +455,22 @@ def _check_field_node(node: object, where: str) -> Reading:
     if published_type.problem:
         return published_type
 
-    if "pattern" in node and not isinstance(node["pattern"], str):
-        return Reading(problem=f"{where}.pattern bir string degil: {node['pattern']!r}")
+    if "pattern" in node:
+        pattern = node["pattern"]
+        if not isinstance(pattern, str):
+            return Reading(problem=f"{where}.pattern bir string degil: {pattern!r}")
+        if len(pattern) > MAX_PATTERN_CHARS:
+            return Reading(
+                problem=f"{where}.pattern beklenmedik uzunlukta, degerlendirilmedi"
+            )
+        try:
+            # Compiled only, never executed against remote-chosen input: a
+            # pattern that does not even compile is an unusable schema, and
+            # saying "could not read it" beats letting it pass as if it
+            # constrained nothing.
+            re.compile(pattern)
+        except re.error as exc:
+            return Reading(problem=f"{where}.pattern derlenemiyor: {exc}")
 
     for key in ("minLength", "maxLength"):
         bound = _read_bound(node, key, where)
@@ -534,23 +568,41 @@ def _judge_constraint(name: str, merged: _Constraint) -> Reading:
 
     sent = STATION_FIELD_LENGTHS.get(name)
     if sent is None:
-        # A payload field: its length varies with what the user writes, so
-        # there is no fixed value to compare a bound against. The emptiness
-        # check above is what can be said about it.
+        # A payload field. Its length varies with what the user writes, so a
+        # published bound is not a contract violation - the charter (14.4)
+        # classifies capacity limits as a warning, surfaced and then enforced
+        # on the real request - but a *pattern* here is different: we cannot
+        # decide what an arbitrary regex accepts of arbitrary user text, and
+        # the pinned contract publishes none, so any pattern on a payload
+        # field is a constraint this module cannot evaluate.
+        if merged.patterns:
+            return Reading(
+                problem=(
+                    f"{name}: payload alaninda kalip yayimlanmis; hangi "
+                    "metinleri kabul ettigi degerlendirilemedi"
+                )
+            )
         return Reading(value=merged)
 
-    if low > sent.maximum:
+    # Excluding SOME of what Station legitimately sends is already a refused
+    # request, not just excluding all of it. A nonce is one to nineteen
+    # digits and every length in that range is a value Station really
+    # produces (a counter starts small; a millisecond clock is ~13 digits),
+    # so a published bound must cover the whole range. For did and sig the
+    # range is a single length and this reduces to the earlier total
+    # exclusion check.
+    if low > sent.minimum:
         return Reading(
             conflict=(
-                f"{name}: en az {low} karakter isteniyor, Station en fazla "
-                f"{sent.maximum} karakter gonderir"
+                f"{name}: en az {low} karakter isteniyor; Station'in mesru "
+                f"degerleri {sent.minimum} karaktere kadar iner"
             )
         )
-    if high is not None and high < sent.minimum:
+    if high is not None and high < sent.maximum:
         return Reading(
             conflict=(
-                f"{name}: en fazla {high} karaktere izin veriliyor, Station en az "
-                f"{sent.minimum} karakter gonderir"
+                f"{name}: en fazla {high} karaktere izin veriliyor; Station'in "
+                f"mesru degerleri {sent.maximum} karaktere kadar cikar"
             )
         )
     return Reading(value=merged)
@@ -704,26 +756,49 @@ def evaluate_signed_body(schema: object, fields: frozenset[str]) -> Reading:
     if not isinstance(credentials, dict):
         return Reading(problem="dependentSchemas.did.properties bir nesne degil")
 
+    # null and absent are different answers (see _Absent). A member that is
+    # present but null is a malformed schema, not a missing one, and neither
+    # may slip through as "nothing published here".
     for name in ("sig", "nonce"):
-        if credentials.get(name) is None:
+        if name not in credentials:
             return Reading(problem=f"dependentSchemas.did.properties.{name} yok")
-    if properties.get("did") is None:
+        if credentials[name] is None:
+            return Reading(
+                problem=f"dependentSchemas.did.properties.{name} null - gecersiz sema uyesi"
+            )
+    if "did" not in properties:
         return Reading(problem="properties.did yok")
+    if properties["did"] is None:
+        return Reading(problem="properties.did null - gecersiz sema uyesi")
 
     # Gather every schema that applies to each field Station sends: the
     # unconditional one and one per triggered dependency. Reading only the
     # names we expected to find there is what let a `did` inside the
     # conditional properties carry a `not` unnoticed.
+    payload_low: int | None = None
+    payload_high: int | None = None
+    credential_names = frozenset(STATION_FIELD_LENGTHS)
+
     for name in sorted(fields):
         merged = _Constraint()
         sources: list[tuple[object, str]] = []
-        published = properties.get(name)
-        if published is not None:
+        if name in properties:
+            published = properties[name]
+            if published is None:
+                return Reading(problem=f"properties.{name} null - gecersiz sema uyesi")
             sources.append((published, f"properties.{name}"))
         for index, subschema in enumerate(applicable):
             nested = subschema.get("properties")
-            if isinstance(nested, dict) and nested.get(name) is not None:
-                sources.append((nested[name], f"kosullu[{index}].properties.{name}"))
+            if isinstance(nested, dict) and name in nested:
+                node = nested[name]
+                if node is None:
+                    return Reading(
+                        problem=(
+                            f"kosullu[{index}].properties.{name} null - "
+                            "gecersiz sema uyesi"
+                        )
+                    )
+                sources.append((node, f"kosullu[{index}].properties.{name}"))
 
         for node, where in sources:
             checked = _check_field_node(node, where)
@@ -736,7 +811,19 @@ def evaluate_signed_body(schema: object, fields: frozenset[str]) -> Reading:
             if judged.problem or judged.conflict:
                 return judged
 
-    return Reading(value=SignedBodyView(body=schema, lane=lane, credentials=credentials))
+        if name not in credential_names:
+            payload_low = max(merged.lows) if merged.lows else None
+            payload_high = min(merged.highs) if merged.highs else None
+
+    return Reading(
+        value=SignedBodyView(
+            body=schema,
+            lane=lane,
+            credentials=credentials,
+            payload_low=payload_low,
+            payload_high=payload_high,
+        )
+    )
 
 # ---------------------------------------------------------------------------
 # The expected contract
@@ -824,6 +911,9 @@ class ProtocolField:
             return pointer_text((*root, "dependentSchemas", "did", "required"))
         if self.derived is Derived.LANE_PRESENT:
             return pointer_text(root)
+        if self.derived is Derived.PAYLOAD_BOUND:
+            payload = next(iter(PLANNED_BODY_FIELDS[self.lane] - frozenset(STATION_FIELD_LENGTHS)))
+            return pointer_text((*root, "properties", payload, *self.pointer))
         if self.lane in (Lane.MESSAGE_SIGNED, Lane.NOTE_SIGNED):
             return pointer_text(
                 (*root, "dependentSchemas", "did", "properties", *self.pointer)
@@ -1129,6 +1219,71 @@ PROTOCOL_FIELDS: tuple[ProtocolField, ...] = (
             "guvenli kilan seydir: yapisal alan asla '|' iceremez."
         ),
     ),
+    # --- payload capacity from the body schema: warning + effective limit ---
+    #
+    # The charter (14.4) is explicit: a limit or capacity change produces a
+    # warning, never a closed gate, and limits are read at runtime rather
+    # than hard-coded. So a published payload bound is surfaced here as a
+    # warning when it differs from the pinned contract, and the *effective*
+    # bounds (see ProjectionResult.effective_payload_limits) are what the
+    # composer enforces on the real request. Degenerate publications - an
+    # empty range, or a schema that admits no payload at all - are caught
+    # earlier by the evaluator and do close the gate.
+    ProtocolField(
+        key="payload_min_length",
+        label="Mesaj en az uzunluk",
+        source_id=SourceId.OPENAPI,
+        lane=Lane.MESSAGE_BODY,
+        pointer=("minLength",),
+        severity=Severity.WARNING,
+        compare=Compare.NUMBER,
+        expected=1,
+        rationale=(
+            "Sunucunun mesaj metni icin yayimladigi alt sinir. Degisirse "
+            "imza gecerliligi etkilenmez; composer istegi bu sinira gore "
+            "denetler (kunye 14.4)."
+        ),
+        derived=Derived.PAYLOAD_BOUND,
+    ),
+    ProtocolField(
+        key="payload_max_length",
+        label="Mesaj en fazla uzunluk",
+        source_id=SourceId.OPENAPI,
+        lane=Lane.MESSAGE_BODY,
+        pointer=("maxLength",),
+        severity=Severity.WARNING,
+        compare=Compare.NUMBER,
+        expected=MAX_MESSAGE_CHARS,
+        rationale=(
+            "Sunucunun mesaj metni icin yayimladigi ust sinir. Kapasite "
+            "degisikligi uyaridir; etkin limit composer'da uygulanir."
+        ),
+        derived=Derived.PAYLOAD_BOUND,
+    ),
+    ProtocolField(
+        key="note_payload_min_length",
+        label="Note en az uzunluk",
+        source_id=SourceId.OPENAPI,
+        lane=Lane.NOTE_BODY,
+        pointer=("minLength",),
+        severity=Severity.WARNING,
+        compare=Compare.NUMBER,
+        expected=1,
+        rationale="Mesaj alt siniri ile ayni gerekce, note lane'i icin.",
+        derived=Derived.PAYLOAD_BOUND,
+    ),
+    ProtocolField(
+        key="note_payload_max_length",
+        label="Note en fazla uzunluk",
+        source_id=SourceId.OPENAPI,
+        lane=Lane.NOTE_BODY,
+        pointer=("maxLength",),
+        severity=Severity.WARNING,
+        compare=Compare.NUMBER,
+        expected=MAX_NOTE_VALUE_CHARS,
+        rationale="Mesaj ust siniri ile ayni gerekce, note lane'i icin.",
+        derived=Derived.PAYLOAD_BOUND,
+    ),
     # --- capacity and version: real changes, but a signature stays valid ----
     ProtocolField(
         key="message_chars",
@@ -1182,6 +1337,9 @@ class FieldObservation:
     outcome: FieldOutcome
     #: Set when the outcome is ``UNSUPPORTED``; explains what was not read.
     problem: str = ""
+    #: The original typed value for NUMBER-compared fields, so consumers (the
+    #: effective payload limits below) never parse a display string back.
+    raw: object = None
 
     @property
     def matches(self) -> bool:
@@ -1254,6 +1412,40 @@ class ProjectionResult:
     def critical_failures(self) -> tuple[FieldObservation, ...]:
         """Every critical field that did not match, whatever the reason."""
         return tuple(item for item in self.observations if item.is_critical_failure)
+
+    @property
+    def effective_payload_limits(self) -> dict[str, SentLength]:
+        """What the composer must enforce per payload field, from live data.
+
+        The published bounds (or the pinned expectation where none was
+        published) intersected with our own contract: never below one visible
+        character, never above the charter maximum. Keys are the payload
+        field names (``text``, ``value``). Only meaningful when the check
+        completed; on an unavailable/drifted verdict the gate is shut anyway.
+        """
+        bounds: dict[str, dict[str, int]] = {}
+        keyed = {
+            "payload_min_length": ("text", "low"),
+            "payload_max_length": ("text", "high"),
+            "note_payload_min_length": ("value", "low"),
+            "note_payload_max_length": ("value", "high"),
+        }
+        for item in self.observations:
+            slot = keyed.get(item.field.key)
+            if slot is None:
+                continue
+            name, side = slot
+            value = item.raw if isinstance(item.raw, int) else item.field.expected
+            if isinstance(value, int):
+                bounds.setdefault(name, {})[side] = value
+        ceilings = {"text": MAX_MESSAGE_CHARS, "value": MAX_NOTE_VALUE_CHARS}
+        return {
+            name: SentLength(
+                max(1, sides.get("low", 1)),
+                min(sides.get("high", ceilings[name]), ceilings[name]),
+            )
+            for name, sides in bounds.items()
+        }
 
     @property
     def warnings(self) -> tuple[FieldObservation, ...]:
@@ -1383,6 +1575,8 @@ def _lane_root(field: ProtocolField, document: dict[str, Any]) -> Reading:
     if not isinstance(view, SignedBodyView):  # pragma: no cover - guaranteed
         return Reading(problem="imzali lane okunamadi")
 
+    if field.derived is Derived.PAYLOAD_BOUND:
+        return Reading(value=view)
     if field.lane not in (Lane.MESSAGE_SIGNED, Lane.NOTE_SIGNED):
         return Reading(value=view.body)
     if field.derived is Derived.SIGNED_REQUIRED:
@@ -1395,6 +1589,17 @@ def _read(field: ProtocolField, document: dict[str, Any]) -> Reading:
     root = _lane_root(field, document)
     if root.problem or root.conflict or isinstance(root.value, _Absent):
         return root
+
+    if field.derived is Derived.PAYLOAD_BOUND:
+        view = root.value
+        if not isinstance(view, SignedBodyView):  # pragma: no cover - guaranteed
+            return Reading(problem="imzali lane okunamadi")
+        bound = (
+            view.payload_low if field.pointer == ("minLength",) else view.payload_high
+        )
+        # An unpublished bound constrains nothing, so it observes as the
+        # expectation itself: only a real published change produces a warning.
+        return Reading(value=field.expected if bound is None else bound)
 
     if field.derived is Derived.LANE_PRESENT:
         return Reading(value=field.expected if isinstance(root.value, dict) else ABSENT)
@@ -1452,7 +1657,10 @@ def _observe(
         FieldOutcome.MATCHED if _compare(field, reading.value) else FieldOutcome.MISMATCH
     )
     return FieldObservation(
-        field=field, observed=safe_display(reading.value), outcome=outcome
+        field=field,
+        observed=safe_display(reading.value),
+        outcome=outcome,
+        raw=reading.value if field.compare is Compare.NUMBER else None,
     )
 
 
@@ -1509,6 +1717,7 @@ __all__ = [
     "EXPECTED_NONCE_PATTERN",
     "EXPECTED_SIGNATURE_PATTERN",
     "MAX_OBSERVED_CHARS",
+    "MAX_PATTERN_CHARS",
     "MAX_PROSE_CHARS",
     "MESSAGE_BODY_POINTER",
     "MISSING",

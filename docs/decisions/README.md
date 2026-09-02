@@ -118,6 +118,11 @@ sürece burada tutulurlar.
 | IMP-251 | İmzalı gövdenin taşıdığı her alana bağlı `dependentSchemas` uygulanır | `did` dışındaki bağımlılıklar otomatik olarak etkisiz değildir; imzalı gövde `sig`, `nonce` ve payload alanını da taşır |
 | IMP-252 | Bozuk şema `drifted` değil `unavailable` | `maxLength: "86"` okunabilir bir sözleşme farkı değil, bozuk bir şemadır; "sunucu şunu yaptı" demek elimizde olmayan kanıtı iddia etmektir |
 | IMP-253 | `null`/`false`/`0` eksik anahtardan ayrılır | JSON'da her biri belirli bir şey söyler; "yok" saymak permissive yönde tahmin etmektir |
+| IMP-254 | Şema ÜYELERİNDE de null ≠ yokluk | `properties.x = null` geçersiz üyedir (`unavailable`); üyenin silinmesi ise kısıt yayımlamamaktır — mesajlar ayrıdır |
+| IMP-255 | Kimlik alanlarında SOME-exclusion | Meşru değerlerin bir kısmını dışlayan sınır da reddedilen istektir; nonce aralığı (1,19) kapsanmalı, kesişmek yetmez |
+| IMP-256 | Payload sınırları uyarı + etkin limit (künye §14.4) | Kapasite değişikliği kapı kapatmaz; `effective_payload_limits` composer'ın gerçek istekte uygulayacağı, tavanla kırpılmış değerdir |
+| IMP-257 | Pattern değerleri derlenir, asla uzak girdiyle çalıştırılmaz | Derlenemeyen kalıp uygulanamaz şemadır; payload'daki herhangi bir kalıp değerlendirilemez → kapı kapanır |
+| IMP-258 | `required` tekliği metaşema gereğidir | Kendi metaşemasını kıran belge "doğru okundu" sayılamaz |
 
 ## 2e. Ayrı dosyalı ADR'ler
 

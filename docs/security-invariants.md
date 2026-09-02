@@ -179,6 +179,11 @@ kontrolü ve CSRF katmanından gelir.
 | SI-117 | `/openapi.json` 503 iken kapı kapanır | `unavailable` | `::test_openapi_returning_503_closes_the_gate` | A3.1 |
 | SI-118 | Başarılı kontrolden sonra gelen 503 eski verdict'i geri getirmez | `unavailable`, eski zaman görünür | `::test_a_503_after_a_success_shows_the_old_time_but_not_the_old_verdict` | A3.1 |
 | SI-119 | Zorunlu belge denemesi sınırlıdır | 3 deneme | `::test_a_required_document_is_retried_a_bounded_number_of_times` | A3.1 |
+| SI-120 | Şema üyesindeki `null` geçersiz üyedir, yokluk değildir | `unavailable` | Aşama B testleri (`Stage B: schema boundaries`) | B |
+| SI-121 | `required`/`anyOf.required` tekrarlı ad içeremez | `unavailable` | Aşama B testleri | B |
+| SI-122 | Derlenemeyen veya payload'da yayımlanan pattern değerlendirilemez | `unavailable` | Aşama B testleri | B |
+| SI-123 | Nonce aralığını daraltan sınır kapıyı kapatır (SOME-exclusion) | `drifted` | Aşama B nonce sınır matrisi | B |
+| SI-124 | Payload limit değişikliği uyarıdır; etkin limit tavanla kırpılıp dışa verilir | `current`+uyarı | Aşama B payload testleri | B |
 
 ## 9b. Aşama 2B değişmezleri (uygulandı)
 

@@ -951,6 +951,21 @@ sonu özetlerini almaya devam eder.
 - [ ] CI'nin PR üzerinde gerçekten koştuğu ve **fail edebildiği** (negatif
       kanıt) — Paket A PR'ında gösterilecek.
 
+### Paket B — Aşama 3.1 son kapanış
+
+- [x] 12 sınır türü × 2 lane = 24 senaryo önce mevcut kodda yeniden üretildi
+      (**24/24 yanlış `current`**), sonra yapısal çözümle kapatıldı; tam
+      önce/sonra matrisi ve karar gerekçeleri:
+      [`docs/verification/paket-b.md`](docs/verification/paket-b.md).
+- [x] null ≠ yokluk artık şema ÜYELERİNDE de; `required` tekliği; pattern
+      derleme (`MAX_PATTERN_CHARS`); kimlik alanlarında SOME-exclusion
+      (nonce aralığı kapsanmalı, kesişmek yetmez).
+- [x] Payload limitleri künye §14.4 gereği **uyarı + etkin limit**:
+      `effective_payload_limits` composer'ın (Paket D) uygulayacağı, tavanla
+      kırpılmış değerleri dışa verir. 4 yeni WARNING alanı.
+- [x] 17 test fonksiyonu / 50 parametrik senaryo; **795 pytest** + 59 Vitest.
+- [x] SI-120…SI-124, IMP-254…IMP-258.
+
 ## Sonraki aşama: Aşama 4 — Composer & Participation
 
 Kapsam: kullanıcı onaylı mesaj/note oluşturma, nonce rezervasyonu (transaction
