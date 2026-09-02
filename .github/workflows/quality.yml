@@ -1,6 +1,7 @@
 # Quality gates for Technocore Station.
 #
-# Design constraints (see NOTES.md next to this file for full reasoning):
+# Design constraints (full reasoning and the pin-verification procedure:
+# docs/verification/paket-a.md):
 #
 #   * Trigger is `pull_request` targeting main plus `push` to main.
 #     `pull_request_target` is deliberately NOT used: it would run untrusted
@@ -8,10 +9,12 @@
 #   * `permissions` is the read-only minimum, set at the top level.
 #   * Every third-party action is pinned to a full commit SHA, with the
 #     human-readable tag in a trailing comment. Verified 2026-09-02 via
-#     `gh api` (commands recorded in NOTES.md).
+#     `gh api repos/<owner>/<repo>/git/ref/tags/<tag>`; the tag->SHA table
+#     lives in docs/verification/paket-a.md. Re-verify before re-pinning.
 #   * No caches anywhere (setup-uv cache explicitly off, no npm cache).
-#     Installs come from lockfiles only, so runs are reproducible without
-#     caching, and no cache can poison the byte-exact conformance checks.
+#     Installs come from lockfiles only (uv itself version-pinned; Node 22.x
+#     and CPython 3.12.x float to their latest patch), and no cache can
+#     poison the byte-exact conformance checks.
 #   * No secrets are read or needed anywhere in this workflow.
 #   * The checkout deliberately keeps the runner's default git configuration.
 #     Git for Windows ships `core.autocrlf=true`, exactly like a user's

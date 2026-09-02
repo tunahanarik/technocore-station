@@ -100,6 +100,22 @@ gizlenmedi.
 Böylece her iki CI işinin de gerçekten fail edebildiği kanıtlandı: backend
 sahici hatalarla (run 33669302148), frontend staged örnekle.
 
+## Bağımsız inceleme sonucu
+
+- **Copilot review kota sınırına takıldı** ("unable to review ... quota
+  limit") — bu bir inceleme DEĞİLDİR ve öyle sayılmadı.
+- Yerine **temiz bağlamlı, yazardan ayrı bir Claude reviewer subagent'ı** son
+  head (`77f50c9`) diffini inceledi ve kendi karşı örneklerini fiilen
+  çalıştırdı: pin'lerin canlı `gh api` doğrulaması; cp1252 konsol byte
+  probları (CRLF stripping, JSON byte eşitliği, UTF-8 olmayan stdin → exit 2);
+  DACL'e DENY/Everyone/inheritance ACE enjekte eden adversarial prob (DENY
+  eski testi **geçiyor**, yeni SID-küme testini **kırıyor** — güçlenmenin
+  somut kanıtı); workflow'da `${{ }}` enjeksiyon yüzeyi taraması.
+- Sonuç: **P0/P1 yok.** 1 P2 (workflow'daki ölü NOTES.md işaretçileri) ve 4
+  P3 (docstring/yorum gecikmeleri) bulundu; hepsi merge'den önce düzeltildi.
+- Bu inceleme bir **insan güvenlik incelemesi değildir** (ADR-0001 §5'teki
+  kalan risk aynen geçerli).
+
 ## Sınırlar
 
 - Gerçek DID/kasa/recovery/parola okunmadı, değiştirilmedi.
