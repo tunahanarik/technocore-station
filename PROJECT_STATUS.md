@@ -924,6 +924,33 @@ durum şema kusurlarıyla ilgisizdir.
 
 ---
 
+## Uçtan uca yürütme (2 Eylül 2026 kapsam eki)
+
+Kullanıcının 2 Eylül 2026 tarihli promptuyla A→J paketleri tek görevde
+yetkilendirildi (ADR-0001). Paket planı ve canlı durum:
+[`docs/execution-plan.md`](docs/execution-plan.md) +
+[`docs/execution-state.json`](docs/execution-state.json). Bu belge aşama
+sonu özetlerini almaya devam eder.
+
+### Paket A — Başlangıç, kapsam eki, tekrarlanabilir CI
+
+- [x] ADR-0001 kapsam eki yazıldı ve karar indeksine bağlandı.
+- [x] Yürütme kaydı: `docs/execution-plan.md` + `docs/execution-state.json`.
+- [x] **Temiz klonda bağımsız baseline doğrulaması** (`git clone --no-local`,
+      taze venv + `npm ci`): 736 pytest + 59 Vitest = **795/795**, vendor
+      SHA-256 8/8, self-test PASS, CRLF regresyonu yok. Tek bulgu: 6 güvenlik
+      testi `dist/` üretilmeden koşulursa açık yönergeyle kırılır (tasarım
+      gereği); CI sırası buna göre kuruldu (önce build, sonra pytest).
+- [x] `.github/workflows/quality.yml`: `pull_request`→main + `push`→main
+      (asla `pull_request_target`), `permissions: contents: read`, bütün
+      action'lar tam commit SHA'ya pinli (v7.0.1 checkout, v10.0.1 setup-uv,
+      v7.0.0 setup-node — `gh api` ile doğrulandı), lockfile-only kurulum
+      (`uv sync --locked`, `npm ci`), cache yok (bilinçli), Windows runner
+      (DPAPI + byte-exact testlerin dişi yalnız `autocrlf=true` checkout'ta
+      var; CI `core.autocrlf`'i bilerek değiştirmez).
+- [ ] CI'nin PR üzerinde gerçekten koştuğu ve **fail edebildiği** (negatif
+      kanıt) — Paket A PR'ında gösterilecek.
+
 ## Sonraki aşama: Aşama 4 — Composer & Participation
 
 Kapsam: kullanıcı onaylı mesaj/note oluşturma, nonce rezervasyonu (transaction

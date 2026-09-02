@@ -119,6 +119,18 @@ sürece burada tutulurlar.
 | IMP-252 | Bozuk şema `drifted` değil `unavailable` | `maxLength: "86"` okunabilir bir sözleşme farkı değil, bozuk bir şemadır; "sunucu şunu yaptı" demek elimizde olmayan kanıtı iddia etmektir |
 | IMP-253 | `null`/`false`/`0` eksik anahtardan ayrılır | JSON'da her biri belirli bir şey söyler; "yok" saymak permissive yönde tahmin etmektir |
 
+## 2e. Ayrı dosyalı ADR'ler
+
+Künyeden sonra alınan ve tam metni ayrı dosyada yaşayan kararlar:
+
+| Dosya | Başlık | Tarih | Durum |
+|---|---|---|---|
+| [`0001-kapsam-eki-2026-09-02.md`](0001-kapsam-eki-2026-09-02.md) | Kapsam eki: uçtan uca uygulama yetkisi (A→J paketleri, sol menü, OpenCode Go + görev agentı, manuel QA kullanıcıya, API anahtarı giriş istisnası) | 2026-09-02 | kabul edildi |
+
+Çelişki durumunda tarihli kapsam eki, künyenin eski kapsam sınırlamalarının
+önüne geçer (kullanıcının açık talimatı); güvenlik değişmezleri (INV-01…09)
+hiçbir kapsam ekiyle gevşemez.
+
 ## 3. Yeni ADR nasıl eklenir
 
 Yeni ve **kalıcı** bir mimari karar alındığında bu dizine

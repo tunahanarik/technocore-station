@@ -1,0 +1,135 @@
+# Quality gates for Technocore Station.
+#
+# Design constraints (see NOTES.md next to this file for full reasoning):
+#
+#   * Trigger is `pull_request` targeting main plus `push` to main.
+#     `pull_request_target` is deliberately NOT used: it would run untrusted
+#     PR code with a privileged token. This workflow never needs one.
+#   * `permissions` is the read-only minimum, set at the top level.
+#   * Every third-party action is pinned to a full commit SHA, with the
+#     human-readable tag in a trailing comment. Verified 2026-09-02 via
+#     `gh api` (commands recorded in NOTES.md).
+#   * No caches anywhere (setup-uv cache explicitly off, no npm cache).
+#     Installs come from lockfiles only, so runs are reproducible without
+#     caching, and no cache can poison the byte-exact conformance checks.
+#   * No secrets are read or needed anywhere in this workflow.
+#   * The checkout deliberately keeps the runner's default git configuration.
+#     Git for Windows ships `core.autocrlf=true`, exactly like a user's
+#     machine. The repo's own tests
+#     (tests/conformance/test_vectors.py::test_git_hands_a_fresh_checkout_the_exact_pinned_bytes)
+#     assert that the working tree matches the committed blobs for the
+#     byte-exact files, a property guaranteed only by .gitattributes `-text`
+#     entries. Setting `core.autocrlf=false` here would make that test pass
+#     vacuously and mask a broken .gitattributes. Do not add such a step.
+
+name: quality
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # One live run per ref; a newer push cancels the superseded run.
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: backend gates (windows)
+    # windows-latest is REQUIRED here: the DPAPI vault tests
+    # (tests/security/test_identity_vault.py, tests/integration/
+    # test_identity_flow.py) call the real Windows DPAPI/ACL APIs and are
+    # skipped-or-asserted-differently elsewhere, and the byte-exact
+    # working-tree-vs-blob tests only have teeth on a checkout performed
+    # with core.autocrlf=true (the Windows default this product ships into).
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout (runner-default git config, like a user machine)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          # Same uv as the development machines (README requires 0.11+).
+          version: "0.11.26"
+          # Correctness first: no cache that could serve stale or poisoned
+          # artifacts. The lockfile makes installs reproducible without it.
+          enable-cache: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22" # README: Node.js 22+
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Sync backend environment from the lockfile only
+        # --locked fails the job if uv.lock is out of date with pyproject.toml
+        # instead of silently re-resolving. technocore-conform is an editable
+        # path dependency of station-api, so this one sync covers both trees.
+        run: uv sync --locked --project apps/station-api
+
+      - name: Install frontend dependencies from the lockfile only
+        run: npm ci --prefix apps/station-web
+
+      - name: Build production frontend bundle
+        # Not a frontend gate here: tests/security/test_frontend_bundle.py
+        # inspects apps/station-web/dist and FAILS the suite if it is missing,
+        # so the backend job must produce it before pytest runs.
+        run: npm --prefix apps/station-web run build
+
+      - name: ruff (apps/station-api tree, AGENTS.md §4)
+        run: uv run --directory apps/station-api ruff check .
+
+      - name: ruff (all three trees, README)
+        run: uv run --project apps/station-api ruff check apps/station-api/src packages/technocore-conform/src tests
+
+      - name: mypy (strict)
+        run: uv run --project apps/station-api mypy --config-file apps/station-api/pyproject.toml
+
+      - name: pytest (security, integration, conformance, byte-exact)
+        # No warning suppression: the documented gate (pytest.ini addopts)
+        # does not hide warnings, and CI should not either.
+        run: uv run --directory apps/station-api pytest ../../tests
+
+  frontend:
+    name: frontend gates (windows)
+    # Windows on purpose: this is a Windows-only product, developers and users
+    # are on Windows, and the checkout here (autocrlf=true) hands the tools
+    # the same bytes a developer's working tree has. An ubuntu run would lint,
+    # test and build LF sources that no supported machine ever sees.
+    # If runner minutes become a problem this job (and only this job) is safe
+    # to move to ubuntu-latest: it does not run the byte-exact tests.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout (runner-default git config, like a user machine)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22" # README: Node.js 22+
+
+      - name: Install frontend dependencies from the lockfile only
+        run: npm ci --prefix apps/station-web
+
+      - name: eslint
+        run: npm --prefix apps/station-web run lint
+
+      - name: vitest
+        run: npm --prefix apps/station-web run test
+
+      - name: production build (tsc -b && vite build)
+        run: npm --prefix apps/station-web run build
