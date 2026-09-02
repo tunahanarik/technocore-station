@@ -1977,5 +1977,9 @@ def test_tests_never_touch_the_real_installation(
     """No test may reach the user's real identity data."""
     resolved = str(settings.data_dir.resolve()).lower()
     assert str(data_dir.resolve()).lower() == resolved
-    assert resolved.startswith(tempfile.gettempdir().lower())
+    # gettempdir() can come back in 8.3 short form (RUNNER~1 style) while
+    # resolve() expands to the long form; resolve both sides or the
+    # comparison fails on machines where the two spellings differ.
+    temp_root = str(Path(tempfile.gettempdir()).resolve()).lower()
+    assert resolved.startswith(temp_root)
     assert "technocorestation" not in resolved
