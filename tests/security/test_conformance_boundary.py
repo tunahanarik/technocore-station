@@ -36,7 +36,7 @@ from technocore_conform import SelfTestResult
 from technocore_conform.selftest import EXPECTED_BUNDLE_DIGEST
 
 from tests.conftest import TEST_PORT
-from tests.security.conftest import establish_session
+from tests.security.conftest import collect_route_paths, establish_session
 
 pytestmark = pytest.mark.security
 
@@ -269,12 +269,52 @@ def test_a_crashed_verdict_does_not_claim_a_matching_unicode_database(
 
 
 def test_no_technocore_write_endpoint_was_added(app: FastAPI) -> None:
-    """Stage 2B adds a read-only status route and nothing outbound."""
-    paths = {getattr(route, "path", "") for route in app.routes}
+    """No URL-shaped write lane is exposed, and no note lane at all.
+
+    Two things changed since this was written and both make it stricter.
+
+    The route walk is real now. ``app.routes`` returns wrapper objects with
+    no ``path`` on this FastAPI version, so the previous spelling compared
+    empty strings and would have passed against any application whatsoever;
+    the known-path assertion below is what keeps it honest.
+
+    And Package D added a genuine write route, so "nothing outbound" is no
+    longer the claim. The claim is narrower and still worth making: Station's
+    write lane is a POST to ``/r/{room}``, and none of Technocore's
+    URL-shaped GET write lanes - which put the message text in the address -
+    is exposed as a route here. The note lane is absent entirely (ADR-0002 1).
+    """
+    paths = collect_route_paths(app)
+
+    # A path we know exists. Without this the loop below could iterate an
+    # empty set and report success.
+    assert "/api/compose/send" in paths
 
     for path in paths:
         assert "say-signed" not in path
         assert "set-signed" not in path
+        assert "/say/" not in path
+        assert "/set/" not in path
+        # No note composition surface of any kind.
+        assert "note" not in path.lower()
+
+
+def test_the_composer_exposes_no_single_step_send(app: FastAPI) -> None:
+    """Signing and sending are two approvals, so they are two routes.
+
+    A convenience route that did both would be the whole design undone: the
+    user would press one button for two decisions they are meant to make
+    separately (ADR-0002 2).
+    """
+    paths = collect_route_paths(app)
+
+    compose = {path for path in paths if path.startswith("/api/compose")}
+    assert compose == {
+        "/api/compose/capability",
+        "/api/compose/draft",
+        "/api/compose/sign",
+        "/api/compose/send",
+    }
 
 
 # --- the package boundary holds ---------------------------------------------

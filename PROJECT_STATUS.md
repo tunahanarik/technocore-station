@@ -1006,14 +1006,56 @@ sonu özetlerini almaya devam eder.
       [`docs/verification/paket-c.md`](docs/verification/paket-c.md).
 - [x] SI-125…SI-128, IMP-259…IMP-263.
 
-## Sonraki aşama: Aşama 4 — Composer & Participation
+### Paket D — Composer & Participation (Aşama 4)
 
-Kapsam: kullanıcı onaylı mesaj/note oluşturma, nonce rezervasyonu (transaction
-içinde, `(did, room)` başına monoton), vault üzerinden imzalama ve gönderim.
-Kabul kriterleri: **AC-13, AC-14, AC-16**.
+Kapsam kararları:
+[`ADR-0002`](docs/decisions/0002-paket-d-kapsam-kararlari-2026-09-03.md).
 
-Aşama 4 gelene kadar Compose yüzeyi kilitli kalır ve üründe hiçbir giden
-yazma kodu bulunmaz.
+- [x] **Yalnız mesaj lane'i** (`POST /r/{room}`). Pinli protokol imzalı
+      note yazmayı yalnız `room-owners`/`room-allow` namespace'lerinde
+      kabul ediyor; künyenin istediği DID profile note'u imzasız lane'de.
+      İmzasız yazma imza kanıtı üretemeyeceği için note gönderimi
+      **kapsam dışı** bırakıldı (ADR-0002 §1) ve UI bunu dürüstçe yazıyor.
+- [x] **Üç adımlı onay zinciri:** `draft` (sweep + digest, nonce/imza yok)
+      → `sign` (gate yeniden koşar, nonce transaction içinde ayrılır,
+      imzalanır ve kendi kendine doğrulanır, seed sıfırlanır) → `send`
+      (gate yeniden koşar, tek kullanımlık token atomik harcanır, **tek**
+      POST). Token canonical digest + oda + nonce + DID + manifest verdict
+      kimliği + oturuma bağlı; TTL 180 sn. Metin/oda değişimi onayı düşürür.
+- [x] **Nonce** `(did, room)` başına monoton, tablo sayacın kendisi;
+      `max(MAX+1, ms_saati)`, başında sıfır temsil edilemez. Process kilidi
+      + `UNIQUE` kısıtı; gerçek thread yarışlarıyla kanıtlı.
+- [x] **Üç sonuç durumu:** `accepted` / `refused` (400,403,413,422 —
+      yazmadığı kanıtlanan) / `outcome_unknown` (timeout, taşıma, bozuk
+      yanıt, 3xx, 429, 5xx). **Otomatik tekrar yok** (davranışsal + AST
+      taramasıyla iddia edilir); nonce üç durumda da yanmış kalır; UI
+      `outcome_unknown`'ı ne "gönderildi" ne "başarısız" diye sunar ve
+      retry kontrolü göstermez.
+- [x] **Vacuous test bulgusu:** `test_no_outbound_write_route_exists_...`
+      hiçbir şey denetlemiyordu — FastAPI dahil edilen router'ları `path`
+      taşımayan sarmalayıcılara sarıyor, karşılaştırma boş string'ler
+      üzerindeydi; üç güvenlik testi boşa koşuyordu. Yollar artık
+      özyinelemeli toplanıyor ve her çağıran bilinen bir yolu da iddia
+      ediyor.
+- [x] **Test emniyet ağı:** autouse fixture gerçek giden taşıyıcıyı devre
+      dışı bırakıyor; `MockTransport` unutulursa test gürültüyle kırılıyor.
+- [x] **1009 pytest** (823 → 1009; +176 backend) + **155 Vitest**
+      (130 → 155). Rapor:
+      [`docs/verification/paket-d.md`](docs/verification/paket-d.md).
+- [x] SI-83 bilinçli olarak değişti (görünür kayıtla, sessizce silinmedi);
+      SI-73 daraltıldı; SI-129…SI-161, IMP-264…IMP-288.
+- [x] **AC-13 ve AC-16** karşılandı. **AC-14 Paket E'dedir** — aşağıdaki
+      "Kabul kriterleri" satırı yanlışlıkla AC-14'ü Aşama 4'e koyuyordu;
+      `docs/evidence-model.md` onu Aşama 5'e koyar ve ADR-0002 §4.3 bu
+      çelişkiyi Aşama 5 lehine kapatır.
+
+## Sonraki aşama: Aşama 5 — Evidence & Audit
+
+Kapsam: exact yakalama, dört güven seviyesi, ayrı DPAPI zarfında HMAC
+zinciri, deterministik export. Kabul kriteri: **AC-14**.
+
+Aşama 4 ile giden yazma yolu açıldı; fakat **gerçek servise hiçbir yazma
+yapılmadı** — bütün sonuçlar mock taşıyıcıya karşı üretildi.
 
 Ön koşul: kullanıcı açıkça "başlayalım" demeden gerçek gönderim yapılmaz.
 

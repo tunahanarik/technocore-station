@@ -132,7 +132,7 @@ kontrolü ve CSRF katmanından gelir.
 | SI-70 | Retry sınırlı; `Retry-After` üst sınırla | en çok 3 deneme | `::test_retries_are_bounded_and_then_give_up`, `::test_a_retry_after_header_is_honoured_but_clamped` | A3 |
 | SI-71 | Giden istekte cookie/auth/DID/CSRF yok | header temiz | `::test_the_request_carries_no_identity_or_credential` | A3 |
 | SI-72 | GET yazma yollarına ulaşan kod yolu yok | AST literal taraması | `test_write_gate.py::test_no_code_path_can_reach_a_technocore_write_endpoint` | A3 |
-| SI-73 | HTTP istemcisi yalnız salt-okuma modülünde | tek dosya | `test_write_gate.py::test_httpx_is_imported_only_by_the_read_only_client` | A3 |
+| SI-73 | HTTP istemcisi yalnız **incelenmiş** iki modülde (Paket D'de daraltılarak genişletildi) | `client.py` + `write_client.py`, başka hiçbir modül | `test_write_gate.py::test_httpx_is_imported_only_by_the_two_reviewed_clients`, `::test_both_reviewed_client_modules_actually_exist`, `::test_the_write_client_is_not_reachable_from_the_read_path` | A3 → D |
 | SI-74 | Açılışta otomatik dış istek yok | `never_checked` | `::test_reading_status_makes_no_outbound_request` | A3 |
 | SI-75 | Refresh session + CSRF gerektirir | 401/403 | `::test_refresh_requires_session_and_csrf` | A3 |
 | SI-76 | Kritik alan değişince `manifest_current=false` (AC-15) | `drifted` | `::test_a_critical_change_makes_the_manifest_not_current` | A3 |
@@ -142,7 +142,7 @@ kontrolü ve CSRF katmanından gelir.
 | SI-80 | DB'de cookie veya keyfi header saklanmaz | temiz | `::test_the_database_never_stores_a_cookie_or_arbitrary_header` | A3 |
 | SI-81 | Snapshot retention sınırlıdır | son 50 koşu | `::test_snapshots_are_written_and_retained_within_the_limit` | A3 |
 | SI-82 | Uzak içerik link veya HTML olmaz (AC-17) | anchor yok | `pages.test.tsx` — "never turns a remote URL into a clickable link" | A3 |
-| SI-83 | Tüm ön koşullar geçse bile yazma yolu yoktur | route yok | `::test_no_outbound_write_route_exists_even_when_every_check_passes` | A3 |
+| SI-83 | ~~Tüm ön koşullar geçse bile yazma yolu yoktur~~ → **Paket D ile bilinçli olarak değişti**, bkz. §9e ve SI-129 | tüm kapılar açıkken bile hiçbir yazma çıkmaz | `test_technocore_readonly.py::test_no_write_leaves_the_process_even_when_every_check_passes` | A3 → **D'de değiştirildi** |
 | SI-84 | Resmî belgede hiçbir kritik alan "bulunamadı" olmaz | 0 okunamayan alan | `::test_the_official_documents_raise_no_missing_field_alarm` | A3.1 |
 | SI-85 | İmzalı lane kısıtları koşullu şemadan okunur | `dependentSchemas.did` | `test_manifest_oracle.py::test_the_credentials_are_conditional_not_unconditional_properties` | A3.1 |
 | SI-86 | Sadece `properties`'e yazılmış kısıt, koşullu güvence olmadan geçmez | `current` değil | `::test_a_missing_conditional_schema_is_not_rescued_by_properties` | A3.1 |
@@ -193,6 +193,68 @@ kontrolü ve CSRF katmanından gelir.
 | SI-126 | İşlenmeyen istisna istemciye traceback sızdırmaz: gövde tam olarak `{"detail": "internal_error"}`, traceback yalnız sunucu logunda ve request id ile anahtarlı | 500 + sertleştirme başlıkları + request id | `test_error_contract.py::test_an_unhandled_exception_returns_exactly_the_contract_body`, `::test_the_500_body_leaks_no_traceback_and_no_secret_shape`, `::test_the_500_response_is_as_hardened_as_any_other` | C |
 | SI-127 | Redaksiyon kaydın **her** metin yüzeyine uygulanır: mesaj, traceback (`exc_info`/`exc_text`) ve `stack_info`. Traceback'i formatlayıcı, filtreler çalıştıktan *sonra* üretir; istisnanın kendi `repr`'i sızdıran değeri taşıyabilir. Zırhın logladığı traceback ile uvicorn'un yeniden fırlatma sonrası yazdığı ikinci kopya aynı filtreden geçer | Formatlanmış handler çıktısında `<redacted>`; kayıtlı gizli değer ve `/session/<token>` yok | `test_logging.py::test_a_traceback_is_redacted_in_the_formatted_log_output`, `::test_a_chained_cause_in_a_traceback_is_redacted`, `::test_a_stack_dump_is_redacted_in_the_formatted_log_output`, `::test_an_already_rendered_exc_text_is_redacted`, `::test_the_uvicorn_loggers_carry_the_filter_themselves`, `::test_the_shielded_500_traceback_is_redacted_end_to_end` | C |
 | SI-128 | Hata yanıtı hangi yolda doğarsa doğsun önbelleklenemez: zırh `no-store` + `Pragma: no-cache` başlıklarını `NO_STORE_PREFIXES`'ten bağımsız uygular | 500 → `Cache-Control: no-store`, `Pragma: no-cache`; `/api` dışı yollarda da | `test_error_contract.py::test_a_500_outside_the_no_store_prefixes_is_still_uncacheable`, `::test_the_500_response_is_as_hardened_as_any_other`, `::test_a_success_outside_the_no_store_prefixes_stays_cacheable` | C |
+
+## 9e. Paket D değişmezleri — Composer & Participation (uygulandı)
+
+### SI-83 neden ve nasıl değişti
+
+Paket D'ye kadar SI-83 şunu söylüyordu: *"Tüm ön koşullar geçse bile yazma
+yolu yoktur."* Bu, Aşama 3 için **dürüst** bir ifadeydi; ürün gerçekten bir
+yazma kodu taşımıyordu. Paket D bunu **bilinçli olarak** değiştirir
+(ADR-0002 §5): artık bir yazma yolu vardır.
+
+Değişmez silinmedi, **daraltıldı**. Eski cümlenin koruduğu şey "route yok"
+değildi; korumaya çalıştığı şey *kullanıcının kararı olmadan hiçbir şeyin
+dışarı çıkmaması*ydı. Yeni hâli tam olarak bunu söyler ve daha güçlü bir
+şekilde test edilir: eski test route adlarında `compose`/`sign`/`send`
+geçmediğini iddia ediyordu — ve o iddia, kullanılan FastAPI sürümünde
+`app.routes` yol taşımayan sarmalayıcı nesneler döndürdüğü için **boş
+kümeye** bakıyordu, yani hiçbir şey doğrulamıyordu. Yeni test giden yazma
+taşıyıcısını doğrudan izler: bütün kapılar açıkken, manifest güncelken ve her
+okuma yüzeyi defalarca okunurken **tek bir yazma isteği bile** süreçten
+çıkmaz (SI-129).
+
+Bu değişiklik hiçbir güvenlik değişmezini gevşetmez. INV-01…INV-09 aynen
+geçerlidir; gerçek servise yazma bu turda yapılmamıştır ve insan güvenlik
+incelemesi ertelenmiş kalan risktir (ADR-0001 §5).
+
+### Yeni değişmezler
+
+| ID | Değişmez | Beklenen | Test | Durum |
+|---|---|---|---|---|
+| SI-129 | Bütün ön koşullar geçse **bile** kullanıcı onayı olmadan hiçbir yazma süreçten çıkmaz (AC-16) | 0 giden istek | `test_technocore_readonly.py::test_no_write_leaves_the_process_even_when_every_check_passes` | D |
+| SI-130 | Nonce `(did, room)` başına kesin monotondur | ardışık değerler artar, tekrar yok | `test_nonce_reservation.py::test_successive_reservations_strictly_increase`, `::test_the_counter_is_scoped_to_the_did_and_the_room` | D |
+| SI-131 | Eşzamanlı ayırmalar aynı nonce'u üretemez | 16 iş parçacığı × 12, hepsi farklı; iki bağımsız reserver aynı DB'de çakışmaz | `::test_concurrent_reservations_never_collide`, `::test_two_independent_reservers_on_one_database_never_collide`, `::test_the_database_itself_refuses_a_duplicate` | D |
+| SI-132 | Saat geri giderse nonce yeniden verilmez | `max(yerel+1, saat)` | `::test_a_clock_that_jumps_backwards_does_not_reissue_a_number` | D |
+| SI-133 | Crash/resume sonrası nonce yeniden kullanılmaz | yeni değer eskisinden büyük | `::test_a_crash_between_reserving_and_sending_burns_the_number`, `test_compose_flow.py::test_the_reservation_survives_a_reopened_engine` | D |
+| SI-134 | İptal edilen nonce dolaşıma dönmez | `cancelled` + sayaç ilerlemiş | `::test_a_cancelled_reservation_is_not_returned_to_circulation`, `test_compose_flow.py::test_a_failed_signature_does_not_leave_a_dangling_reservation` | D |
+| SI-135 | Başında sıfır olan nonce asla üretilmez (ADR-0002 §4.2) | `"007"` üretilemez | `::test_no_reserved_nonce_ever_carries_a_leading_zero` | D |
+| SI-136 | 19 hane sınırı aşılmaz; taşma yerine reddedilir | `NonceExhaustedError`, satır yazılmaz | `::test_a_counter_at_the_ceiling_refuses_rather_than_overflowing`, `::test_the_exhausted_counter_writes_no_row` | D |
+| SI-137 | Nonce imzadan **önce**, transaction içinde ayrılır | imzalanan payload ayrılmış nonce'u taşır | `test_compose_flow.py::test_the_nonce_is_reserved_before_the_signature_exists` | D |
+| SI-138 | Taslak adımı imzalamaz ve nonce ayırmaz | signer çağrılmaz, sayaç 0 | `test_compose_flow.py::test_the_draft_step_signs_nothing_and_reserves_no_nonce` | D |
+| SI-139 | Metin veya hedef değişirse eski onay imzalayamaz | `draft_digest_mismatch` | `test_compose_flow.py::test_changing_the_text_changes_the_digest`, `::test_changing_the_room_changes_the_digest`, `::test_a_digest_from_a_different_draft_is_refused` | D |
+| SI-140 | Gönderim onayı tek kullanımlıktır ve 180 saniyede dolar | 2. kullanım ve süre sonrası ret | `test_compose_flow.py::test_a_reused_approval_is_refused`, `::test_an_expired_approval_is_refused`, `::test_the_approval_ttl_is_the_documented_three_minutes` | D |
+| SI-141 | Çift tıklama ikinci kez gönderemez | tam 1 giden istek | `test_compose_flow.py::test_a_double_click_sends_exactly_once` | D |
+| SI-142 | Onay oturuma bağlıdır; başka oturum harcayamaz | `approval_foreign_session` | `test_compose_flow.py::test_an_approval_from_another_session_is_refused`, `::test_a_draft_from_another_session_cannot_be_signed`, `::test_ending_a_session_forgets_its_drafts_and_approvals` | D |
+| SI-143 | Manifest verdict'i değişirse onay geçersizdir (stale verdict) | `stale_verdict` | `test_compose_flow.py::test_a_new_manifest_check_invalidates_a_pending_approval`, `::test_a_verdict_that_stops_being_current_invalidates_the_approval` | D |
+| SI-144 | Write gate **her adımda** yeniden koşar; UI disable'a güvenilmez | 3 adım = 3 gate çağrısı; her ön koşul tek başına bloklar | `test_compose_flow.py::test_every_step_re_runs_the_write_gate`, `::test_a_closed_gate_refuses_the_draft`, `::test_a_gate_that_closes_between_sign_and_send_stops_the_write` | D |
+| SI-145 | Gönderilen gövde imzalanan baytlarla bire bir aynıdır | canonical digest eşleşmezse gönderilmez | `test_compose_flow.py::test_the_three_steps_publish_exactly_what_was_approved`, `::test_a_body_that_drifted_from_the_signed_bytes_is_not_sent` | D |
+| SI-146 | Sabit imza uzunluğu ön kontrolü gerçek doğrulamanın yerine geçmez | 86 karakterlik sahte imza reddedilir | `test_compose_flow.py::test_a_signature_that_does_not_verify_is_never_sent`, `::test_a_wrong_key_produces_a_signature_the_send_path_refuses` | D |
+| SI-147 | Gövde alanları ve **etkin limitler** canlı projeksiyondan doğrulanır | `{did, sig, nonce, text}`, `from` yok; sınır canlıdan | `test_compose_flow.py::test_the_limits_come_from_the_live_projection`, `::test_a_tighter_published_limit_is_honoured`, `::test_the_body_carries_no_from_field` | D |
+| SI-148 | Üretim yazması **POST**'tur; gizli GET fallback yoktur | POST `/r/{room}`; GET yazma markerı yok | `test_write_client.py::test_the_request_is_a_post_to_the_message_lane`, `test_write_gate.py::test_no_code_path_can_reach_a_technocore_write_endpoint` | D |
+| SI-149 | Yazma sonucu üç durumludur; `outcome_unknown` gizlenmez | 2xx→accepted, 400/403/413/422→refused, diğer hepsi→outcome_unknown | `test_write_client.py::test_a_2xx_is_accepted`, `::test_a_response_that_proves_nothing_was_written_is_refused`, `::test_everything_else_is_outcome_unknown`, `::test_a_lost_response_is_outcome_unknown_not_a_failure` | D |
+| SI-150 | Yazma yolunda **hiçbir** otomatik tekrar yoktur | 429/5xx/timeout'ta tam 1 deneme; modülde attempt/backoff/sleep yok | `test_write_client.py::test_a_retryable_looking_status_is_not_retried`, `::test_a_retry_after_header_is_ignored_entirely`, `::test_the_module_contains_no_attempt_loop`, `test_compose_flow.py::test_no_outcome_is_retried_automatically` | D |
+| SI-151 | Ayrılan nonce üç sonucun **hepsinde** harcanmış sayılır | `spent` + sayaç ilerlemiş | `test_nonce_reservation.py::test_every_send_outcome_leaves_the_nonce_spent`, `test_compose_flow.py::test_a_spent_nonce_is_never_offered_again` | D |
+| SI-152 | Public read ve explicit write ayrı kapalı registry taşır | kaynak registry'sinde `/r/` yok; write registry'sinde belge yok, note lane yok | `test_write_gate.py::test_the_source_registry_contains_only_read_only_documents`, `::test_the_write_registry_carries_exactly_one_lane_and_no_documents` | D |
+| SI-153 | Oda adı manifest'in `room_classes` konvansiyonuna göre doğrulanır; tahmin edilmez | konvansiyon yoksa hiçbir oda çözülmez; tanınmayan sınıf reddedilir | `test_write_client.py::test_the_markers_are_read_from_the_pinned_manifest`, `::test_without_a_manifest_convention_no_room_resolves`, `::test_a_room_class_this_build_does_not_understand_is_refused` | D |
+| SI-154 | Lobby açıkça reddedilir (INV-05, ADR-0002 §4.1) | `room_refused` | `test_write_client.py::test_a_rendezvous_room_is_refused`, `test_write_gate.py::test_the_lobby_is_refused_as_a_write_target`, `test_compose_flow.py::test_the_lobby_is_refused_as_a_composer_target` | D |
+| SI-155 | Yazma istemcisi URL, method, TLS ayarı veya retry parametresi kabul etmez | parametre yok | `test_technocore_readonly.py::test_the_write_client_takes_no_url_method_or_tls_setting`, `test_write_client.py::test_no_tls_setting_is_passed_anywhere` | D |
+| SI-156 | Seed yalnız signer katmanında, tek çağrı boyunca kullanılır; sonuçlara sızmaz | signer yalnız `CanonicalPayload` alır; yanıtlarda anahtar materyali yok | `test_compose_flow.py::test_the_signer_only_ever_receives_a_canonical_payload`, `::test_nothing_in_the_composer_result_carries_key_material`, `test_compose_http.py::test_no_response_in_the_chain_carries_key_material` | D |
+| SI-157 | İmza zinciri pinlenmiş resmî imzalayıcıyla **diferansiyel** olarak aynıdır | karakter karakter eşitlik; alan duyarlılığı kanıtlı | `test_message_lane_differential.py::test_the_composed_signature_equals_the_reference_signature`, `::test_the_request_body_carries_the_bytes_the_reference_signed`, `::test_the_oracle_comparison_is_sensitive_to_every_signed_field` | D |
+| SI-158 | Test oturumu gerçek dış HTTP taşıyıcısını kullanamaz (ADR-0002 §4.4) | mock unutulursa gürültüyle kırılır; loopback serbest | `test_outbound_guard.py::test_the_guard_is_actually_installed`, `::test_a_read_client_with_no_mock_transport_fails_loudly`, `::test_a_write_client_with_no_mock_transport_fails_loudly`, `::test_loopback_is_still_reachable` | D |
+| SI-159 | Composer rotaları oturum + CSRF arkasındadır ve GET ile yazma yapılamaz | 401/403; GET → 405 | `test_compose_http.py::test_every_composer_route_requires_a_session`, `::test_a_state_changing_composer_call_without_csrf_is_refused`, `::test_no_composer_route_accepts_a_get_write` | D |
+| SI-160 | Note gönderme yolu yoktur ve yokluğu açıkça belirtilir (ADR-0002 §1) | `note` içeren route yok; `note_lane_available=false` + gerekçe | `test_conformance_boundary.py::test_no_technocore_write_endpoint_was_added`, `test_compose_http.py::test_the_capability_read_explains_the_closed_door` | D |
+| SI-161 | Nonce rezervasyon tablosu yalnız public protokol değeri tutar | sütun adlarında ve **değerlerinde** sır yok | `test_database.py::test_schema_has_no_secret_columns`, `test_nonce_reservation.py::test_the_reservation_row_holds_only_public_protocol_values` | D |
 
 ## 9b. Aşama 2B değişmezleri (uygulandı)
 

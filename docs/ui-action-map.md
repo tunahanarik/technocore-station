@@ -1,8 +1,9 @@
 # UI eylem haritası
 
-> Paket C çıktısı. Sol menülü dashboard kabuğundaki **her** etkileşimin
-> sözleşmesi: önkoşul, çağrılan işlev, loading/success/error/timeout/iptal
-> davranışı ve otomatik test kimliği.
+> Paket C çıktısı; Paket D ile "Oluştur ve Doğrula" bölümü (§5) dolduruldu.
+> Sol menülü dashboard kabuğundaki **her** etkileşimin sözleşmesi: önkoşul,
+> çağrılan işlev, loading/success/error/timeout/iptal davranışı ve otomatik
+> test kimliği.
 >
 > Kapsam notları:
 > - **Derin link yok.** Bölüm seçimi yalnız React state'tir; URL/router
@@ -27,6 +28,8 @@ Her istek `AbortSignal.timeout(ms)` ile sınırlıdır:
 | Tüm istekler (varsayılan) | 15 000 ms | Yerel loopback servisi; daha uzunu donma demektir |
 | `refreshTechnocore` (`POST /api/technocore/refresh`) | 30 000 ms | Sunucu tarafı birden çok resmî belgeye çıkar |
 | `exportRecovery` (elle `fetch`) | 15 000 ms | Aynı varsayılan; bu yol da kapsanır |
+| `signComposeDraft` (`POST /api/compose/sign`) | 30 000 ms | İmzalamadan önce kasa açılır; parolalı kasa bir Argon2id türetmesi demektir ve yerel okuma süresi buna göre ölçülmemiştir |
+| `sendComposeMessage` (`POST /api/compose/send`) | 45 000 ms | Backend'in kendi yazma bütçesi connect 5 sn + write 10 sn + read 15 sn'dir; **daha kısa bir istemci süresi, sunucu hâlâ yazarken isteği bırakıp sonucu `timeout` (yerel servis hakkında bir iddia) diye gösterirdi.** Fazladan pay, cevabın sunucunun üç değerli verdict'i olarak kalmasını sağlar |
 
 ### 1.2 `ApiError` sınıflandırması (`kind`)
 
@@ -114,7 +117,8 @@ gösterilir.
 Async eylem taşıyan her buton, istek uçuştayken `isDisabled` + pending
 etiketi alır ("Denetleniyor...", "Olusturuluyor...", "Hazirlaniyor...",
 "Dogrulaniyor...", "Aciliyor...", "Kuruluyor...", "Siliniyor...",
-**"Yeniden deneniyor..."**). İkinci aktivasyon istek başlatmaz.
+"Imzalaniyor...", "Gonderiliyor...", **"Yeniden deneniyor..."**). İkinci
+aktivasyon istek başlatmaz.
 
 Bu kural `ErrorRegion`'ın "Yeniden dene" butonunu da kapsar; her çağıran
 kendi loading durumunu `retryPending` ile geçirir:
@@ -126,6 +130,7 @@ kendi loading durumunu `retryPending` ile geçirir:
 | `IdentityPage` (kimlik + "Son islem basarisiz oldu") | `loading` |
 | `IdentityPage` / uygunluk paneli | ayrı `conformanceLoading` (kimlik yüzeyi uygunluk okumasını beklemez) |
 | `ComposeVerifyPage` | `loading` |
+| `ComposerPanel` (yetki okuma hatası) | `capabilityLoading` — yalnız okuma tekrarlanır; taslak/imza/gönderim hatalarında `onRetry` **verilmez** |
 | `SettingsHelpPage` | `gateLoading` (bu pakette eklendi; daha önce hiç loading durumu yoktu) |
 | `TechnocoreSourcesPanel` | hata "check"ten geldiyse `busy`, "load"tan geldiyse `loadBusy` |
 
@@ -133,7 +138,8 @@ Testler: `pages.test.tsx::disables the check button while a check is in
 flight`, `pages.test.tsx::disables the gate retry while the retry is in
 flight`, `App.test.tsx::disables the shell retry while the retry is in
 flight`, `ErrorRegion.test.tsx::starts no second request when the retry is
-clicked repeatedly`.
+clicked repeatedly`, `ComposerPanel.test.tsx::starts no second send when the
+send button is clicked twice`.
 
 ### 1.5 İptal
 
@@ -210,9 +216,77 @@ JavaScript message when a non-ApiError escapes`.
 
 ## 5. Oluştur ve Doğrula
 
-| Kontrol | Önkoşul | API / işlev | Loading | Success | Error | Timeout | İptal | Test |
-|---|---|---|---|---|---|---|---|---|
-| otomatik kapı okuma | bölüm seçili | `fetchIdentity()` | "Kapi durumu okunuyor..." | önkoşul listesi (kilitli yüzey; giriş alanı ve gönder kontrolü yok) | `ErrorRegion` "Kapi durumu okunamadi" + "Yeniden dene" | `kind=timeout` aynı bölge | bölüm değişince unmount | `pages.test.tsx::stays locked and reflects the real write gate`, `::offers no compose field and no send control while locked`, `::shows a persistent error region when the gate cannot be read` |
+Paket D ile bu bölüm etkileşimli hâle geldi: **taslak → imza onayı → ayrı ve
+tek kullanımlık gönderim onayı** (künye §7.4, ADR-0002 §2). Üç adım üç ayrı
+istektir ve üçü de yazma kapısını sunucu tarafında yeniden koşar; ekrandaki
+disabled bir buton hiçbir zaman kapıyı tutan şey değildir.
+
+Bileşenler: `pages/ComposeVerifyPage.tsx` (ön koşul listesi + kabuk) ve
+`components/compose/ComposerPanel.tsx` (akışın tamamı).
+
+| Kontrol | Ekran yolu | Önkoşul | API / işlev | Loading | Success | Error | Timeout | İptal | Test |
+|---|---|---|---|---|---|---|---|---|---|
+| otomatik kapı okuma | Olustur ve Dogrula → "On kosullar" | bölüm seçili | `fetchIdentity()` | "Kapi durumu okunuyor..." | ön koşul listesi (kapı kontrolleri + durum rozetleri) | `ErrorRegion` "Kapi durumu okunamadi" + "Yeniden dene" | `kind=timeout` aynı bölge | bölüm değişince unmount | `pages.test.tsx::stays locked and reflects the real write gate`, `::shows a persistent error region when the gate cannot be read` |
+| otomatik yetki okuma | → "Gonderim akisi" | kapı okuması bitti | `GET /api/compose/capability` (`fetchComposeCapability`, 15 sn) | "Gonderim yetkisi okunuyor..." | yol (`POST /r/{room}`), reddedilen odalar, etkin `min_chars`/`max_chars` | `ErrorRegion` "Gonderim yetkisi okunamadi" + "Yeniden dene" (okuma tekrarı zararsızdır) | `kind=timeout` aynı bölge | bölüm değişince unmount | `ComposerPanel.test.tsx::shows a retryable read failure with a retry, and a write failure without one` |
+| kapalı kapı açıklaması | → "Gonderim kapali" | `can_compose === false` | yok | — | `blocking_reasons` okunabilir cümlelere çevrilir; **metin alanı ve gönderim kontrolü hiç render edilmez** (göstermelik disabled form yok) | — | — | — | `ComposerPanel.test.tsx::explains a closed gate from the blocking reasons and offers no form`, `pages.test.tsx::offers no compose field and no send control while locked`, `::names the blocking preconditions instead of showing an inert form` |
+| "Hedef oda" (`TextField`+`Input`) | Adım 1 | `can_compose` | React state | — | oda adı; değişimi **önceki taslağı ve onayı düşürür** | — | — | — | `ComposerPanel.test.tsx::drops the approval when the target room changes` |
+| "Mesaj metni" (`TextField`+`TextArea`, `rows=6`) | Adım 1 | `can_compose` | React state + sayaç | — | `N / max_chars karakter (en az min_chars)` — sınırlar **capability'den**, hardcode yok. Üst sınır aşımında `aria-invalid="true"` ve açıklama `aria-describedby` ile alana bağlanır | — | — | — | `ComposerPanel.test.tsx::reads the character limits from the capability instead of hardcoding them`, `::links the over-limit explanation to the field it describes` |
+| "Taslagi hazirla" | Adım 1 | oda dolu **ve** ham metin `min_chars`'tan kısa değil | `POST /api/compose/draft` (`createComposeDraft`, 15 sn) | "Hazirlaniyor..." + disabled | Adım 2 açılır: sweep farkı, hedef notları | `ErrorRegion` "Taslak hazirlanamadi" (retry **yok**; kullanıcı yeniden gönderir) | `kind=timeout` aynı bölge | yok | `ComposerPanel.test.tsx::reveals the three steps in order and offers no send control before a signature` |
+| sweep farkı onay kutusu (`Checkbox`) | Adım 2 | `changed_by_sweep === true` | React state | — | ham ve süpürülmüş metin iki ayrı `<pre>`'de; "Gorunmez karakterler silindi" + karakter sayıları. **İşaretlenmeden "Imzala" disabled kalır** | — | — | — | `ComposerPanel.test.tsx::refuses to sign until the swept difference has been seen`, `::does not ask for an acknowledgement when the sweep changed nothing` |
+| "Kasa parolasi" (`PassphraseField`) | Adım 2 | kasa `dpapi+passphrase` | yalnız local state | — | imzalama isteğine geçer; **imza başarılı olur olmaz state'ten silinir** ve alan kaybolur | — | — | — | `ComposerPanel.test.tsx::asks for the passphrase at signing time and keeps none of it afterwards` |
+| "Imzala" | Adım 2 | taslak var, sweep farkı görüldü, imza henüz yok | `POST /api/compose/sign` (`signComposeDraft`, 30 sn) | "Imzalaniyor..." + disabled | Adım 3 açılır: canonical `<pre>` içinde birebir, oda/nonce/kısa özet, geri sayım | `ErrorRegion` "Imzalanamadi" (retry yok) | `kind=timeout` aynı bölge | yok | `ComposerPanel.test.tsx::reveals the three steps in order...`, `::shows the canonical string verbatim, because displayed is what is signed` |
+| "Onayla ve gonder" (`variant="danger"`) | Adım 3 | imza var **ve** onay süresi dolmadı | `POST /api/compose/send` (`sendComposeMessage`, 45 sn) | "Gonderiliyor..." + disabled; ikinci tık istek başlatmaz | "Gonderim sonucu" bölgesi (üç durum, aşağıda) | `ErrorRegion` "Gonderim tamamlanamadi"; `timeout`/`network`/`canceled` ise ek olarak **"Bu sonuc bilinmiyor"** uyarısı | `kind=timeout` — ayrıca "sunucu yazmış olabilir" uyarısı | yok | `ComposerPanel.test.tsx::starts no second send when the send button is clicked twice`, `::calls a lost send response unknown rather than failed` |
+| geri sayım rozeti | Adım 3 | imza var | `window.setInterval` (1 sn) | — | kalan saniye; **0'a inince buton disabled** ve "Onay suresi doldu" açıklaması | — | — | — | `ComposerPanel.test.tsx::locks the send control once the approval has expired, and says why` |
+| "Gonderim sonucu" | sonuç bölgesi | bir gönderim denendi | yok | — | üç durum ayrı ayrı sunulur | — | — | — | `ComposerPanel.test.tsx::Composer send outcomes` bloğu (6 test) |
+| not gönderimi açıklaması | bölümün sonu | yetki okundu | yok (backend `note_lane_detail`) | — | not lane'inin **neden** olmadığı yazılır | — | — | — | `ComposerPanel.test.tsx::says why there is no note send path` |
+
+### 5.1 Onayın düşürülmesi
+
+Metin veya hedef oda değiştiği anda taslak, imza ve `send_token`'ın üçü de
+düşürülür; "Onceki onay dusuruldu" uyarısı **neden** düştüğünü yazar. Bu bir
+hatırlatma değil, mekanizmanın kendisidir: `send_token` yalnız bu bileşenin
+state'inde tutulur ve tek kopyadır, dolayısıyla düzenlemeden sonra eski
+baytları yayımlayabilecek hiçbir şey kalmaz. Aynı temizlik parolayı da kapsar.
+Testler: `ComposerPanel.test.tsx::drops the draft and the send approval when
+the text changes`, `::drops the approval when the target room changes`.
+
+Bir gönderim denemesinden sonra — **sonuç ne olursa olsun, hata dâhil** —
+taslak ve imza yine düşürülür: onay tek kullanımlıktır ve nonce harcanmıştır.
+Bu yüzden ikinci bir gönderim, yeni bir taslak ve yeni bir imza onayı ister;
+tek tıkla tekrar yoktur (test: `::requires a fresh draft and a fresh signature
+for any further send`).
+
+### 5.2 Üç sonuç durumu (ADR-0002 §3)
+
+| `outcome` | Nasıl sunulur | Retry butonu |
+|---|---|---|
+| `accepted` | "Kabul edildi" (success) + `Sonuc/HTTP/Oda/Nonce/Ozet` satırı | yok (gerek yok) |
+| `refused` | "Reddedildi" (danger) + backend'in gerekçesi. **HTTP 422** için ayrıca "aynı metin yakın zamanda yazılmış; aynı baytları yeniden yollamak tekrar reddedilir" | yok — aynı baytlar tekrar reddedilir |
+| `outcome_unknown` | "Sonuc bilinmiyor: sunucu yazmis olabilir" (warning). Bunu "gönderildi" veya "başarısız" diye sunmak **yasaktır**; `reconciliation_required` iken uzlaştırmanın (oda okuma) bu sürümde açık olmadığı dürüstçe yazılır | **yok** — kör tekrar mesajı ikinci kez yayımlayabilir ve bu sürümde odayı okuyup hangisinin olduğunu anlama yolu yok |
+
+Yerel servise hiç ulaşılamayan bir gönderim de aynı dürüstlüğe tabidir:
+`timeout`/`network`/`canceled` sınıflarında `ErrorRegion`'ın yanında "Bu sonuc
+bilinmiyor" uyarısı çıkar, çünkü isteğin yanıtını alamamak sunucunun yazmadığı
+anlamına gelmez (pinli `llms.txt`: bir fetch hatası, yazmanın başarısız olduğu
+kanıtı değildir).
+
+`response_excerpt` uzak içeriktir: `<pre>` içinde **düz metin** olarak, anchor
+üretmeden ve markup olarak yorumlanmadan gösterilir (SI-54/AC-17; test:
+`::renders the server excerpt as inert plain text`).
+
+Redakte tanı kopyalama yükü değişmedi: yalnız
+`{code, status, kind, request_id, timestamp, section}`. Canonical metin, DID,
+imza, oda, nonce ve `send_token` bu yüke **girmez** (test: `::keeps the
+canonical text, DID, signature and nonce out of the copied diagnostics`).
+
+### 5.3 Neden not gönderimi yok?
+
+ADR-0002 §1: pinlenmiş protokol imzalı note yazmasını yalnız `room-owners` ve
+`room-allow` namespace'lerinde kabul ediyor; künyenin istediği DID profil notu
+ise **imzasız** lane'de yayımlanır ve imza kanıtı üretemez. İmzasız bir yazmayı
+"gönderildi" rozetiyle sunmak kanıt seviyelerini karıştırmak olurdu. UI bu
+gerekçeyi backend'in kendi cümlesiyle (`note_lane_detail`) gösterir; eksik bir
+buton olarak bırakmaz.
 
 ## 6. Kaynaklar
 
@@ -281,12 +355,34 @@ Bu sözleşmenin kapsamadığı, bilinen ve bilinçli boşluklar:
    durdurulamaz.
 4. **Tarayıcı QA yok** (ADR-0001 m.4) — bu haritadaki davranışlar Vitest +
    jsdom ile kanıtlıdır; gerçek tarayıcı doğrulaması Paket J'dedir.
+5. **`outcome_unknown` için uzlaştırma yok** (ADR-0002 §3) — çıkış yolu odayı
+   okumayı gerektirir ve oda okuma yolu bu pakette açılmadı. Durum kullanıcıya
+   olduğu gibi gösterilir; UI tahmin yürütmez ve "Yeniden dene" sunmaz.
+6. **Gönderilmiş bir mesajın kaydı yoktur.** Sonuç bölgesi sayfa yenilenince
+   kaybolur; kalıcı kanıt defteri (AC-14 dâhil) Paket E'dedir. Tarayıcı
+   depolaması yasak olduğu için (SI-24) ara bir çözüm de eklenmedi.
+7. **Üst karakter sınırı aşımı butonu kilitlemez.** Süpürme metni kısaltabilir
+   ve etkin sınır sunucuda **süpürülmüş** metne uygulanır; UI uyarır ve alanı
+   `aria-invalid` yapar ama son kararı sunucuya bırakır. Alt sınırın altı ise
+   engellenir: süpürme metni yalnız kısaltabildiği için kısa bir ham metin
+   sınırı hiçbir zaman geçemez.
 
 ## 11. HeroUI bileşen kümesi
 
-Kullanılan HeroUI v3 bileşenleri **10 tanedir** ve kilitlidir: `Alert`,
+Kullanılan HeroUI v3 bileşenleri **11 tanedir** ve kilitlidir: `Alert`,
 `Button`, `Card`, `Checkbox`, `Chip`, `Input`, `Label`, `Modal`, `Separator`,
-`TextField`. ADR-0001 m.2 ile `Tabs` düşmüştür ve geri gelmez. Küme bir
+`TextArea`, `TextField`. ADR-0001 m.2 ile `Tabs` düşmüştür ve geri gelmez.
+
+`TextArea` Paket D ile bilinçli olarak eklendi ve küme 10'dan 11'e çıktı:
+composer çok satırlı bir alan istiyor, alternatifler daha kötüydü (çıplak bir
+`<textarea>` incelenmiş yüzeyin dışında kalır ve alan/odak davranışını
+kaybeder; `Input` bir mesajı taşıyamaz). Bileşen koda dokunulmadan önce
+`heroui-react` MCP üzerinden v3 dokümantasyonuyla doğrulandı: ücretsiz bileşen,
+standart `<textarea>` attribute'ları, `rows` prop'u ve `TextField` içinde
+çocuk olarak kullanılan belgelenmiş kompozisyon (etiket ve doğrulama durumu
+alanla birlikte kalsın diye). Yanında başka hiçbir bileşen eklenmedi.
+
+Küme bir
 allowlist testiyle sabitlenir: kaynak ağacındaki bütün `@heroui/react`
 import'ları taranır ve beklenen kümeye eşit olmalıdır (test:
 `heroui-surface.test.ts::imports exactly the reviewed component set and

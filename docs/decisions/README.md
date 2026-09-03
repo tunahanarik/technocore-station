@@ -134,6 +134,40 @@ sürece burada tutulurlar.
 | IMP-262 | Filtre kök handler'ın yanı sıra `uvicorn`, `uvicorn.error`, `uvicorn.access`, `uvicorn.asgi` logger'larına **doğrudan** takılır; uvicorn'un kendi handler'ları ezilmez | `ServerErrorMiddleware` handler'dan sonra istisnayı her zaman yeniden fırlatır, uvicorn da aynı traceback'i `uvicorn.error` üzerinden ikinci kez yazar. Bugün `log_config=None` sayesinde bu kayıtlar köke propagate olur; filtreyi kaynağa bağlamak, uvicorn ileride kendi handler'ını kurarsa da yolu kapalı tutar — üçüncü parti handler'ı ezmekten daha az kırılgan (SI-127) |
 | IMP-263 | Zırh `apply_security_headers(..., no_store=True)` çağırır; `NO_STORE_PREFIXES` genişletilmez | `NO_STORE_PREFIXES` oturum durumu taşıyan iki yol ailesini kapsar, hata ise her yolda doğabilir (üretimde SPA catch-all'ı dahil). Prefix listesini genişletmek statik varlıkların önbelleklenmesini de bozardı; kararı çağrı yerine taşımak yalnız hata yanıtını etkiler (SI-128) |
 
+## 2g. Paket D uygulama kararları — Composer & Participation
+
+Kapsam kararları [`0002-paket-d-kapsam-kararlari-2026-09-03.md`](0002-paket-d-kapsam-kararlari-2026-09-03.md)
+dosyasındadır ve **bağlayıcıdır**. Aşağıdakiler o kararların uygulama
+detaylarıdır.
+
+| ID | Karar | Gerekçe |
+|---|---|---|
+| IMP-264 | Nonce sayacı **ayrı bir "son değer" satırı değil**, rezervasyon tablosunun kendisidir; sıradaki değer bütün satırların `MAX(nonce_value)`'ından türetilir | İki kayıt birbirinden sapabilir; tek kayıt sapamaz. Rezervasyon ile gönderim arasında ölen bir süreç sayıyı harcanmış bırakır — sayaç ayrı olsaydı geri düşerdi |
+| IMP-265 | Eşzamanlılık iki katmanla korunur: process kilidi **ve** `UNIQUE(did, room, nonce_value)` | Gerçekçi yarış tek process'te iki tıklamadır (kilit); fakat kilit aynı DB dosyasını açan ikinci bir Station'a ulaşamaz (kısıt). Kısıt reddettiğinde sınırlı bir yeniden okuma yapılır — bu **yerel** bir yazma çakışmasıdır, giden isteğin tekrarı değildir (ADR-0002 §3 ile karışmasın) |
+| IMP-266 | Nonce tavanı `min(10^19 - 1, 2^63 - 1)` | Protokol 19 hane, SQLite 64 işaretli bit verir; düşük olan gerçek tavandır. Tutulamayan bir sayıyı ayırmak sayacı sessizce bozardı, reddetmek daha iyidir |
+| IMP-267 | Nonce hem metin (`nonce`) hem sayı (`nonce_value`) olarak saklanır | İmza metni, sunucu sayıyı karşılaştırır. İmzalanan tam karakterleri saklamak, `int` üzerinden bir gidiş-dönüşün leading zero üretmesini imkânsız kılar |
+| IMP-268 | `cancelled` bir nonce dolaşıma **dönmez** | Sayaç kesin artandır; verilip bırakılan sayı yine harcanmıştır. Yeniden vermek tek nonce altında iki farklı payload imzalamak olurdu |
+| IMP-269 | Nonce, gönderimden **önce** `spent` işaretlenir | Crash, öldürülen süreç veya kaybolan yanıt sayıyı harcanmış bırakmalıdır. Sonra işaretlemek, "belki yazıldı" durumunda sayıyı yeniden kullanılabilir gösterirdi |
+| IMP-270 | Signer ince bir katmandır; yalnız `CanonicalPayload` alır, seed `bytearray`'de açılıp `finally`'de sıfırlanır | Ham metin imzalamak temsil edilemez kalır (IMP-211). Politika, gate, nonce ve ağ signer'ın dışındadır; signer'a ulaşan katmanın anahtara ulaşmasının başka yolu yoktur |
+| IMP-271 | Composer `IdentityService`'e değil, iki metotlu `ComposeIdentity` protokolüne bağlıdır | Composer'ın kasa yeteneği, recovery dosyası veya yaşam döngüsüyle işi yoktur; tüm servisi adlandıran bir bağımlılık onlara doğru büyüyebilirdi. Ayrıca DPAPI olmayan bir makinede de gerçek davranış test edilebilir |
+| IMP-272 | `send_token` yükü **beş** şeye bağlanır: canonical bayt digest'i, oda, ayrılan nonce, DID ve imza anındaki manifest verdict kimliği (ayrıca oturum) | ADR-0002 §2. Beşinin de bayatlaması mümkündür; biri bile bayatladıysa kullanıcının onayladığı gerçeklik artık yoktur |
+| IMP-273 | Verdict kimliği `(state, checked_at, check_id)` üzerinden türetilir; **yeni bir denetim her zaman yeni kimliktir** | Aynı sonucu bulan bir yeniden denetim bile kullanıcının sonucunu görmediği yeni bir kanıttır. Fail-closed okuma budur |
+| IMP-274 | Digest'ler alan uzunluğu ön ekli ve domain ayrımlıdır (`station_api/digests.py`) | Ayırıcıyla birleştirmek, ayırıcıyı içerebilen bir alanın başka bir alan demetini taklit etmesine izin verir. Oda adları bugün ayırıcı içeremez; bu, o durumun sürmesine bağlı olmasın |
+| IMP-275 | Taslak tek kullanımlık **değildir**, oturuma bağlı ve 180 saniyeliktir | Reddedilmiş bir gönderimden sonra aynı içeriği yeniden yazdırmak kullanıcıyı dikkatli okumaktan çok hızlı onaylamaya iter. Onay (send_token) tek kullanımlıktır; içerik değildir |
+| IMP-276 | `security/tokens.py` genel `SingleUseStore[T]` ile genişletildi; `BootstrapTokenStore` onun üzerinde ince bir katmandır | İki token da bir yeteneği bir kez devreder ve replay'i reddetmelidir; kalıbı ikinci kez yazmak ikisinin sapmasına davetiye olurdu |
+| IMP-277 | Yazma istemcisi ayrı modüldür ve salt-okuma istemcisinin retry politikasını **devralmaz** | İki istemcinin hata politikası zıttır; birleştirmek yanlış olanı miras almak demektir. Tekrarlanan bir yazma, tek onaylı mesajı birden çok yayımlanmış mesaja çevirir |
+| IMP-278 | 3xx yanıt `refused` değil `outcome_unknown` sayılır | Origin yanıt vermeden önce işlemiş olabilir; hop'u takip etmek de allow-list'in dışına çıkmanın tam olarak yoludur |
+| IMP-279 | Yazma yanıtında `Accept-Encoding: identity` | Yazma makbuzu küçüktür; sıkıştırmayı reddetmek decompression-bomb sorusunu sınırlamak yerine ortadan kaldırır |
+| IMP-280 | Oda sınıfı ayrıştırma kuralı referansın kendi algoritmasıdır; **işaretçiler** canlı manifest'ten okunur | Kural pinli, veri canlı. Tanınmayan bir sınıf işaretçisi taşıyan oda reddedilir: oraya yazmanın ne demek olduğunu bilmiyoruz |
+| IMP-281 | `DENIED_ROOMS = {lobby, meta}` | ADR-0002 §4.1 lobby'yi zorunlu kılar; pinli referans ikisini de "her ajana söylenen buluşma noktaları" olarak hardcode eder (`UNOWNABLE_ROOMS`). Bu bir sıkılaştırmadır, gevşetme değil |
+| IMP-282 | İmza adımı ayrıca `vault_passphrase` alır (ADR-0002 §2 tablosunda yok) | ADR tablosu onayı bağlayan alanları listeler; parola-korumalı kasa parolasız açılamaz ve künye ADR-016 parolanın **secret kullanıldığı anda** istenmesini şart koşar. `SecretStr`'dir, saklanmaz, loglanmaz, yankılanmaz |
+| IMP-283 | Ret sebebi gövdede değil `X-Station-Compose-Reason` başlığındadır | Hata sözleşmesi (SI-126) gövdenin tam olarak `{"detail": ...}` olmasını gerektirir; sebep kodunu gövdeye koymak o sözleşmeyi bozardı |
+| IMP-284 | `/api/compose/capability` salt-okuma bir uçtur | Kapalı kapıyı açıklamak için UI'nın gate verisine ihtiyacı var; devre dışı bir düğmenin kapıyı kapalı tutan **kontrol** olmadığı burada da geçerli — uç yalnız açıklar, karar vermez |
+| IMP-285 | Test oturumu için autouse giden-taşıyıcı yaması; loopback serbest | ADR-0002 §4.4. `tests/integration` gerçek uvicorn ile gerçek soket üzerinden konuşur; bunu da engelleyen bir kontrol devre dışı bırakılır veya etrafından dolaşılır, ve etrafından dolaşılan kontrol kontrol değildir |
+| IMP-286 | Yama istisnası `AssertionError` türevidir, `httpx` hiyerarşisinde değildir | Okuma istemcisi `TransportError`'ı `unavailable`'a, yazma istemcisi `outcome_unknown`'a çevirir; httpx şeklinde bir istisna makul görünen bir sonuca yutulur ve unutulan mock hiç fark edilmezdi |
+| IMP-287 | Route sayımı `_IncludedRouter` sarmalayıcılarını **özyinelemeli** yürür ve bilinen bir yola karşı da doğrulanır | Eski `{getattr(route, "path", "")}` yazımı bu FastAPI sürümünde boş string kümesi döndürüyordu: üç ayrı güvenlik testi hiçbir şeye bakmadan geçiyordu |
+| IMP-288 | Composer testleri gerçek kasa yerine enjekte edilmiş TEST-ONLY signer kullanır; gerçek kasa yolu ayrı ve Windows'a bağlı bir entegrasyon testindedir | Kasa seam'i `IdentityService`'in zaten sunduğu seam ile aynıdır. Böylece davranış testleri platforma bağlı olmaz, gerçek DPAPI yolu da uçtan uca kanıtlanır — hiçbir güvenlik testi atlanmadan |
+
 ## 2e. Ayrı dosyalı ADR'ler
 
 Künyeden sonra alınan ve tam metni ayrı dosyada yaşayan kararlar:
@@ -141,6 +175,7 @@ Künyeden sonra alınan ve tam metni ayrı dosyada yaşayan kararlar:
 | Dosya | Başlık | Tarih | Durum |
 |---|---|---|---|
 | [`0001-kapsam-eki-2026-09-02.md`](0001-kapsam-eki-2026-09-02.md) | Kapsam eki: uçtan uca uygulama yetkisi (A→J paketleri, sol menü, OpenCode Go + görev agentı, manuel QA kullanıcıya, API anahtarı giriş istisnası) | 2026-09-02 | kabul edildi |
+| [`0002-paket-d-kapsam-kararlari-2026-09-03.md`](0002-paket-d-kapsam-kararlari-2026-09-03.md) | Paket D kapsam kararları: note lane kapsam dışı, üç adımlı onay zinciri (TTL 180 sn), üç durumlu gönderim sonucu ve kör tekrar yasağı, leading-zero yasağı, test emniyet ağı | 2026-09-03 | kabul edildi |
 
 Çelişki durumunda tarihli kapsam eki, künyenin eski kapsam sınırlamalarının
 önüne geçer (kullanıcının açık talimatı); güvenlik değişmezleri (INV-01…09)

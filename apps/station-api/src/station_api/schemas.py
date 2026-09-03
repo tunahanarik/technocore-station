@@ -67,7 +67,12 @@ class TechnocoreStatus(StrictModel):
     Stage 3 made this real. ``never_checked`` is where every launch
     starts: Station sends no request until the user asks for one, so
     "not yet checked" is the honest opening state rather than a
-    placeholder. There is still no write path of any kind.
+    placeholder.
+
+    Stage 4 opened the write path, and only in the narrow sense the field
+    below names: a message is written when the user has separately approved
+    its signature and its publication, with the whole gate re-checked at each
+    step. Nothing is written automatically, and there is still no note lane.
     """
 
     state: Literal["never_checked", "current", "drifted", "unavailable"]
@@ -300,6 +305,138 @@ class ProtocolFieldStatus(StrictModel):
     rationale: str
     #: Set when ``outcome`` is ``unsupported``: what could not be read.
     detail: str = ""
+
+
+class ComposeDraftRequest(StrictModel):
+    """Step 1. Nothing is signed and no nonce is reserved by this call."""
+
+    room: str = Field(max_length=48)
+    #: Bounded here as a first line of defence only. The real limit is the
+    #: effective one read from the live manifest and applied to the *swept*
+    #: text; this cap exists so an absurd body is refused before it is swept
+    #: character by character. Generous by design: the sweep can only make
+    #: text shorter, so a raw cap below the swept limit would reject text the
+    #: protocol would have accepted.
+    text: str = Field(max_length=65536)
+
+
+class ComposeDraftResponse(StrictModel):
+    """What would be stored, and how it differs from what was typed.
+
+    Both texts are returned so the UI can render the difference. Neither is
+    a secret: this is the user's own message, on its way to a public room.
+    """
+
+    draft_id: str
+    room: str
+    #: Class markers on the room name, read from the live manifest.
+    room_classes: list[str]
+    raw_text: str
+    swept_text: str
+    changed_by_sweep: bool
+    raw_chars: int
+    swept_chars: int
+    #: Bind step 2 to this exact content. Changing the text or the room
+    #: changes the digest, and step 2 refuses a digest that does not match.
+    draft_digest: str
+    min_chars: int
+    max_chars: int
+    expires_in_seconds: int
+    #: Things about this room the user should know before publishing.
+    target_notes: list[str]
+
+
+class ComposeSignRequest(StrictModel):
+    """Step 2: the explicit signing approval.
+
+    ``vault_passphrase`` is a ``SecretStr`` for the same reason it is on the
+    recovery routes: an accidental repr, log line or traceback prints
+    asterisks. It is present because a passphrase-protected vault cannot be
+    opened without it (ADR-016: the passphrase is asked for at the moment the
+    secret is used, not at launch), and it is never stored, echoed or logged.
+    """
+
+    draft_id: str
+    #: Must equal the digest returned by step 1.
+    draft_digest: str
+    vault_passphrase: SecretStr | None = None
+
+
+class ComposeSignResponse(StrictModel):
+    """The exact bytes that were signed, and a single-use send approval.
+
+    ``send_token`` is a capability: it is what turns "I have signed this"
+    into "publish it". It is single-use, expires, and is bound to the
+    canonical bytes, room, nonce, DID, session and manifest verdict.
+    """
+
+    draft_id: str
+    room: str
+    did: str
+    nonce: str
+    #: The canonical string, shown verbatim. This is what the signature
+    #: covers - not the JSON body it travels in.
+    canonical: str
+    canonical_digest: str
+    signature: str
+    changed_by_sweep: bool
+    send_token: str
+    expires_in_seconds: int
+
+
+class ComposeSendRequest(StrictModel):
+    """Step 3: spend the approval. Carries nothing else on purpose."""
+
+    send_token: str
+
+
+class ComposeSendResponse(StrictModel):
+    """The three-valued result of one write attempt.
+
+    ``outcome`` is never reduced to a boolean. ``outcome_unknown`` means the
+    server may have stored the message: presenting it as either sent or
+    failed would be a claim the evidence does not support (ADR-0002 3).
+    """
+
+    outcome: Literal["accepted", "refused", "outcome_unknown"]
+    room: str
+    did: str
+    nonce: str
+    canonical_digest: str
+    signature: str
+    http_status: int
+    detail: str
+    #: A bounded, swept excerpt of the server's answer.
+    response_excerpt: str
+    #: True only for ``outcome_unknown``. Reconciliation needs a room read,
+    #: which this release does not open, so the state is shown as it is.
+    reconciliation_required: bool
+
+
+class ComposeCapabilityResponse(StrictModel):
+    """Whether composing is possible at all, and what it is bound by.
+
+    A read. It reports the same gate the three composer steps re-run, so the
+    UI can explain a closed door without a disabled button ever being the
+    control that keeps it closed.
+    """
+
+    can_compose: bool
+    blocking_reasons: list[str]
+    #: The message lane, stated so the UI never has to assume it.
+    write_method: Literal["POST"]
+    write_path_template: str
+    #: Rooms Station refuses outright.
+    denied_rooms: list[str]
+    #: Class markers the live manifest published on the last check.
+    room_class_markers: list[str]
+    max_chars: int
+    min_chars: int
+    draft_ttl_seconds: int
+    approval_ttl_seconds: int
+    #: The note lane is out of scope for this release, and why.
+    note_lane_available: Literal[False] = False
+    note_lane_detail: str
 
 
 class TechnocoreStatusResponse(StrictModel):

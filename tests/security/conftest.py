@@ -8,12 +8,13 @@ ever ship in a release (IMP-108).
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine
+from starlette.routing import BaseRoute
 from station_api.app import create_app
 from station_api.config import Settings
 from station_api.logging_setup import clear_secret_registry
@@ -23,6 +24,34 @@ from tests.conftest import TEST_PORT
 
 FOREIGN_ORIGIN = "http://evil.example"
 DEV_ORIGIN = "http://127.0.0.1:5173"
+
+
+def collect_route_paths(application: FastAPI) -> frozenset[str]:
+    """Every path the application actually serves.
+
+    Written because the obvious spelling stopped working and nobody noticed.
+    This FastAPI version wraps an included router in an ``_IncludedRouter``
+    object that carries no ``path``, so
+    ``{getattr(route, "path", "") for route in app.routes}`` returned a set
+    of empty strings - and every assertion of the form "no route path
+    contains 'say'" passed while inspecting nothing at all.
+
+    Callers therefore assert against a **known** path as well as against the
+    forbidden ones, so a walk that goes blind again fails instead of
+    reporting success.
+    """
+
+    def walk(routes: Iterable[BaseRoute]) -> Iterator[str]:
+        for route in routes:
+            included = getattr(route, "original_router", None)
+            if included is not None:
+                yield from walk(included.routes)
+                continue
+            path = getattr(route, "path", "")
+            if path:
+                yield path
+
+    return frozenset(walk(application.routes))
 
 
 @pytest.fixture(autouse=True)

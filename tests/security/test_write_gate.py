@@ -344,12 +344,19 @@ def _non_docstring_literals(tree: ast.Module) -> list[str]:
 
 
 def test_no_code_path_can_reach_a_technocore_write_endpoint(repo_root: Path) -> None:
-    """AC-16 groundwork: the write lanes are unreachable, not merely unused.
+    """The GET write lanes are unreachable, not merely unused.
 
     Technocore performs writes over GET, so "we only send GET" proves
-    nothing. What matters is that no string a program could use names a write
-    path. Checked against the AST, because the read-only client's own
-    docstrings quote these paths while explaining why they are forbidden.
+    nothing - and the converse now matters too. Package D added a genuine
+    write path, and it is a **POST** to ``/r/{room}``, which carries none of
+    the markers below. So this test is unchanged by that work and must stay
+    green exactly as it is: it is the assertion that no *URL-shaped* write
+    lane - ``/r/{room}/say-signed/...``, ``/kv/{ns}/{key}/set/...`` - became
+    reachable as a side effect, and that no hidden GET fallback exists
+    behind the POST lane (ADR-012, the end-to-end brief 8).
+
+    Checked against the AST, because the read-only client's own docstrings
+    quote these paths while explaining why they are forbidden.
     """
     roots = (
         repo_root / "apps" / "station-api" / "src",
@@ -375,6 +382,11 @@ def test_the_source_registry_contains_only_read_only_documents() -> None:
     The test above proves no write path appears. This one proves the paths
     that *do* appear are the six official documents and nothing else, so the
     registry cannot quietly grow a room read or a note write.
+
+    Package D makes this stricter than it looks. There is now a write lane -
+    ``POST /r/{room}`` - and it lives in a *different* closed registry. The
+    assertion below is what keeps the two apart: the read registry may not
+    contain ``/r/`` even though the product now legitimately posts to it.
     """
     from station_api.technocore.sources import SOURCES, TECHNOCORE_ORIGIN
 
@@ -395,15 +407,86 @@ def test_the_source_registry_contains_only_read_only_documents() -> None:
             assert forbidden not in source.path
 
 
-def test_httpx_is_imported_only_by_the_read_only_client(api_source_root: Path) -> None:
-    """Stage 3 adds exactly one outbound client, in exactly one module.
+def test_the_write_registry_carries_exactly_one_lane_and_no_documents() -> None:
+    """The mirror of the test above, for the registry that can write.
 
-    Before Stage 3 this asserted no HTTP client existed anywhere. That was the
-    honest statement while none did. Now one must, so the assertion is
-    narrowed rather than dropped: any *other* module importing an HTTP client
+    Public read and explicit write carry separate closed registries (the
+    end-to-end brief, 8). This asserts the write side is as narrow as the
+    read side: one method, one path template, no note lane, and nothing that
+    could be mistaken for a document fetch.
+    """
+    from station_api.technocore import write_targets
+
+    assert write_targets.WRITE_METHOD == "POST"
+    assert write_targets.MESSAGE_LANE_TEMPLATE == "/r/{room}"
+
+    # The note lane is out of scope for this package (ADR-0002 1) and must
+    # not exist as a reachable template anywhere in the module.
+    source = Path(write_targets.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    for literal in _non_docstring_literals(tree):
+        assert "/kv/" not in literal, f"a note write template is reachable: {literal!r}"
+        # GET write lanes put the message text in the URL. Neither spelling
+        # may appear as a usable string.
+        for marker in ("say-signed", "set-signed", "/say/", "/set/"):
+            assert marker not in literal
+
+
+def test_the_write_lane_url_is_built_only_from_the_official_origin() -> None:
+    """A resolved target cannot address anything but the allow-listed origin."""
+    from station_api.technocore.client import assert_allowed_url
+    from station_api.technocore.sources import TECHNOCORE_ORIGIN
+    from station_api.technocore.write_targets import resolve_message_target
+
+    markers = frozenset({"p", "mb", "d", "e"})
+    target = resolve_message_target("mb-station-test-only", markers=markers)
+
+    assert target.url == f"{TECHNOCORE_ORIGIN}/r/mb-station-test-only"
+    assert_allowed_url(target.url)
+
+
+def test_the_lobby_is_refused_as_a_write_target() -> None:
+    """INV-05 and ADR-0002 4.1: the front door is never a target.
+
+    Not merely absent from the tests - refused by the product, so a user
+    cannot type it either.
+    """
+    from station_api.technocore.write_targets import (
+        DENIED_ROOMS,
+        RoomPolicyError,
+        resolve_message_target,
+    )
+
+    assert "lobby" in DENIED_ROOMS
+
+    for room in sorted(DENIED_ROOMS):
+        with pytest.raises(RoomPolicyError):
+            resolve_message_target(room, markers=frozenset({"p", "mb", "d", "e"}))
+
+
+#: The modules allowed to import an HTTP client, and why each one is here.
+#:
+#: Stage 3 added the first: one read-only client, one fixed source registry.
+#: Package D adds the second, deliberately and as a separate module, because
+#: the two have opposite failure policies - the read client retries transport
+#: faults, 5xx and 429, and a write client that inherited that policy would
+#: turn one approved message into several published ones.
+#:
+#: This list is the review boundary. A third entry means a third outbound
+#: surface, and adding one here is the change a reviewer must see.
+OUTBOUND_CLIENT_MODULES = {"client.py", "write_client.py"}
+
+
+def test_httpx_is_imported_only_by_the_two_reviewed_clients(
+    api_source_root: Path,
+) -> None:
+    """Exactly two outbound clients, in exactly two named modules.
+
+    Before Stage 3 this asserted no HTTP client existed anywhere. That was
+    the honest statement while none did. The assertion has been narrowed
+    twice since, never dropped: any *other* module importing an HTTP client
     is a new outbound surface that nothing has reviewed.
     """
-    allowed = {"client.py"}
     clients = ("httpx", "requests", "aiohttp", "urllib3", "http.client")
 
     offenders: list[str] = []
@@ -418,12 +501,51 @@ def test_httpx_is_imported_only_by_the_read_only_client(api_source_root: Path) -
                 continue
             for name in names:
                 if any(name == c or name.startswith(f"{c}.") for c in clients) and (
-                    path.name not in allowed
+                    path.name not in OUTBOUND_CLIENT_MODULES
                     or path.parent.name != "technocore"
                 ):
                     offenders.append(f"{path.relative_to(api_source_root)}: {name}")
 
-    assert offenders == [], f"an HTTP client is imported outside the read-only client: {offenders}"
+    assert offenders == [], f"an HTTP client is imported outside the reviewed clients: {offenders}"
+
+
+def test_both_reviewed_client_modules_actually_exist(api_source_root: Path) -> None:
+    """An allow-list entry for a module that is gone is a silent widening.
+
+    Deleting ``write_client.py`` while leaving its name on the list would
+    quietly re-permit any future file with that name, anywhere under
+    ``technocore/``. Naming a module is a decision about that module.
+    """
+    technocore = api_source_root / "station_api" / "technocore"
+    for name in OUTBOUND_CLIENT_MODULES:
+        assert (technocore / name).is_file(), f"{name} is allow-listed but missing"
+
+
+def test_the_write_client_is_not_reachable_from_the_read_path(
+    api_source_root: Path,
+) -> None:
+    """The read monitoring path must not be able to send a write.
+
+    The two clients live in one package, so "separate modules" is only a
+    boundary if nothing on the read side imports the write side. The
+    dependency runs one way: the write client reuses the read client's
+    origin allow-list, and never the reverse.
+    """
+    read_client = (
+        api_source_root / "station_api" / "technocore" / "client.py"
+    ).read_text(encoding="utf-8")
+    monitoring = (
+        api_source_root / "station_api" / "technocore" / "service.py"
+    ).read_text(encoding="utf-8")
+
+    for source in (read_client, monitoring):
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                assert "write_client" not in (node.module or "")
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert "write_client" not in alias.name
 
 
 def test_urllib_request_is_not_used_anywhere(api_source_root: Path) -> None:

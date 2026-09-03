@@ -43,8 +43,15 @@ interface DialogProps {
   readonly status: IdentityStatus;
 }
 
-/** A labelled passphrase input. Never bound to a saved-password autofill. */
-function PassphraseField({
+/**
+ * A labelled passphrase input. Never bound to a saved-password autofill.
+ *
+ * Exported because the composer asks for the same vault passphrase at the
+ * moment it signs, and a second implementation of "the field that holds a
+ * passphrase" is exactly where the no-storage, no-autofill rule would drift.
+ * The value stays in the caller's local state; this component keeps none.
+ */
+export function PassphraseField({
   label,
   value,
   onChange,

@@ -91,12 +91,30 @@ def test_full_session_handoff_over_the_wire(live_server: LiveServer) -> None:
 
         status = client.get("/api/app/status")
         assert status.status_code == 200
+        payload = status.json()
         # Stage 3 replaced the placeholder "not_connected" with the honest
         # four-way state. A freshly launched server has contacted nobody, so
         # the only correct opening value is never_checked - which is also the
         # proof that starting Station makes no outbound request.
-        assert status.json()["technocore"]["state"] == "never_checked"
-        assert status.json()["technocore"]["write_available_from_stage"] == 4
+        assert payload["technocore"]["state"] == "never_checked"
+
+        # Stage 4 is the stage that opens writes, and it is now the stage
+        # this build implements. The two agreeing is the point: while they
+        # disagreed, the field was a promise about a future release rather
+        # than a statement about this one.
+        assert payload["technocore"]["write_available_from_stage"] == 4
+        assert payload["service"]["stage"] == 4
+
+        # And the composer is honest about being shut on a fresh launch: no
+        # check has run, so the manifest half of the gate blocks.
+        capability = client.get("/api/compose/capability")
+        assert capability.status_code == 200
+        assert capability.json()["can_compose"] is False
+        assert "manifest_current" in capability.json()["blocking_reasons"]
+        # The note lane is absent by decision, and says so rather than
+        # simply not being there (ADR-0002 1).
+        assert capability.json()["note_lane_available"] is False
+        assert capability.json()["note_lane_detail"]
 
         # The token is spent.
         assert client.get(f"/session/{token}", follow_redirects=False).status_code == 404
@@ -127,17 +145,75 @@ def test_server_does_not_answer_on_a_non_loopback_address(live_server: LiveServe
 
 
 def test_no_technocore_endpoint_is_reachable(live_server: LiveServer) -> None:
-    """Stage 1 has no outbound client and no write surface at all."""
+    """No direct write surface, over a real socket.
+
+    Stage 1's version of this said "no outbound client and no write surface
+    at all". Package D makes the second half false on purpose, so the
+    assertion has been split rather than dropped.
+
+    These paths must still not exist: a bare signing endpoint, a
+    message-or-note passthrough, an invented note lane. What replaced them is
+    a three-request approval chain, and the composer routes are checked
+    separately below - they exist, and they refuse an unapproved caller.
+    """
     with httpx.Client(base_url=live_server.base_url, timeout=10) as client:
         for path in (
-            "/api/identity",
             "/api/identity/create",
             "/api/recovery",
             "/api/sign",
             "/api/technocore/message",
             "/api/technocore/note",
+            "/api/technocore/send",
+            "/api/compose/note",
+            "/api/compose/say",
         ):
             assert client.post(path).status_code in {403, 404, 405}
+
+
+def test_the_composer_refuses_an_unapproved_caller_over_the_wire(
+    live_server: LiveServer,
+) -> None:
+    """The write lane exists and is shut to anyone without an approval.
+
+    Over a real socket, with the real middleware stack. A ``send`` with a
+    made-up token must never be accepted, and a caller with no session must
+    not get past the guards at all.
+    """
+    with httpx.Client(base_url=live_server.base_url, timeout=10) as client:
+        # No session, no CSRF: refused by the middleware, not by the route.
+        assert client.post(
+            "/api/compose/send", json={"send_token": "TEST-ONLY-not-a-real-token"}
+        ).status_code in {401, 403}
+        assert client.get("/api/compose/capability").status_code == 401
+
+        # With a session and a CSRF value, an invented approval is still
+        # refused - and with 409, meaning "there is no such approval",
+        # rather than anything that could be mistaken for acceptance.
+        token = live_server.app.state.bootstrap_tokens.issue()
+        assert (
+            client.get(f"/session/{token}", follow_redirects=False).status_code == 303
+        )
+        csrf = client.get("/api/session/bootstrap").json()["csrf_token"]
+
+        refused = client.post(
+            "/api/compose/send",
+            headers={"X-Station-CSRF": csrf},
+            json={"send_token": "TEST-ONLY-not-a-real-token"},
+        )
+        assert refused.status_code == 409
+        assert refused.headers["x-station-compose-reason"] == "approval_invalid"
+
+
+def test_no_write_is_possible_without_the_composer(live_server: LiveServer) -> None:
+    """GET can never write, whatever Technocore's own protocol allows.
+
+    Technocore performs writes over GET on its own service. Station's API
+    must not mirror that: a GET on the composer's own paths is not a way to
+    publish anything.
+    """
+    with httpx.Client(base_url=live_server.base_url, timeout=10) as client:
+        for path in ("/api/compose/draft", "/api/compose/sign", "/api/compose/send"):
+            assert client.get(path).status_code in {401, 403, 405}
 
 
 def _non_loopback_addresses() -> list[str]:

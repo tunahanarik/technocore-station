@@ -438,4 +438,13 @@ async def revoke_identity(
     except IdentityServiceError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
+    # A pending send approval signed by a key the user has just destroyed
+    # should not sit there until its TTL runs out. Nothing could act on it -
+    # revocation closes the write gate, and the send step re-runs the gate
+    # and re-compares the DID - but leaving a live capability behind for a
+    # revoked identity is the wrong default even when it is inert.
+    composer = getattr(request.app.state, "compose", None)
+    if composer is not None:
+        composer.forget_identity(body.confirm_did)
+
     return _json(_to_response(view))

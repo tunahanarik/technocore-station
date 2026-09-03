@@ -211,6 +211,89 @@ export interface ProtocolFieldStatus {
   readonly detail: string;
 }
 
+// --- Composer (Paket D) ----------------------------------------------------
+//
+// Hand-written mirrors of the four `Compose*` models in
+// `station_api/schemas.py`. Two things are deliberately absent and must stay
+// absent: there is no seed or private key (INV-01), and there is no URL, host
+// or method the caller can steer - `write_method` and `write_path_template`
+// are reported *by* the server so the UI never has to assume the lane.
+
+export interface ComposeCapability {
+  readonly can_compose: boolean;
+  /** Gate check keys, same vocabulary as `WriteGateStatus.blocking_reasons`. */
+  readonly blocking_reasons: readonly string[];
+  readonly write_method: "POST";
+  readonly write_path_template: string;
+  readonly denied_rooms: readonly string[];
+  readonly room_class_markers: readonly string[];
+  readonly max_chars: number;
+  readonly min_chars: number;
+  readonly draft_ttl_seconds: number;
+  readonly approval_ttl_seconds: number;
+  /** Always false in this release; the field exists so the UI cannot guess. */
+  readonly note_lane_available: false;
+  /** Why there is no note send path, in the backend's own words (ADR-0002 1). */
+  readonly note_lane_detail: string;
+}
+
+/** Step 1. Nothing is signed and no nonce is reserved yet. */
+export interface ComposeDraft {
+  readonly draft_id: string;
+  readonly room: string;
+  readonly room_classes: readonly string[];
+  readonly raw_text: string;
+  readonly swept_text: string;
+  readonly changed_by_sweep: boolean;
+  readonly raw_chars: number;
+  readonly swept_chars: number;
+  /** Binds step 2 to this exact content; changing text or room changes it. */
+  readonly draft_digest: string;
+  readonly min_chars: number;
+  readonly max_chars: number;
+  readonly expires_in_seconds: number;
+  readonly target_notes: readonly string[];
+}
+
+/** Step 2. The exact bytes that were signed, plus a single-use approval. */
+export interface ComposeSignature {
+  readonly draft_id: string;
+  readonly room: string;
+  readonly did: string;
+  readonly nonce: string;
+  /** The canonical string, shown verbatim: displayed is signed (charter 14). */
+  readonly canonical: string;
+  readonly canonical_digest: string;
+  readonly signature: string;
+  readonly changed_by_sweep: boolean;
+  /** A capability. Held in component state only, and spent exactly once. */
+  readonly send_token: string;
+  readonly expires_in_seconds: number;
+}
+
+/**
+ * The three-valued result of one write attempt (ADR-0002 3).
+ *
+ * `outcome_unknown` means the server may have stored the message. It is not a
+ * synonym for failure and must never be rendered as one.
+ */
+export type WriteOutcome = "accepted" | "refused" | "outcome_unknown";
+
+export interface ComposeSendResult {
+  readonly outcome: WriteOutcome;
+  readonly room: string;
+  readonly did: string;
+  readonly nonce: string;
+  readonly canonical_digest: string;
+  readonly signature: string;
+  readonly http_status: number;
+  readonly detail: string;
+  /** A bounded, server-swept excerpt. Plain text only - never markup (SI-54). */
+  readonly response_excerpt: string;
+  /** True only for `outcome_unknown`; reconciliation is not in this release. */
+  readonly reconciliation_required: boolean;
+}
+
 export interface TechnocoreStatus {
   readonly state: DriftState;
   readonly manifest_current: boolean;
