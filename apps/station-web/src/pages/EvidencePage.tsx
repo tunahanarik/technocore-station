@@ -1,7 +1,6 @@
 import { Alert, Card, Separator } from "@heroui/react";
 
 import { EmptyState } from "../components/EmptyState";
-import { TechnocoreSourcesPanel } from "../components/TechnocoreSourcesPanel";
 
 interface TrustLevel {
   readonly level: number;
@@ -10,8 +9,13 @@ interface TrustLevel {
 }
 
 /**
- * The four trust levels, stated with their limits. Level 4 is empty in the
- * MVP and is shown as absent rather than implied.
+ * Kanitlar: the evidence ledger and its four trust levels.
+ *
+ * The official-source panel used to live here; it moved to the Kaynaklar
+ * section, because document access and protocol drift describe the remote
+ * server, while this section records what this Station itself did.
+ *
+ * Level 4 is empty in the MVP and is shown as absent rather than implied.
  */
 const TRUST_LEVELS: readonly TrustLevel[] = [
   {
@@ -42,19 +46,13 @@ export function EvidencePage() {
   return (
     <Card>
       <Card.Header>
-        <Card.Title>Evidence &amp; Sources</Card.Title>
-        <Card.Description>
-          Kanit kayitlari, guven seviyeleri ve resmi kaynak suruklenmesi.
-        </Card.Description>
+        <Card.Title>Kanitlar</Card.Title>
+        <Card.Description>Kanit kayitlari ve guven seviyeleri.</Card.Description>
       </Card.Header>
 
       <Card.Content className="flex flex-col gap-4">
-        <TechnocoreSourcesPanel />
-
-        <Separator />
-
         <EmptyState
-          description="Bu bilgisayarda henuz hicbir kanit kaydi yok. Kayitlar ancak kullanici onayli bir gonderim yapildiktan sonra olusur; gonderim yolu Asama 4 ile acilir."
+          description="Bu bilgisayarda henuz hicbir kanit kaydi yok. Kayitlar ancak kullanici onayli bir gonderim yapildiktan sonra olusur; kanit defteri gorunumu Evidence paketi (Paket E) ile bu bolume eklenecek."
           title="Henuz kanit kaydi yok"
         />
 

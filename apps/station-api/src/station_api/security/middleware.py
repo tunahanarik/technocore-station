@@ -6,24 +6,39 @@ Adding permissive cross-origin headers would defeat every guard below.
 
 Outermost to innermost the chain is:
 
-    SecurityHeaders -> HostGuard -> FetchMetadata -> Session -> Csrf
+    SecurityHeaders -> RequestId -> HostGuard -> FetchMetadata -> Session -> Csrf
 
 SecurityHeaders sits outermost so that the 421 and 403 responses produced by
-the guards below it still carry the hardening headers (SI-33).
+the guards below it still carry the hardening headers (SI-33). RequestId sits
+directly inside it so that every one of those rejections - and every ordinary
+response - also carries the correlation id (SI-125).
+
+One response class is built outside this chain entirely: Starlette runs the
+``Exception`` handler in ServerErrorMiddleware, which wraps even
+SecurityHeaders, so ``unhandled_exception_shield`` below applies the hardening
+headers and the request id itself (SI-126, IMP-260).
 """
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from secrets import compare_digest
+from uuid import uuid4
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp
 
-from station_api.config import CSRF_HEADER_NAME, SESSION_COOKIE_NAME
+from station_api.config import (
+    CSRF_HEADER_NAME,
+    REQUEST_ID_HEADER_NAME,
+    SESSION_COOKIE_NAME,
+)
 from station_api.security.sessions import SessionStore
+
+_logger = logging.getLogger(__name__)
 
 #: Methods that cannot change server state and therefore need no CSRF proof.
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -115,17 +130,76 @@ def _denied(code: str, status_code: int) -> JSONResponse:
     return JSONResponse({"detail": code}, status_code=status_code)
 
 
+def apply_security_headers(response: Response, path: str) -> None:
+    """Attach the hardening headers to one response.
+
+    The single source of truth for both places a response can be born: the
+    middleware chain below, and the unhandled-exception shield that Starlette
+    runs outside it. Neither copy can drift from the other because there is
+    no copy.
+    """
+    for header, value in _SECURITY_HEADERS.items():
+        response.headers[header] = value
+    if path.startswith(NO_STORE_PREFIXES):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Attach hardening headers to every response, including error responses."""
 
     async def dispatch(self, request: Request, call_next: CallNext) -> Response:
         response = await call_next(request)
-        for header, value in _SECURITY_HEADERS.items():
-            response.headers[header] = value
-        if request.url.path.startswith(NO_STORE_PREFIXES):
-            response.headers["Cache-Control"] = "no-store"
-            response.headers["Pragma"] = "no-cache"
+        apply_security_headers(response, request.url.path)
         return response
+
+
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    """Stamp every response with a fresh correlation id (SI-125).
+
+    ``uuid4().hex`` is random and carries no request content, so the id can
+    never leak anything and never collides with the redaction layer in
+    ``logging_setup``: it is not a secret, is never registered as one, and
+    does not match the ``/session/<token>`` scrub pattern.
+
+    The id is also stored on ``request.state`` so the unhandled-exception
+    shield can put the same value in the 500 body's header and in the server
+    log line that carries the traceback.
+    """
+
+    async def dispatch(self, request: Request, call_next: CallNext) -> Response:
+        request_id = uuid4().hex
+        request.state.request_id = request_id
+        response = await call_next(request)
+        response.headers[REQUEST_ID_HEADER_NAME] = request_id
+        return response
+
+
+async def unhandled_exception_shield(request: Request, exc: Exception) -> Response:
+    """Last line of defence: an unhandled exception never reaches the client.
+
+    Registered for ``Exception`` on the application. Starlette places that
+    handler in ServerErrorMiddleware - *outside* the whole middleware chain -
+    so this response would bypass SecurityHeaders and RequestId; the shield
+    therefore applies both itself, through the same helper and the same
+    stored id (SI-126).
+
+    The body is a constant. The traceback, the exception type and every path
+    go to the server log only, keyed by the request id so a user-visible id
+    can be matched to the full story. The URL path is deliberately not logged
+    here: ``/session/<token>`` would put a live token one formatting layer
+    away from disk (SI-07).
+    """
+    request_id = getattr(request.state, "request_id", None) or uuid4().hex
+    _logger.exception(
+        "Unhandled exception while serving a request; request_id=%s",
+        request_id,
+        exc_info=exc,
+    )
+    response = _denied("internal_error", status_code=500)
+    response.headers[REQUEST_ID_HEADER_NAME] = request_id
+    apply_security_headers(response, request.url.path)
+    return response
 
 
 class HostGuardMiddleware(BaseHTTPMiddleware):

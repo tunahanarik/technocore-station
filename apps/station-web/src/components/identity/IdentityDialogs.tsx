@@ -3,11 +3,13 @@ import { useEffect, useId, useRef, useState } from "react";
 
 import {
   adoptRecovery,
+  ApiError,
   createIdentity,
   exportRecovery,
   fetchIdentity,
   inspectRecovery,
   revokeIdentity,
+  toApiError,
   verifyRecovery,
 } from "../../api/client";
 import type { IdentityStatus, ProtectionMode, RecoveryInspectResult } from "../../api/types";
@@ -31,6 +33,13 @@ interface DialogProps {
 }
 
 function errorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    // Always a safe Turkish sentence, never a bare machine code.
+    return error.userMessage;
+  }
+  if (error instanceof Error && error.message === "session_not_bootstrapped") {
+    return toApiError(error).userMessage;
+  }
   if (error instanceof Error && error.message) {
     return error.message;
   }

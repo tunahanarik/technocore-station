@@ -1,10 +1,11 @@
 import { Alert, Button, Card, Separator } from "@heroui/react";
 import { useCallback, useEffect, useState } from "react";
 
-import { fetchConformance, fetchIdentity } from "../api/client";
+import { type ApiError, fetchConformance, fetchIdentity, toApiError } from "../api/client";
 import type { ConformanceStatus, IdentityStatus } from "../api/types";
 import { EmptyState } from "../components/EmptyState";
-import { StatusPill, type StatusTone } from "../components/StatusPill";
+import { ErrorRegion } from "../components/ErrorRegion";
+import { StatusPill } from "../components/StatusPill";
 import {
   AdoptRecoveryDialog,
   CreateIdentityDialog,
@@ -12,6 +13,7 @@ import {
   RestoreTestDialog,
   RevokeIdentityDialog,
 } from "../components/identity/IdentityDialogs";
+import { identityStateLabel, identityStateTone, nextAction } from "../lib/identityGuidance";
 
 /**
  * Identity surface, driven by the backend state machine.
@@ -41,7 +43,25 @@ const CAPABILITY_LABELS: Record<string, string> = {
 };
 
 /** The conformance block inside "Teknik ayrintilar". */
-function ConformancePanel({ conformance }: { readonly conformance: ConformanceStatus | null }) {
+function ConformancePanel({
+  conformance,
+  error,
+  onRetry,
+}: {
+  readonly conformance: ConformanceStatus | null;
+  readonly error: ApiError | null;
+  readonly onRetry: () => void;
+}) {
+  if (error !== null) {
+    return (
+      <ErrorRegion
+        error={error}
+        onRetry={onRetry}
+        section="Kimlik ve Guvenlik / Protokol uygunlugu"
+        title="Uygunluk durumu okunamadi"
+      />
+    );
+  }
   if (conformance === null) {
     return <p className="text-sm text-muted">Uygunluk durumu okunuyor...</p>;
   }
@@ -130,62 +150,17 @@ function formatDate(value: string | null): string {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString("tr-TR");
 }
 
-/**
- * The single safest thing to do next.
- *
- * Derived from the backend's own gate checks rather than from a parallel copy
- * of the roadmap. The previous version hard-coded "Stage 2B is next", which
- * was true when it was written and quietly wrong the moment Stage 2B shipped.
- * Reading the gate means this text cannot go stale again: whatever the
- * backend reports as blocking *is* the next step.
- */
-function nextAction(status: IdentityStatus): string {
-  switch (status.state) {
-    case "capability_error":
-      return "Secret kasasi kullanilamiyor. Uygulamayi Windows uzerinde calistirin.";
-    case "no_identity":
-      return "Yeni bir kimlik olusturun veya mevcut bir recovery dosyasindan kurun.";
-    case "creating":
-      return "Kimlik olusturuluyor.";
-    case "recovery_pending":
-      return status.recovery.exported_at === null
-        ? "Recovery dosyasi olusturun."
-        : "Restore-test yaparak recovery dosyasini dogrulayin.";
-    case "revoked":
-      return "Kimlik revoke edildi. Yeni bir kimlik olusturabilirsiniz.";
-    case "ready":
-      return readyNextAction(status);
-  }
-}
-
-/** What a ready identity still needs, in the backend's own terms. */
-function readyNextAction(status: IdentityStatus): string {
-  const checks = new Map(status.gate.checks.map((check) => [check.key, check]));
-  const conformance = checks.get("conformance_verified");
-  const manifest = checks.get("manifest_current");
-
-  if (conformance !== undefined && conformance.state !== "passed") {
-    return "Uygunluk self-test'i gecmiyor. Asama 2B motorunu inceleyin.";
-  }
-  if (manifest !== undefined && manifest.state !== "passed") {
-    return "Resmi kaynaklar bu oturumda henuz dogrulanmadi. Evidence & Sources sekmesinden 'Resmi kaynaklari denetle' calistirin.";
-  }
-  if (status.gate.allowed) {
-    return "Butun on kosullar hazir. Gonderim yuzeyi Asama 4 - Composer & Participation ile gelir.";
-  }
-  return "Dis yazma icin eksik bir on kosul var. Ayrintilar asagidaki kapida.";
-}
-
 function CopyableValue({ label, value }: { readonly label: string; readonly value: string }) {
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
   async function copy(): Promise<void> {
     try {
       await navigator.clipboard.writeText(value);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
+      setCopyState("copied");
+      window.setTimeout(() => setCopyState("idle"), 2000);
     } catch {
-      setCopied(false);
+      // Clipboard access can be refused; say so instead of silently resetting.
+      setCopyState("failed");
     }
   }
 
@@ -195,49 +170,18 @@ function CopyableValue({ label, value }: { readonly label: string; readonly valu
       <div className="flex flex-wrap items-center gap-2">
         <code className="rounded bg-surface-secondary px-2 py-1 text-xs break-all">{value}</code>
         <Button aria-label={`${label} degerini kopyala`} onPress={() => void copy()} size="sm" variant="secondary">
-          {copied ? "Kopyalandi" : "Kopyala"}
+          {copyState === "copied" ? "Kopyalandi" : copyState === "failed" ? "Kopyalanamadi" : "Kopyala"}
         </Button>
       </div>
     </div>
   );
 }
 
-function stateTone(status: IdentityStatus): StatusTone {
-  switch (status.state) {
-    case "ready":
-      return "ok";
-    case "recovery_pending":
-    case "creating":
-      return "pending";
-    case "no_identity":
-      return "inactive";
-    case "revoked":
-    case "capability_error":
-      return "problem";
-  }
-}
-
-function stateLabel(status: IdentityStatus): string {
-  switch (status.state) {
-    case "ready":
-      return "Hazir";
-    case "recovery_pending":
-      return "Recovery bekliyor";
-    case "creating":
-      return "Olusturuluyor";
-    case "no_identity":
-      return "Kimlik yok";
-    case "revoked":
-      return "Revoke edildi";
-    case "capability_error":
-      return "Kasa kullanilamiyor";
-  }
-}
-
 export function IdentityPage() {
   const [status, setStatus] = useState<IdentityStatus | null>(null);
   const [conformance, setConformance] = useState<ConformanceStatus | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [conformanceError, setConformanceError] = useState<ApiError | null>(null);
+  const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(true);
   const [dialog, setDialog] = useState<DialogName>(null);
 
@@ -247,18 +191,20 @@ export function IdentityPage() {
       setStatus(await fetchIdentity());
       setError(null);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Kimlik durumu okunamadi.");
+      setError(toApiError(caught));
     } finally {
       setLoading(false);
     }
 
     // Loaded separately, and never allowed to block the identity surface: a
-    // conformance read that fails leaves the panel unknown rather than
+    // conformance read that fails is shown on its own panel rather than
     // hiding the identity the user came here for.
     try {
       setConformance(await fetchConformance());
-    } catch {
+      setConformanceError(null);
+    } catch (caught) {
       setConformance(null);
+      setConformanceError(toApiError(caught));
     }
   }, []);
 
@@ -286,16 +232,14 @@ export function IdentityPage() {
           <Card.Title>Kimlik</Card.Title>
         </Card.Header>
         <Card.Content className="flex flex-col gap-4">
-          <Alert status="danger">
-            <Alert.Indicator />
-            <Alert.Content>
-              <Alert.Title>Kimlik durumu okunamadi</Alert.Title>
-              <Alert.Description>{error ?? "Bilinmeyen hata."}</Alert.Description>
-            </Alert.Content>
-          </Alert>
-          <div>
-            <Button onPress={() => void load()}>Tekrar dene</Button>
-          </div>
+          {error !== null && (
+            <ErrorRegion
+              error={error}
+              onRetry={() => void load()}
+              section="Kimlik ve Guvenlik"
+              title="Kimlik durumu okunamadi"
+            />
+          )}
         </Card.Content>
       </Card>
     );
@@ -311,7 +255,7 @@ export function IdentityPage() {
         <Card.Header className="gap-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <Card.Title>Kimlik</Card.Title>
-            <StatusPill label={stateLabel(status)} tone={stateTone(status)} />
+            <StatusPill label={identityStateLabel(status)} tone={identityStateTone(status)} />
           </div>
           <Card.Description>
             DID, koruma, recovery ve secret yasam dongusu bu yuzeyde yonetilir.
@@ -330,13 +274,12 @@ export function IdentityPage() {
           )}
 
           {error !== null && (
-            <Alert status="danger">
-              <Alert.Indicator />
-              <Alert.Content>
-                <Alert.Title>Son islem basarisiz oldu</Alert.Title>
-                <Alert.Description>{error}</Alert.Description>
-              </Alert.Content>
-            </Alert>
+            <ErrorRegion
+              error={error}
+              onRetry={() => void load()}
+              section="Kimlik ve Guvenlik"
+              title="Son islem basarisiz oldu"
+            />
           )}
 
           {identity === null ? (
@@ -461,7 +404,11 @@ export function IdentityPage() {
 
           <Separator />
 
-          <ConformancePanel conformance={conformance} />
+          <ConformancePanel
+            conformance={conformance}
+            error={conformanceError}
+            onRetry={() => void load()}
+          />
 
           <Separator />
 

@@ -1,9 +1,10 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { resetSessionState } from "../api/client";
+import { bootstrapSession, resetSessionState } from "../api/client";
 import type {
+  AppStatus,
   ConformanceStatus,
   IdentityStatus,
   TechnocoreStatus,
@@ -11,6 +12,9 @@ import type {
 import { ComposeVerifyPage } from "./ComposeVerifyPage";
 import { EvidencePage } from "./EvidencePage";
 import { IdentityPage } from "./IdentityPage";
+import { OverviewPage } from "./OverviewPage";
+import { SettingsHelpPage } from "./SettingsHelpPage";
+import { SourcesPage } from "./SourcesPage";
 
 /**
  * These assertions encode product rules, not styling:
@@ -40,9 +44,9 @@ const NO_IDENTITY: IdentityStatus = {
   gate: {
     allowed: false,
     identity_ready: false,
-    // Stage 3: both conformance and manifest are real checks now.
-    // Conformance passes on a healthy build; the manifest stays blocked
-    // until the user runs a live check in this session.
+    // Both conformance and manifest are real checks now. Conformance passes
+    // on a healthy build; the manifest stays blocked until the user runs a
+    // live check in this session.
     blocking_reasons: ["identity_present", "manifest_current"],
     checks: [
       { key: "identity_present", state: "blocked", detail: "Aktif bir kimlik gerekli.", stage: "2" },
@@ -117,6 +121,30 @@ const CONFORMANT: ConformanceStatus = {
   unicode_version: "15.0.0",
   bundle_unicode_version: "15.0.0",
   unicode_version_matches: true,
+};
+
+//: TEST-ONLY app status fixture, mirroring /api/app/status.
+const APP_STATUS: AppStatus = {
+  service: { state: "running", stage: 3, mode: "production" },
+  database: {
+    state: "ready",
+    journal_mode: "wal",
+    foreign_keys: true,
+    schema_revision: "0002",
+  },
+  session_security: {
+    state: "active",
+    cookie_http_only: true,
+    cookie_same_site: "strict",
+    cookie_secure: false,
+    csrf_required: true,
+    transport: "loopback-http",
+  },
+  technocore: {
+    state: "never_checked",
+    write_available_from_stage: 4,
+    detail: "Resmi kaynaklar bu oturumda henuz denetlenmedi.",
+  },
 };
 
 //: TEST-ONLY read-only monitoring fixture. Mirrors the real response shape.
@@ -269,9 +297,9 @@ const NOT_CONFORMANT: ConformanceStatus = {
 /**
  * Route the stub by URL.
  *
- * The Identity surface now reads two endpoints. A stub that answered every
- * request with the identity payload would make the conformance panel render
- * from the wrong shape and quietly pass.
+ * The pages read four endpoints between them. A stub that answered every
+ * request with the identity payload would make the other panels render from
+ * the wrong shape and quietly pass.
  */
 function stubIdentity(
   status: IdentityStatus,
@@ -295,6 +323,15 @@ function stubIdentity(
         );
       }
 
+      if (url.includes("/api/write-gate")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(status.gate), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+
       if (url.includes("/api/conformance/status")) {
         if (conformance === null) {
           return Promise.resolve(new Response("nope", { status: 500 }));
@@ -304,6 +341,18 @@ function stubIdentity(
             status: 200,
             headers: { "Content-Type": "application/json" },
           }),
+        );
+      }
+
+      if (url.includes("/api/session/bootstrap")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              csrf_token: "test-only-value-not-a-real-token",
+              csrf_header: "X-Station-CSRF",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
         );
       }
 
@@ -381,12 +430,9 @@ describe("Identity surface", () => {
 
   it("shows blocked requirements as blocked, not as a future stage", async () => {
     // The stage badge exists only for requirements that are not built yet.
-    // Stage 2B made conformance real and Stage 3 made the manifest check
-    // real, so nothing is badged with a stage any more - a blocked check is
-    // something the user can act on, not something to wait for.
-    //
-    // The original regression this guards against remains covered: no badge
-    // may claim a stage that does not match the text beside it.
+    // A blocked check is something the user can act on, not something to
+    // wait for; no badge may claim a stage that does not match the text
+    // beside it.
     stubIdentity(NO_IDENTITY);
     const { container } = render(<IdentityPage />);
     await screen.findByText("Kimlik olusturulmadi");
@@ -448,13 +494,16 @@ describe("Identity surface", () => {
     ).toBeInTheDocument();
   });
 
-  it("does not claim conformance when the status cannot be read", async () => {
+  it("shows an error region, not a fake verdict, when conformance cannot be read", async () => {
     stubIdentity(NO_IDENTITY, null);
     render(<IdentityPage />);
     await screen.findByText("Kimlik olusturulmadi");
 
-    expect(await screen.findByText("Uygunluk durumu okunuyor...")).toBeInTheDocument();
+    // The failed read is a finding of its own: a persistent alert with a
+    // retry, never a silent "still loading" or an invented verdict.
+    expect(await screen.findByText("Uygunluk durumu okunamadi")).toBeInTheDocument();
     expect(screen.queryByText("Asama 2B · Hazir")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Yeniden dene" }).length).toBeGreaterThan(0);
   });
 
   it("never renders the full vector bundle digest", async () => {
@@ -568,20 +617,29 @@ describe("Compose and Verify surface", () => {
     expect(container.querySelectorAll("button")).toHaveLength(0);
   });
 
+  it("shows a persistent error region when the gate cannot be read", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new TypeError("Failed to fetch"))));
+    render(<ComposeVerifyPage />);
+
+    expect(await screen.findByText("Kapi durumu okunamadi")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Yeniden dene" })).toBeInTheDocument();
+  });
+
   it("never shows an unmet requirement as passed", async () => {
     stubIdentity(NO_IDENTITY);
     render(<ComposeVerifyPage />);
     await screen.findByText("Bu yuzey kilitli");
 
-    // Every Stage 3 check is real, so unmet ones read as waiting rather than
-    // as a future stage. What must never happen is one reading "Tamam".
+    // Every check is real, so unmet ones read as waiting rather than as a
+    // future stage. What must never happen is one reading "Tamam".
     const waiting = await screen.findAllByText("Bekliyor");
     expect(waiting.length).toBeGreaterThan(0);
   });
 
   it("stays locked even though conformance now passes", async () => {
-    // The point of the stage: building the conformance engine does not open
-    // the outward door, because drift detection is still missing.
+    // Building the conformance engine does not open the outward door,
+    // because drift detection still has to pass in this session.
     stubIdentity(NO_IDENTITY);
     const { container } = render(<ComposeVerifyPage />);
     await screen.findByText("Bu yuzey kilitli");
@@ -612,10 +670,11 @@ describe("Compose and Verify surface", () => {
   });
 });
 
-describe("Evidence and Sources surface", () => {
-  it("shows an empty state", () => {
+describe("Kanitlar surface", () => {
+  it("shows an empty state that names the package that will fill it", () => {
     render(<EvidencePage />);
     expect(screen.getByText("Henuz kanit kaydi yok")).toBeInTheDocument();
+    expect(screen.getByText(/Paket E/)).toBeInTheDocument();
   });
 
   it("declares level 4 as absent rather than implying it exists", () => {
@@ -632,13 +691,41 @@ describe("Evidence and Sources surface", () => {
     expect(text).not.toContain("guvenilir zaman kaniti");
     expect(text).not.toContain("airdrop uygunluk");
   });
+
+  it("carries the trust levels but not the official-source panel", () => {
+    const { container } = render(<EvidencePage />);
+    expect(screen.getByText("Guven seviyeleri")).toBeInTheDocument();
+    // Document access and drift moved to the Kaynaklar section.
+    expect(container.textContent).not.toContain("Salt okunur baglanti durumu");
+    expect(container.textContent).not.toContain("Belge erisimi");
+  });
+});
+
+describe("Kaynaklar surface", () => {
+  it("carries the official-source panel but not the trust levels", async () => {
+    stubIdentity(NO_IDENTITY);
+    const { container } = render(<SourcesPage />);
+    await screen.findByText("Henuz denetlenmedi");
+
+    expect(screen.getByText("Salt okunur baglanti durumu")).toBeInTheDocument();
+    expect(container.textContent).not.toContain("Guven seviyeleri");
+  });
 });
 
 describe("every surface", () => {
   it("renders no external link", () => {
-    stubIdentity(NO_IDENTITY);
-    for (const Page of [IdentityPage, ComposeVerifyPage, EvidencePage]) {
-      const { container, unmount } = render(<Page />);
+    stubIdentity(NO_IDENTITY, CONFORMANT, TECHNOCORE_CURRENT);
+    const noNavigate = () => {};
+    const surfaces = [
+      <IdentityPage key="identity" />,
+      <ComposeVerifyPage key="compose" />,
+      <EvidencePage key="evidence" />,
+      <SourcesPage key="sources" />,
+      <OverviewPage key="overview" loading={false} onNavigate={noNavigate} status={APP_STATUS} />,
+      <SettingsHelpPage key="settings" status={APP_STATUS} />,
+    ];
+    for (const surface of surfaces) {
+      const { container, unmount } = render(surface);
       expect(container.querySelectorAll('a[href^="http"]')).toHaveLength(0);
       unmount();
     }
@@ -648,7 +735,7 @@ describe("every surface", () => {
 describe("Read-only Technocore monitoring", () => {
   it("starts as not yet checked and offers an explicit user action", async () => {
     stubIdentity(NO_IDENTITY);
-    render(<EvidencePage />);
+    render(<SourcesPage />);
 
     expect(await screen.findByText("Henuz denetlenmedi")).toBeInTheDocument();
     expect(
@@ -658,7 +745,7 @@ describe("Read-only Technocore monitoring", () => {
 
   it("shows official source metadata after a check", async () => {
     stubIdentity(NO_IDENTITY, CONFORMANT, TECHNOCORE_CURRENT);
-    render(<EvidencePage />);
+    render(<SourcesPage />);
 
     expect(await screen.findByText("Guncel")).toBeInTheDocument();
     expect(
@@ -673,7 +760,7 @@ describe("Read-only Technocore monitoring", () => {
   it("never turns a remote URL into a clickable link", async () => {
     // AC-17: Technocore data is never active content.
     stubIdentity(NO_IDENTITY, CONFORMANT, TECHNOCORE_CURRENT);
-    const { container } = render(<EvidencePage />);
+    const { container } = render(<SourcesPage />);
     await screen.findByText("Guncel");
 
     expect(container.querySelectorAll("a")).toHaveLength(0);
@@ -686,7 +773,7 @@ describe("Read-only Technocore monitoring", () => {
 
   it("separates a critical drift from a non-critical warning", async () => {
     stubIdentity(NO_IDENTITY, CONFORMANT, TECHNOCORE_DRIFTED);
-    render(<EvidencePage />);
+    render(<SourcesPage />);
 
     expect(await screen.findByText("Suruklenme tespit edildi")).toBeInTheDocument();
     expect(screen.getByText("Kritik protokol suruklenmesi")).toBeInTheDocument();
@@ -698,7 +785,7 @@ describe("Read-only Technocore monitoring", () => {
     // Showing the reader's `<yok>` would say "the field is missing", which is
     // a different finding; the explanation belongs in the detail line.
     stubIdentity(NO_IDENTITY, CONFORMANT, TECHNOCORE_CONFLICT);
-    const { container } = render(<EvidencePage />);
+    const { container } = render(<SourcesPage />);
     await screen.findByText("Suruklenme tespit edildi");
 
     expect(screen.getByText("sema kendisiyle celisiyor")).toBeInTheDocument();
@@ -711,7 +798,7 @@ describe("Read-only Technocore monitoring", () => {
     // one says the document does not carry the field, the other says it
     // carries a shape this build cannot read.
     stubIdentity(NO_IDENTITY, CONFORMANT, TECHNOCORE_FIELD_MISSING);
-    render(<EvidencePage />);
+    render(<SourcesPage />);
     await screen.findByText("Protokol uyumu dogrulanamadi");
 
     expect(screen.getByText("Bulunamadi")).toBeInTheDocument();
@@ -720,11 +807,11 @@ describe("Read-only Technocore monitoring", () => {
   });
 
   it("does not call an unreadable field a change the server made", async () => {
-    // The Stage 3.1 regression, at the UI. A critical field that could not be
-    // read must be reported as unverified - not as "the server changed the
-    // signature format", which the panel used to say on exactly this input.
+    // A critical field that could not be read must be reported as
+    // unverified - not as "the server changed the signature format", which
+    // the panel used to say on exactly this input.
     stubIdentity(NO_IDENTITY, CONFORMANT, TECHNOCORE_UNEVALUABLE);
-    const { container } = render(<EvidencePage />);
+    const { container } = render(<SourcesPage />);
 
     expect(await screen.findByText("Protokol uyumu dogrulanamadi")).toBeInTheDocument();
     expect(screen.getByText("Okunamadi")).toBeInTheDocument();
@@ -741,7 +828,7 @@ describe("Read-only Technocore monitoring", () => {
     // Two independent questions. A fetched document does not yet mean the
     // protocol matches, and an unreadable schema is not a network problem.
     stubIdentity(NO_IDENTITY, CONFORMANT, TECHNOCORE_UNEVALUABLE);
-    render(<EvidencePage />);
+    render(<SourcesPage />);
     await screen.findByText("Protokol uyumu dogrulanamadi");
 
     expect(screen.getByText("1. Belge erisimi")).toBeInTheDocument();
@@ -753,7 +840,7 @@ describe("Read-only Technocore monitoring", () => {
     // The wrong pointer is what produced the false alarm; the UI shows where
     // the value was actually looked for, so the claim is checkable by hand.
     stubIdentity(NO_IDENTITY, CONFORMANT, TECHNOCORE_DRIFTED);
-    render(<EvidencePage />);
+    render(<SourcesPage />);
     await screen.findByText("Suruklenme tespit edildi");
 
     expect(screen.getByText(/dependentSchemas/)).toBeInTheDocument();
@@ -762,30 +849,95 @@ describe("Read-only Technocore monitoring", () => {
 
   it("states plainly that the check only reads", async () => {
     stubIdentity(NO_IDENTITY);
-    render(<EvidencePage />);
+    render(<SourcesPage />);
     await screen.findByText("Henuz denetlenmedi");
 
     expect(screen.getByText("Bu denetim yalniz okur")).toBeInTheDocument();
   });
 
-  it("makes no airdrop or eligibility claim", async () => {
-    // AC-18 forbids *making* a claim, not naming one. The page carries an
-    // explicit disclaimer, so a test that banned the word would fail on the
-    // very sentence that satisfies the rule.
+  it("makes no airdrop or eligibility claim on either surface", async () => {
+    // AC-18 forbids *making* a claim, not naming one. The evidence page
+    // carries an explicit disclaimer; neither surface may carry a claim.
     stubIdentity(NO_IDENTITY, CONFORMANT, TECHNOCORE_CURRENT);
-    const { container } = render(<EvidencePage />);
+    const sources = render(<SourcesPage />);
     await screen.findByText("Guncel");
+    const sourcesText = (sources.container.textContent ?? "").toLowerCase();
+    sources.unmount();
 
-    const text = (container.textContent ?? "").toLowerCase();
-    expect(text).toContain("hicbir airdrop garantisi");
+    const evidence = render(<EvidencePage />);
+    const evidenceText = (evidence.container.textContent ?? "").toLowerCase();
+    expect(evidenceText).toContain("hicbir airdrop garantisi");
+
     for (const claim of [
       "airdrop kazandiniz",
       "uygunlugunuz onaylandi",
       "tahsis edildi",
       "hak kazandiniz",
     ]) {
-      expect(text).not.toContain(claim);
+      expect(sourcesText).not.toContain(claim);
+      expect(evidenceText).not.toContain(claim);
     }
+  });
+
+  it("disables the check button while a check is in flight", async () => {
+    // Double-activation protection: the outbound check is an explicit user
+    // action and a second click must not start a second request.
+    let refreshCalls = 0;
+    let releaseRefresh: (response: Response) => void = () => {};
+    const pendingRefresh = new Promise<Response>((resolve) => {
+      releaseRefresh = resolve;
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes("/api/session/bootstrap")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                csrf_token: "test-only-value-not-a-real-token",
+                csrf_header: "X-Station-CSRF",
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        if (url.includes("/api/technocore/refresh")) {
+          refreshCalls += 1;
+          return pendingRefresh;
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(TECHNOCORE_NEVER_CHECKED), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }),
+    );
+
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<SourcesPage />);
+    await screen.findByText("Henuz denetlenmedi");
+
+    await user.click(screen.getByRole("button", { name: "Resmi kaynaklari denetle" }));
+
+    const busyButton = await screen.findByRole("button", { name: "Denetleniyor..." });
+    expect(busyButton).toBeDisabled();
+
+    // A second activation while pending must be inert.
+    fireEvent.click(busyButton);
+    expect(refreshCalls).toBe(1);
+
+    releaseRefresh(
+      new Response(JSON.stringify(TECHNOCORE_CURRENT), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    expect(await screen.findByText("Guncel")).toBeInTheDocument();
   });
 });
 
@@ -820,6 +972,13 @@ describe("Identity next-step guidance", () => {
     ).toBeInTheDocument();
   });
 
+  it("names the Kaynaklar section, not the retired Evidence tab", async () => {
+    stubIdentity(readyWith("passed", "blocked"));
+    const { container } = render(<IdentityPage />);
+    await screen.findByText(/Resmi kaynaklar bu oturumda henuz dogrulanmadi/);
+    expect(container.textContent).toContain("Kaynaklar bolumunden");
+  });
+
   it("points at Stage 4 once every precondition is met", async () => {
     stubIdentity(readyWith("passed", "passed"));
     render(<IdentityPage />);
@@ -831,6 +990,82 @@ describe("Identity next-step guidance", () => {
     const { container } = render(<IdentityPage />);
     await screen.findByText(/Asama 4/);
     expect(container.textContent).not.toContain("Sonraki adim Asama 2B");
+  });
+});
+
+describe("Genel Bakis surface", () => {
+  it("composes identity, Technocore, conformance and service health", async () => {
+    stubIdentity(READY, CONFORMANT, TECHNOCORE_CURRENT);
+    render(
+      <OverviewPage loading={false} onNavigate={() => {}} status={APP_STATUS} />,
+    );
+
+    // Identity summary with the shared next-step guidance.
+    expect(await screen.findByText(/Sonraki guvenli adim/)).toBeInTheDocument();
+    // Technocore drift state and last check time.
+    expect(screen.getByText("Guncel")).toBeInTheDocument();
+    expect(screen.getByText("Son basarili kontrol")).toBeInTheDocument();
+    // Conformance summary.
+    expect(screen.getByText(/Self-test gecti: 104 vektor/)).toBeInTheDocument();
+    // Service health cards.
+    expect(screen.getByText("Yerel servis")).toBeInTheDocument();
+    expect(screen.getByText("Oturum guvenligi")).toBeInTheDocument();
+  });
+
+  it("shows summaries only: no hash runs and no source detail", async () => {
+    stubIdentity(READY, CONFORMANT, TECHNOCORE_CURRENT);
+    const { container } = render(
+      <OverviewPage loading={false} onNavigate={() => {}} status={APP_STATUS} />,
+    );
+    await screen.findByText(/Sonraki guvenli adim/);
+
+    const text = container.textContent ?? "";
+    expect(text).not.toMatch(/\b[0-9a-fA-F]{64}\b/);
+    // The per-source hash list stays in the Kaynaklar section.
+    expect(text).not.toContain("aabbccdd1122");
+    expect(text).not.toContain(READY.identity!.did);
+  });
+
+  it("offers a go-to-section action on every summary card", async () => {
+    stubIdentity(READY, CONFORMANT, TECHNOCORE_CURRENT);
+    const onNavigate = vi.fn();
+    const user = userEvent.setup();
+    render(<OverviewPage loading={false} onNavigate={onNavigate} status={APP_STATUS} />);
+    await screen.findByText(/Sonraki guvenli adim/);
+
+    await user.click(screen.getByRole("button", { name: "Kaynaklar bolumune git" }));
+    expect(onNavigate).toHaveBeenCalledWith("sources");
+
+    await user.click(
+      screen.getAllByRole("button", { name: "Kimlik ve Guvenlik bolumune git" })[0]!,
+    );
+    expect(onNavigate).toHaveBeenCalledWith("identity");
+  });
+
+  it("designs the first-use state instead of faking data", async () => {
+    stubIdentity(NO_IDENTITY, CONFORMANT, TECHNOCORE_NEVER_CHECKED);
+    render(
+      <OverviewPage loading={false} onNavigate={() => {}} status={APP_STATUS} />,
+    );
+
+    expect(await screen.findByText("Kimlik yok")).toBeInTheDocument();
+    expect(screen.getByText("Henuz denetlenmedi")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Station kendiliginden hicbir istek gondermez/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Yeni bir kimlik olusturun veya mevcut bir recovery/),
+    ).toBeInTheDocument();
+  });
+
+  it("shows each failed summary as its own persistent error with retry", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new TypeError("Failed to fetch"))));
+    render(<OverviewPage loading={false} onNavigate={() => {}} status={null} />);
+
+    expect(await screen.findByText("Kimlik ozeti okunamadi")).toBeInTheDocument();
+    expect(screen.getByText("Technocore ozeti okunamadi")).toBeInTheDocument();
+    expect(screen.getByText("Uygunluk ozeti okunamadi")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Yeniden dene" }).length).toBe(3);
   });
 });
 
@@ -910,5 +1145,63 @@ describe("Restore-test file picker", () => {
     await screen.findByText("backup.tcrec");
 
     expect(document.body.innerHTML).not.toContain("SECRET-CIPHERTEXT-BYTES");
+  });
+});
+
+describe("Ayarlar ve Yardim surface", () => {
+  it("hosts the theme control and says the choice is not persisted", async () => {
+    stubIdentity(NO_IDENTITY);
+    render(<SettingsHelpPage status={APP_STATUS} />);
+    await screen.findByText("Guvenlik kapilari");
+
+    expect(screen.getByRole("button", { name: /temaya gec/ })).toBeInTheDocument();
+    expect(screen.getByText(/kalici degildir/)).toBeInTheDocument();
+  });
+
+  it("shows the application and service facts from the backend status", async () => {
+    stubIdentity(NO_IDENTITY);
+    const { container } = render(<SettingsHelpPage status={APP_STATUS} />);
+    await screen.findByText("Guvenlik kapilari");
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("loopback-http");
+    expect(text).toContain("uretim");
+    expect(text).toContain("journal wal");
+  });
+
+  it("renders the real write gate from /api/write-gate", async () => {
+    stubIdentity(NO_IDENTITY);
+    render(<SettingsHelpPage status={APP_STATUS} />);
+
+    expect(await screen.findByText("Dis yazma kapali")).toBeInTheDocument();
+    expect(screen.getByText("Aktif bir kimlik gerekli.")).toBeInTheDocument();
+    expect(screen.getAllByText("Kapali").length).toBeGreaterThan(0);
+  });
+
+  it("shows a persistent error with retry when the gate cannot be read", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new TypeError("Failed to fetch"))));
+    render(<SettingsHelpPage status={null} />);
+
+    expect(await screen.findByText("Kapi durumu okunamadi")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Yeniden dene" })).toBeInTheDocument();
+  });
+
+  it("is honest about what arrives in later packages", async () => {
+    stubIdentity(NO_IDENTITY);
+    const { container } = render(<SettingsHelpPage status={APP_STATUS} />);
+    await screen.findByText("Guvenlik kapilari");
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("OpenCode Go baglantisi Paket G'de");
+    expect(text).toContain("kullanim kilavuzu Paket J'de");
+  });
+
+  it("offers no secret input anywhere", async () => {
+    stubIdentity(NO_IDENTITY);
+    const { container } = render(<SettingsHelpPage status={APP_STATUS} />);
+    await screen.findByText("Guvenlik kapilari");
+
+    expect(container.querySelector('input[type="password"]')).toBeNull();
+    expect(container.querySelectorAll("textarea")).toHaveLength(0);
   });
 });

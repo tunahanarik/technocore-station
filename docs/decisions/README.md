@@ -124,6 +124,13 @@ sürece burada tutulurlar.
 | IMP-257 | Pattern değerleri derlenir, asla uzak girdiyle çalıştırılmaz | Derlenemeyen kalıp uygulanamaz şemadır; payload'daki herhangi bir kalıp değerlendirilemez → kapı kapanır |
 | IMP-258 | `required` tekliği metaşema gereğidir | Kendi metaşemasını kıran belge "doğru okundu" sayılamaz |
 
+## 2f. Paket C uygulama kararları
+
+| ID | Karar | Gerekçe |
+|---|---|---|
+| IMP-259 | `RequestIdMiddleware` SecurityHeaders'ın hemen içine yerleştirilir; kimlik `uuid4().hex` olarak sunucuda üretilir, istemciden yansıtılmaz | SecurityHeaders en dışta kalır (SI-33) ve guard retleri dahil her yanıt kimliği taşır (SI-125); rastgele kimlik hiçbir istek içeriği taşımadığı için redaksiyon katmanıyla çakışmaz |
+| IMP-260 | `Exception` zırhı sertleştirme başlıklarını ve request id'yi paylaşılan `apply_security_headers` yardımcıyla **kendisi** uygular | Starlette `Exception` handler'ını ServerErrorMiddleware'de, yani SecurityHeaders'ın da dışında çalıştırır; başlıklar orada otomatik eklenmez, tek kaynaklı yardımcı iki yolun birbirinden sapmasını imkânsız kılar (SI-126) |
+
 ## 2e. Ayrı dosyalı ADR'ler
 
 Künyeden sonra alınan ve tam metni ayrı dosyada yaşayan kararlar:
