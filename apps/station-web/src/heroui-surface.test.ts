@@ -16,6 +16,16 @@ import { describe, expect, it } from "vitest";
  *
  * `Tabs` was removed by ADR-0001 item 2, which replaced the three-tab layout
  * with the left-nav dashboard. It stays out.
+ *
+ * `TextArea` was added by Paket D and takes the set from ten to eleven. It is
+ * here because the composer needs a multi-line field and the alternatives were
+ * worse: a bare `<textarea>` would sit outside the reviewed surface with none
+ * of the field styling or focus behaviour, and `Input` cannot hold a message.
+ * It was verified against the v3 documentation through the `heroui-react` MCP
+ * before a line was written: free component, standard `<textarea>` attributes,
+ * `rows`, and a documented composition as a child of `TextField` so the label
+ * and the validation state stay with the field they belong to. Nothing else
+ * was added alongside it.
  */
 const ALLOWED_COMPONENTS = [
   "Alert",
@@ -27,6 +37,7 @@ const ALLOWED_COMPONENTS = [
   "Label",
   "Modal",
   "Separator",
+  "TextArea",
   "TextField",
 ] as const;
 

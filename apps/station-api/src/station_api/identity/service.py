@@ -80,6 +80,19 @@ class RecoveryView:
 
 
 @dataclass(frozen=True)
+class SigningIdentity:
+    """The two facts a signer needs, and nothing else.
+
+    ``identity_id`` names a vault file, so it is deliberately kept out of
+    :class:`IdentityView` and out of every response model: it is an internal
+    handle, not something a browser has any use for (SI-36).
+    """
+
+    identity_id: str
+    did: str
+
+
+@dataclass(frozen=True)
 class IdentityView:
     """Public projection of an identity. Contains no secret material."""
 
@@ -583,6 +596,24 @@ class IdentityService:
     def write_gate_status(self) -> WriteGateStatus:
         return self.describe().gate
 
+    # --- signing handle -------------------------------------------------
+
+    def active_signing_identity(self) -> SigningIdentity:
+        """The active identity's vault handle and DID.
+
+        Read straight from the database rather than from an
+        :class:`IdentityView`, because the view deliberately does not carry
+        the vault handle. Refuses for a revoked identity: ``active_slot`` is
+        cleared on revoke, so there is nothing to find.
+        """
+        with Session(self._engine) as session:
+            identity = session.scalar(
+                select(Identity).where(Identity.active_slot == ACTIVE_SLOT)
+            )
+            if identity is None:
+                raise IdentityServiceError("Aktif kimlik yok.")
+            return SigningIdentity(identity_id=identity.id, did=identity.did)
+
 
 __all__ = [
     "SEED_LENGTH",
@@ -591,5 +622,6 @@ __all__ = [
     "IdentityState",
     "IdentityView",
     "RecoveryView",
+    "SigningIdentity",
     "generate_seed",
 ]

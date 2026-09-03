@@ -38,7 +38,8 @@ _TECHNOCORE_DETAIL = {
     ),
     "current": (
         "Resmi kaynaklar salt okunur denetlendi ve kritik protokol sozlesmesi "
-        "beklenenle ayni. Bu surumde hicbir yazma yolu yoktur."
+        "beklenenle ayni. Yazma yolu yalnizca sizin ayri ayri onayladiginiz "
+        "bir imza ve gonderim ile calisir; Station kendiliginden yazmaz."
     ),
     "drifted": (
         "Kritik protokol alani degismis. Dis yazma kapisi kapali kalir."
@@ -111,7 +112,7 @@ async def app_status(request: Request, session: CurrentSession) -> AppStatusResp
     settings = request.app.state.settings
     return AppStatusResponse(
         service=ServiceStatus(
-            stage=3,
+            stage=4,
             mode="development" if settings.dev_mode else "production",
         ),
         database=_read_database_status(request.app.state.engine),

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { bootstrapSession, resetSessionState } from "../api/client";
 import type {
   AppStatus,
+  ComposeCapability,
   ConformanceStatus,
   IdentityStatus,
   TechnocoreStatus,
@@ -295,9 +296,33 @@ const NOT_CONFORMANT: ConformanceStatus = {
 };
 
 /**
+ * The composer capability, derived from the gate in the identity fixture.
+ *
+ * Deriving it keeps the two from disagreeing: a fixture that said "composing
+ * is open" while the gate fixture said "identity missing" would test a state
+ * the backend cannot produce.
+ */
+function capabilityFor(status: IdentityStatus): ComposeCapability {
+  return {
+    can_compose: status.gate.allowed,
+    blocking_reasons: [...status.gate.blocking_reasons],
+    write_method: "POST",
+    write_path_template: "/r/{room}",
+    denied_rooms: ["lobby", "meta"],
+    room_class_markers: [],
+    max_chars: 4096,
+    min_chars: 1,
+    draft_ttl_seconds: 180,
+    approval_ttl_seconds: 180,
+    note_lane_available: false,
+    note_lane_detail: "Imzali note gonderimi bu surumde yoktur.",
+  };
+}
+
+/**
  * Route the stub by URL.
  *
- * The pages read four endpoints between them. A stub that answered every
+ * The pages read five endpoints between them. A stub that answered every
  * request with the identity payload would make the other panels render from
  * the wrong shape and quietly pass.
  */
@@ -313,6 +338,15 @@ function stubIdentity(
       // yield "[object Object]" and route every call to the identity branch.
       const url =
         typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+
+      if (url.includes("/api/compose/capability")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(capabilityFor(status)), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
 
       if (url.includes("/api/technocore/")) {
         return Promise.resolve(
@@ -722,20 +756,41 @@ describe("Compose and Verify surface", () => {
     stubIdentity(NO_IDENTITY);
     render(<ComposeVerifyPage />);
 
-    expect(await screen.findByText("Bu yuzey kilitli")).toBeInTheDocument();
+    // The lock is no longer a fixed sentence on the page: it is the backend's
+    // own capability verdict, and the preconditions beneath it are the gate.
+    expect(await screen.findByText("Gonderim kapali")).toBeInTheDocument();
     expect(
       await screen.findByText("Recovery restore-test ile dogrulanmis olmali"),
     ).toBeInTheDocument();
   });
 
   it("offers no compose field and no send control while locked", async () => {
+    // Package D opened the write path, so this assertion matters more than it
+    // did while the whole surface was a placeholder: with the gate shut there
+    // must still be nothing to type into and nothing to press.
     stubIdentity(NO_IDENTITY);
     const { container } = render(<ComposeVerifyPage />);
-    await screen.findByText("Bu yuzey kilitli");
+    await screen.findByText("Gonderim kapali");
 
     expect(container.querySelectorAll("textarea")).toHaveLength(0);
     expect(container.querySelectorAll("input")).toHaveLength(0);
     expect(container.querySelectorAll("button")).toHaveLength(0);
+    for (const name of ["Taslagi hazirla", "Imzala", "Onayla ve gonder"]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+  });
+
+  it("names the blocking preconditions instead of showing an inert form", async () => {
+    // A disabled button explains nothing. The closed door is stated, with the
+    // backend's own reasons behind it.
+    stubIdentity(NO_IDENTITY);
+    render(<ComposeVerifyPage />);
+    await screen.findByText("Gonderim kapali");
+
+    // The bullet is the capability's own blocking reason, rendered beside the
+    // precondition list rather than instead of it.
+    expect(screen.getByText("• Kimlik olusturulmus olmali")).toBeInTheDocument();
+    expect(screen.getByText(/Devre disi bir buton/)).toBeInTheDocument();
   });
 
   it("shows a persistent error region when the gate cannot be read", async () => {
@@ -743,14 +798,14 @@ describe("Compose and Verify surface", () => {
     render(<ComposeVerifyPage />);
 
     expect(await screen.findByText("Kapi durumu okunamadi")).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getAllByRole("alert").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Yeniden dene" })).toBeInTheDocument();
   });
 
   it("never shows an unmet requirement as passed", async () => {
     stubIdentity(NO_IDENTITY);
     render(<ComposeVerifyPage />);
-    await screen.findByText("Bu yuzey kilitli");
+    await screen.findByText("Gonderim kapali");
 
     // Every check is real, so unmet ones read as waiting rather than as a
     // future stage. What must never happen is one reading "Tamam".
@@ -763,21 +818,31 @@ describe("Compose and Verify surface", () => {
     // because drift detection still has to pass in this session.
     stubIdentity(NO_IDENTITY);
     const { container } = render(<ComposeVerifyPage />);
-    await screen.findByText("Bu yuzey kilitli");
+    await screen.findByText("Gonderim kapali");
 
     expect(screen.getByText("Tamam")).toBeInTheDocument();
     expect(container.querySelectorAll("textarea")).toHaveLength(0);
     expect(container.querySelectorAll("button")).toHaveLength(0);
+    expect(screen.getByText("• Resmi manifest kontrolu kurulmus olmali")).toBeInTheDocument();
   });
 
   it("separates conformance with the pinned reference from server currency", async () => {
     stubIdentity(NO_IDENTITY);
     const { container } = render(<ComposeVerifyPage />);
-    await screen.findByText("Bu yuzey kilitli");
+    await screen.findByText("Gonderim kapali");
 
     const text = container.textContent ?? "";
     expect(text).toContain("pinlenmis referans commit");
     expect(text).toContain("Canli Technocore sunucusunun hala");
+  });
+
+  it("states that signing is not sending, gate open or shut", async () => {
+    stubIdentity(NO_IDENTITY);
+    const { container } = render(<ComposeVerifyPage />);
+    await screen.findByText("Gonderim kapali");
+
+    expect(screen.getByText("Otomatik gonderim yoktur")).toBeInTheDocument();
+    expect(container.textContent).toContain("imza onayi gonderim onayi degildir");
   });
 
   it("labels each unbuilt requirement with the stage that delivers it", async () => {
@@ -785,7 +850,7 @@ describe("Compose and Verify surface", () => {
     // them said 2B and 3. The badge and the explanation must agree.
     stubIdentity(NO_IDENTITY);
     const { container } = render(<ComposeVerifyPage />);
-    await screen.findByText("Bu yuzey kilitli");
+    await screen.findByText("Gonderim kapali");
 
     expect(container.textContent).not.toContain("Asama 4");
   });

@@ -15,7 +15,15 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 #: Alembic version table name. Kept as ``schema_migrations`` to match the
@@ -179,6 +187,98 @@ class SecretMetadata(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"SecretMetadata(identity_id={self.identity_id!r})"
+
+
+class NonceState(StrEnum):
+    """What happened to one reserved nonce.
+
+    Three states, and none of them ever returns the number to circulation.
+    ``CANCELLED`` is not "unused": the protocol counter is strictly
+    increasing per ``(did, room)``, so a number handed out and then dropped
+    is still burnt. Re-issuing it would mean signing two different payloads
+    under one nonce, which is precisely the replay shape the counter exists
+    to prevent.
+    """
+
+    #: Allocated, not yet committed to a request.
+    RESERVED = "reserved"
+    #: Committed: the request either went out or was about to.
+    SPENT = "spent"
+    #: Abandoned before any request left the process.
+    CANCELLED = "cancelled"
+
+
+class WriteOutcomeValue(StrEnum):
+    """How a committed nonce's request ended (ADR-0002 3)."""
+
+    #: Spent, and the request had not returned when the row was written.
+    IN_FLIGHT = "in_flight"
+    #: 2xx.
+    ACCEPTED = "accepted"
+    #: A response that proves nothing was written: 400, 403, 413, 422.
+    REFUSED = "refused"
+    #: Timeout, transport failure, malformed response, 429 or 5xx. The
+    #: server may or may not have written. Never presented as either.
+    OUTCOME_UNKNOWN = "outcome_unknown"
+    #: No request was attempted (the gate shut, or the approval was stale).
+    NOT_SENT = "not_sent"
+
+
+class MessageNonceReservation(Base):
+    """One nonce handed out for one ``(did, room)`` pair.
+
+    This table *is* the monotonic counter. There is no separate "last value"
+    row to fall out of step with the reservations: the next nonce is derived
+    from ``MAX(nonce_value)`` over every row for the pair, whatever state
+    those rows are in, so a crash between reservation and send cannot make a
+    number available again (docs/protocol-contract.md 5).
+
+    ``nonce`` and ``nonce_value`` are deliberately both stored. The signature
+    covers the canonical string, which carries the nonce as **text**; the
+    server compares it as an integer. Keeping the exact signed characters
+    beside the number they represent means neither side of that mismatch has
+    to be reconstructed later, and a leading zero could never be introduced
+    by a round trip through ``int``.
+
+    No column here holds key material: a DID is public, a room name is
+    public, and a nonce is public.
+    """
+
+    __tablename__ = "message_nonce_reservation"
+    __table_args__ = (
+        # The database, not the service layer, is what makes a lost race
+        # impossible. Two processes sharing this file cannot both commit the
+        # same number for the same pair.
+        UniqueConstraint("did", "room", "nonce_value", name="uq_nonce_per_did_room"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    #: The signing identity's public did:key.
+    did: Mapped[str] = mapped_column(String(128), nullable=False)
+    #: Target room name, already validated against the official name pattern.
+    room: Mapped[str] = mapped_column(String(48), nullable=False)
+    #: The exact characters that go into the canonical string. Never parsed
+    #: back out of ``nonce_value``.
+    nonce: Mapped[str] = mapped_column(String(19), nullable=False)
+    #: The same value as an integer, for the monotonic comparison and the
+    #: uniqueness constraint.
+    nonce_value: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    reserved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: One of the NonceState values.
+    state: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: One of the WriteOutcomeValue values; empty while still reserved.
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    settled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    #: A short, swept explanation. Never a response body, never a signature.
+    detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return (
+            f"MessageNonceReservation(room={self.room!r}, nonce={self.nonce!r}, "
+            f"state={self.state!r}, outcome={self.outcome!r})"
+        )
 
 
 class RecoveryRecord(Base):

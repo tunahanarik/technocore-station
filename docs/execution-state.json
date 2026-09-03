@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-09-03T00:45:00Z",
+  "updated_utc": "2026-09-03T18:30:00Z",
   "base_sha": "5411171dd2302c6fea5a2af22695503859317c27",
   "note": "Kayit ile gercek Git/GitHub durumu celisirse Git/GitHub kaniti esastir.",
   "stages": [
@@ -41,28 +41,34 @@
     {
       "id": "C",
       "name": "Dashboard kabugu ve hata sozlesmesi",
-      "status": "implementing",
+      "status": "merged",
       "branch": "stage-c-dashboard-shell",
-      "pr": null,
-      "reviewed_sha": null,
-      "tested_sha": null,
-      "merge_sha": null,
-      "findings": [],
+      "pr": 12,
+      "reviewed_sha": "631017b720b939315b4c9822fd2447a76c26b423",
+      "tested_sha": "631017b720b939315b4c9822fd2447a76c26b423",
+      "merge_sha": "0bed0fcc2bf5ae5e18b5939fab9f366210d65431",
+      "findings": [
+        "Sol nav 9 bolumluk kayit defteri, 6 gorunur; ready:false bolumler DOM'a hic ulasmiyor (testle)",
+        "Hata sozlesmesi: X-Station-Request-Id her yanitta, internal_error zirhi, 8 ApiError kind, kalici ErrorRegion, redakte tani kopyalama",
+        "Bagimsiz inceleme P1: RedactingFilter traceback'i temizlemiyordu (exc_info bypass) - DID/session token/kayitli gizli deger ham loglaniyordu; kapatildi, uvicorn logger'lari da baglandi (SI-127)",
+        "P2'ler: retry busy korumasi yoktu, kimlik dialoglari korelasyon kimligi tasimiyordu; P3'ler: /api disi 500 no-store, abort/timeout ayrimi, request-id regex, nav landmark, rapor sayimlari",
+        "823 pytest + 130 Vitest; browser QA ADR-0001 m.4 ile Paket J'ye ertelendi"
+      ],
       "failed_attempts": 0,
-      "next_safe_step": "Mevcut station-web yapisini kesfet; HeroUI v3 API'lerini MCP'den dogrula; 9 bolumluk sol nav + hata sozlesmesi + docs/ui-action-map.md; browser QA YOK (7.2)"
+      "next_safe_step": null
     },
     {
       "id": "D",
       "name": "Composer & Participation",
-      "status": "planned",
-      "branch": null,
+      "status": "implementing",
+      "branch": "stage-d-composer",
       "pr": null,
       "reviewed_sha": null,
       "tested_sha": null,
       "merge_sha": null,
       "findings": [],
       "failed_attempts": 0,
-      "next_safe_step": null
+      "next_safe_step": "Mevcut identity/vault/signer/conform yuzeyini kesfet; nonce rezervasyonu (transaction, monoton), taslak-onay-verdict digest baglama, outcome_unknown, POST-only write. CANLI YAZMA YOK."
     },
     {
       "id": "E",

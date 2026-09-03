@@ -27,6 +27,7 @@ from typing import Any
 
 from sqlalchemy import Engine
 
+from station_api.compose.approvals import verdict_digest
 from station_api.strict_json import StrictJsonError, loads_strict
 from station_api.technocore.client import FetchResult, ReadOnlyTechnocoreClient
 from station_api.technocore.errors import TechnocoreError
@@ -44,6 +45,7 @@ from station_api.technocore.snapshot import (
     record_check,
 )
 from station_api.technocore.sources import SOURCES, OfficialSource, SourceId
+from station_api.technocore.write_targets import published_markers
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,11 +82,34 @@ class TechnocoreStatus:
     sources: tuple[SourceStatus, ...] = ()
     projection: ProjectionResult | None = None
     check_id: str = ""
+    #: Room class markers the live manifest published on this check, as bare
+    #: letters. Empty until a check has parsed the manifest, which is also
+    #: exactly when the gate is shut - so the composer refusing to resolve a
+    #: room name and the gate refusing to open can never disagree.
+    room_class_markers: tuple[str, ...] = ()
 
     @property
     def manifest_current(self) -> bool:
         """The single fact the write gate consumes."""
         return self.state is DriftState.CURRENT
+
+    @property
+    def verdict_id(self) -> str:
+        """A stable identity for this verdict, or empty if it opens nothing.
+
+        A send approval is bound to this value, so that an approval given
+        three minutes ago cannot fire against a protocol check the user has
+        not seen. A verdict that is not ``current`` has no identity at all:
+        there is nothing for an approval to be bound to, and an empty value
+        can never match a stored one.
+        """
+        if self.state is not DriftState.CURRENT or self.checked_at is None:
+            return ""
+        return verdict_digest(
+            state=self.state.value,
+            checked_at=self.checked_at.isoformat(),
+            check_id=self.check_id,
+        )
 
 
 @dataclass
@@ -175,6 +200,18 @@ class TechnocoreService:
             records=tuple(records),
         )
 
+        # The room-class convention is protocol data, so it is read from the
+        # document this check just fetched rather than assumed. An
+        # unavailable or unparsed manifest leaves it empty, which the
+        # composer treats as "cannot resolve a target" - the same fail-closed
+        # answer the gate gives.
+        manifest = documents.get(SourceId.AGENT_MANIFEST)
+        markers = (
+            published_markers(manifest.get("conventions"))
+            if isinstance(manifest, dict)
+            else frozenset()
+        )
+
         return TechnocoreStatus(
             state=result.state,
             checked_at=completed_at,
@@ -184,6 +221,7 @@ class TechnocoreService:
             sources=tuple(_to_status(record) for record in records),
             projection=result,
             check_id=check_id,
+            room_class_markers=tuple(sorted(markers)),
         )
 
     def _read_source(
@@ -317,6 +355,11 @@ def _carry_last_success(
         sources=status.sources,
         projection=status.projection,
         check_id=status.check_id,
+        # Deliberately not carried from the previous check. The markers are
+        # what *this* check observed; keeping an older set beside a failed
+        # verdict would let the composer resolve a room name against a
+        # convention nothing just verified.
+        room_class_markers=status.room_class_markers,
     )
 
 

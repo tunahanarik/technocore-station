@@ -9,6 +9,28 @@ import type { StatusTone } from "../components/StatusPill";
  * keeps the two surfaces from ever disagreeing about what the state means.
  */
 
+/**
+ * Human wording for the gate check keys the backend reports.
+ *
+ * The same keys arrive in two places - `WriteGateStatus.checks` and the
+ * composer capability's `blocking_reasons` - and both surfaces must call them
+ * the same thing. An unknown key falls back to the raw key rather than being
+ * dropped: a reason the UI cannot name is still a reason the user must see.
+ */
+export const GATE_REASON_LABELS: Readonly<Record<string, string>> = {
+  identity_present: "Kimlik olusturulmus olmali",
+  identity_not_revoked: "Kimlik revoke edilmemis olmali",
+  vault_present: "Secret kasasi bulunmali",
+  recovery_verified: "Recovery restore-test ile dogrulanmis olmali",
+  conformance_verified: "Uygunluk motoru dogrulanmis olmali",
+  manifest_current: "Resmi manifest kontrolu kurulmus olmali",
+};
+
+/** The label for one gate key, or the key itself when it is not catalogued. */
+export function gateReasonLabel(key: string): string {
+  return Object.hasOwn(GATE_REASON_LABELS, key) ? GATE_REASON_LABELS[key]! : key;
+}
+
 export function identityStateTone(status: IdentityStatus): StatusTone {
   switch (status.state) {
     case "ready":
@@ -80,7 +102,7 @@ function readyNextAction(status: IdentityStatus): string {
     return "Resmi kaynaklar bu oturumda henuz dogrulanmadi. Kaynaklar bolumunden 'Resmi kaynaklari denetle' calistirin.";
   }
   if (status.gate.allowed) {
-    return "Butun on kosullar hazir. Gonderim yuzeyi Asama 4 - Composer & Participation ile gelir.";
+    return "Butun on kosullar hazir. Asama 4 gonderim akisi 'Olustur ve Dogrula' bolumunde acik.";
   }
   return "Dis yazma icin eksik bir on kosul var. Ayrintilar asagidaki kapida.";
 }

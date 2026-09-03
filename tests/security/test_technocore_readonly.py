@@ -81,6 +81,7 @@ from station_api.technocore.sources import (
     get_source,
     required_sources,
 )
+from station_api.technocore.write_client import SignedWriteClient
 from technocore_conform import (
     MAX_MESSAGE_CHARS,
     MAX_NOTE_VALUE_CHARS,
@@ -173,14 +174,54 @@ def test_every_way_around_the_allow_list_is_refused(url: str) -> None:
         assert_allowed_url(url)
 
 
+#: Parameters that would let a caller steer an outbound request. Neither
+#: client may name any of them, in ``__init__`` or in the sending method.
+FORBIDDEN_CLIENT_PARAMETERS = (
+    "verify",
+    "url",
+    "method",
+    "headers",
+    "base_url",
+    "ssl",
+    "cert",
+    "follow_redirects",
+    "retries",
+)
+
+
 def test_the_client_takes_no_url_method_or_tls_setting() -> None:
     """Structural: the dangerous inputs do not exist as parameters."""
     fetch = inspect.signature(ReadOnlyTechnocoreClient.fetch)
     assert list(fetch.parameters) == ["self", "source"]
 
     init = inspect.signature(ReadOnlyTechnocoreClient.__init__)
-    for forbidden in ("verify", "url", "method", "headers", "base_url", "ssl", "cert"):
+    for forbidden in FORBIDDEN_CLIENT_PARAMETERS:
         assert forbidden not in init.parameters
+
+
+def test_the_write_client_takes_no_url_method_or_tls_setting() -> None:
+    """The same structural property, on the lane that publishes.
+
+    ``send`` takes a resolved :class:`WriteTarget` and a body - never an
+    address, a method or a transport setting. So the questions that make an
+    outbound client dangerous ("can a request body steer this?", "can a
+    database row?") have the same answer by construction as they do on the
+    read client: no.
+
+    ``retries`` is on the forbidden list for a reason specific to this
+    module. A retry parameter is exactly how the read client's three-attempt
+    policy would arrive here, and a retried write turns one approved message
+    into several published ones (ADR-0002 3).
+    """
+    send = inspect.signature(SignedWriteClient.send)
+    assert list(send.parameters) == ["self", "target", "body"]
+
+    init = inspect.signature(SignedWriteClient.__init__)
+    for forbidden in FORBIDDEN_CLIENT_PARAMETERS:
+        assert forbidden not in init.parameters
+
+    # And no ``sleep`` seam either: there is nothing to wait between.
+    assert "sleep" not in init.parameters
 
 
 def test_tls_verification_is_never_disabled(api_source_root: Path) -> None:
@@ -2030,25 +2071,73 @@ def test_the_write_gate_reads_the_same_verdict(
         assert "manifest_current" not in after["blocking_reasons"]
 
 
-def test_no_outbound_write_route_exists_even_when_every_check_passes(
+def test_no_write_leaves_the_process_even_when_every_check_passes(
     settings: Settings, engine: Engine, base_url: str
 ) -> None:
-    """Preconditions met is not the same as a write being possible.
+    """Preconditions met is not the same as a write happening.
 
-    Stage 3 finishes the precondition set. It ships no code that could send a
-    message or a note, and this asserts that directly rather than trusting it.
+    This test used to assert that no route path contained ``compose``,
+    ``sign`` or ``send``. Two things were wrong with it. The walk was blind -
+    ``app.routes`` yields wrapper objects with no ``path`` on this FastAPI
+    version, so it compared empty strings and would have passed against an
+    application that exposed every one of those words. And its claim expired:
+    Package D adds those routes deliberately.
+
+    The property worth asserting was never "the route does not exist". It is
+    that **opening every gate sends nothing**. A protocol check is not an
+    approval, and a passing gate is a precondition, not a decision. So the
+    write transport is watched directly: after a successful refresh, with the
+    manifest current, not one outbound write request has been made.
+    """
+    write_attempts: list[httpx.Request] = []
+
+    def record(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        write_attempts.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    app = create_app(
+        settings=settings,
+        port=TEST_PORT,
+        engine=engine,
+        web_dist=None,
+        technocore=TechnocoreService(engine=engine, client=_client(_handler())),
+        write_client=SignedWriteClient(transport=httpx.MockTransport(record)),
+    )
+
+    with TestClient(app, base_url=base_url) as http:
+        csrf = establish_session(http, app)
+        refreshed = http.post(
+            "/api/technocore/refresh", headers={"X-Station-CSRF": csrf}
+        )
+        assert refreshed.status_code == 200
+        assert refreshed.json()["manifest_current"] is True
+
+        # Reading every surface the dashboard reads, repeatedly, must move
+        # nothing outward.
+        for _ in range(3):
+            assert http.get("/api/technocore/status").status_code == 200
+            assert http.get("/api/write-gate").status_code == 200
+            assert http.get("/api/compose/capability").status_code == 200
+            assert http.get("/api/app/status").status_code == 200
+
+    assert write_attempts == [], "a write left the process without an approval"
+
+
+def test_the_composer_routes_refuse_an_unauthenticated_caller(
+    settings: Settings, engine: Engine, base_url: str
+) -> None:
+    """The write surface is behind the same guards as everything else.
+
+    Asserted here rather than only in the composer's own tests because this
+    file is where "what can reach Technocore" is pinned.
     """
     app = _app(settings, engine, _handler())
     with TestClient(app, base_url=base_url) as http:
-        csrf = establish_session(http, app)
-        http.post("/api/technocore/refresh", headers={"X-Station-CSRF": csrf})
-
-    paths = {getattr(route, "path", "") for route in app.routes}
-    for path in paths:
-        assert "say" not in path
-        assert "/send" not in path
-        assert "compose" not in path
-        assert "sign" not in path
+        assert http.get("/api/compose/capability").status_code == 401
+        for path in ("/api/compose/draft", "/api/compose/sign", "/api/compose/send"):
+            # CSRF is the outermost middleware, so an unauthenticated write
+            # is refused there before the session check is reached.
+            assert http.post(path, json={}).status_code in {401, 403}
 
 
 def test_tests_never_touch_the_real_installation(

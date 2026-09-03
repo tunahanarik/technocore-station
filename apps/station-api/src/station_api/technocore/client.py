@@ -22,8 +22,10 @@ on this service, so the registry is the safety property instead.
 
 Transport rules
 ---------------
-* TLS verification is always on. ``verify`` is never passed, never exposed and
-  never configurable; there is no insecure-context escape hatch.
+* TLS verification is always on. ``verify`` is never passed and never exposed;
+  the only transport the test seam accepts is an ``httpx.MockTransport``, which
+  negotiates no TLS at all, so there is no transport to hand in with
+  verification switched off and no insecure-context escape hatch.
 * Redirects are never followed. A 3xx is an error, because following one is
   precisely how a request leaves the allow-listed origin.
 * Timeouts are explicit on all four phases; no phase inherits "no limit".
@@ -153,15 +155,23 @@ class ReadOnlyTechnocoreClient:
     ``transport`` and ``sleep`` exist for tests: the suite substitutes a mock
     transport so no automated test ever reaches the network. Neither is a
     security setting - a transport cannot widen the allow-list, because the
-    URL is still built from the registry and re-checked before the request.
+    URL is still built from the registry and re-checked before the request -
+    and ``transport`` is narrowed to ``httpx.MockTransport`` so it cannot
+    carry a weakened TLS posture either.
     """
 
     def __init__(
         self,
         *,
-        transport: httpx.BaseTransport | None = None,
+        transport: httpx.MockTransport | None = None,
         sleep: Callable[[float], None] | None = None,
     ) -> None:
+        if transport is not None and not isinstance(transport, httpx.MockTransport):
+            raise TypeError(
+                "ReadOnlyTechnocoreClient accepts only an httpx.MockTransport. "
+                "The production path passes none, so httpx's verifying default "
+                "stands and no transport-level TLS setting can be injected."
+            )
         self._transport = transport
         self._sleep = sleep if sleep is not None else _default_sleep
 

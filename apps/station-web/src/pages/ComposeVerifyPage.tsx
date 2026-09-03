@@ -3,29 +3,26 @@ import { useCallback, useEffect, useState } from "react";
 
 import { type ApiError, fetchIdentity, toApiError } from "../api/client";
 import type { IdentityStatus } from "../api/types";
+import { ComposerPanel } from "../components/compose/ComposerPanel";
 import { ErrorRegion } from "../components/ErrorRegion";
 import { StatusPill, type StatusTone } from "../components/StatusPill";
+import { gateReasonLabel } from "../lib/identityGuidance";
 
 /**
- * Compose & Verify, Stage 2B: still locked, and still locked by the *real*
- * write gate rather than by a hardcoded list.
+ * Compose & Verify: the three-step outbound write path (Paket D).
  *
- * Stage 2B built the canonicalization engine, so that half of the lock has
- * lifted. The surface stays closed anyway, and deliberately: there is no
- * network client, and nothing yet detects the live server drifting off the
- * pinned protocol. There is no text field and no send control, because
- * signing without drift detection would produce a record that cannot be
- * re-verified against the bytes the server stores.
+ * The surface is no longer a locked screen, but nothing about the lock has
+ * been loosened. The preconditions below are the same gate they always were,
+ * the composer only appears when the *server* says the gate is open, and all
+ * three steps re-run that gate server-side - a rendered form is never what
+ * decides whether a write can happen.
+ *
+ * What the flow guarantees, and why each part exists, is documented on
+ * `ComposerPanel`. The short version: draft, then an explicit signing
+ * approval, then a separate single-use send approval; editing the content
+ * drops all three; and the result is three-valued, with `outcome_unknown`
+ * shown as itself rather than flattened into success or failure.
  */
-
-const STAGE_LABELS: Record<string, string> = {
-  identity_present: "Kimlik olusturulmus olmali",
-  identity_not_revoked: "Kimlik revoke edilmemis olmali",
-  vault_present: "Secret kasasi bulunmali",
-  recovery_verified: "Recovery restore-test ile dogrulanmis olmali",
-  conformance_verified: "Uygunluk motoru dogrulanmis olmali",
-  manifest_current: "Resmi manifest kontrolu kurulmus olmali",
-};
 
 function toneFor(state: string): StatusTone {
   if (state === "passed") return "ok";
@@ -70,21 +67,17 @@ export function ComposeVerifyPage() {
       </Card.Header>
 
       <Card.Content className="flex flex-col gap-4">
-        <Alert status="warning">
+        <Alert status="default">
           <Alert.Indicator />
           <Alert.Content>
-            <Alert.Title>Bu yuzey kilitli</Alert.Title>
+            <Alert.Title>Otomatik gonderim yoktur</Alert.Title>
             <Alert.Description>
-              Kimlik, recovery ve uygunluk asamalari tamamlanmadan metin yazma,
-              imzalama ve gonderme yollari acilmaz. Bu bilincli bir fail-closed
-              davranistir: dogrulanmamis bir uygunluk motoruyla imza uretmek,
-              sunucunun sakladigi baytlarla eslesmeyen bir kayit olusturabilir.
-              Uygunluk self-test'i basarisiz olursa bu yuzey yine kilitli kalir.
+              Her dis yazma islemi ayri ve tek kullanimlik bir kullanici onayi
+              ister; imza onayi gonderim onayi degildir. Zamanlanmis mesaj,
+              otomatik ping veya kendiliginden oda katilimi bu urunde bulunmaz.
             </Alert.Description>
           </Alert.Content>
         </Alert>
-
-        <Separator />
 
         <section aria-label="On kosullar" className="flex flex-col gap-3">
           <h3 className="text-sm font-semibold text-foreground">On kosullar</h3>
@@ -112,7 +105,7 @@ export function ComposeVerifyPage() {
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-sm font-medium text-foreground">
-                      {STAGE_LABELS[check.key] ?? check.key}
+                      {gateReasonLabel(check.key)}
                     </span>
                     <StatusPill
                       label={labelFor(check.state, check.stage)}
@@ -126,6 +119,19 @@ export function ComposeVerifyPage() {
           )}
         </section>
 
+        <Separator />
+
+        {/* The composer reads its own capability from the backend rather than
+            inferring one from the identity payload above: the gate it must
+            obey is the one the three write steps re-run, not a copy of it.
+            The identity read only answers whether signing will need the vault
+            passphrase, which is a property of this machine's vault. */}
+        {status !== null && (
+          <ComposerPanel
+            needsVaultPassphrase={status.identity?.protection === "dpapi+passphrase"}
+          />
+        )}
+
         <Alert status="default">
           <Alert.Indicator />
           <Alert.Content>
@@ -133,20 +139,8 @@ export function ComposeVerifyPage() {
             <Alert.Description>
               Uygunluk kontrolu, bu yapinin <strong>pinlenmis referans commit</strong>{" "}
               ile ayni davrandigini gosterir. Canli Technocore sunucusunun hala
-              ayni protokolde oldugunu gostermez. Manifest surukleme kontrolu
-              Asama 3'te gelir ve o gelene kadar dis yazma kapisi kapali kalir.
-            </Alert.Description>
-          </Alert.Content>
-        </Alert>
-
-        <Alert status="default">
-          <Alert.Indicator />
-          <Alert.Content>
-            <Alert.Title>Otomatik gonderim yoktur</Alert.Title>
-            <Alert.Description>
-              Acildiginda bile her dis yazma islemi ayri ve tek kullanimlik bir
-              kullanici onayi ister. Zamanlanmis mesaj, otomatik ping veya
-              kendiliginden oda katilimi bu urunde bulunmaz.
+              ayni protokolde oldugunu gostermez; onu resmi kaynak denetimi
+              soyler ve denetim guncel degilse gonderim yolu kapali kalir.
             </Alert.Description>
           </Alert.Content>
         </Alert>

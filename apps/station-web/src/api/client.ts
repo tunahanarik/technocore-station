@@ -15,6 +15,10 @@
 
 import type {
   AppStatus,
+  ComposeCapability,
+  ComposeDraft,
+  ComposeSendResult,
+  ComposeSignature,
   ConformanceStatus,
   IdentityStatus,
   ProtectionMode,
@@ -34,6 +38,26 @@ export const DEFAULT_TIMEOUT_MS = 15000;
  * so it gets a longer leash than a local read.
  */
 export const REFRESH_TIMEOUT_MS = 30000;
+
+/**
+ * Signing opens the secret vault, and a passphrase-protected vault costs an
+ * Argon2id derivation before a single byte is signed. The default deadline is
+ * sized for a local read, not for a deliberate KDF.
+ */
+export const SIGN_TIMEOUT_MS = 30000;
+
+/**
+ * The one outbound write, and the longest deadline in the app.
+ *
+ * The backend's own write budget is connect 5s + write 10s + read 15s, so a
+ * single attempt can legitimately take about thirty seconds before the server
+ * decides which of the three outcomes it saw. A client deadline shorter than
+ * that would abandon the request *while the server is still writing* and
+ * report `timeout` - a claim about the local service - instead of the honest
+ * `outcome_unknown` the backend was about to return. The extra headroom keeps
+ * the server's three-valued verdict, not our stopwatch, as the answer.
+ */
+export const SEND_TIMEOUT_MS = 45000;
 
 // Memory only. Cleared when the page unloads, exactly like the server session.
 let csrfToken: string | null = null;
@@ -434,6 +458,75 @@ export async function adoptRecovery(input: {
 
 export async function revokeIdentity(confirmDid: string): Promise<IdentityStatus> {
   return mutate<IdentityStatus>("/api/identity/revoke", { confirm_did: confirmDid });
+}
+
+// --- Composer (Paket D) ----------------------------------------------------
+//
+// Three steps, three requests, in that order and never fused: the whole point
+// of the chain is that approving a signature is not approving a send
+// (ADR-0002 2). There is deliberately no helper here that does two of them.
+
+/**
+ * What the composer can do right now, and what is blocking it.
+ *
+ * A read: it reaches nobody outside this machine. The disabled state of a
+ * button is never the control that keeps the door shut - all three steps
+ * re-run the same gate server-side - but the UI needs this to *explain* a
+ * closed door instead of showing an inert form.
+ */
+export async function fetchComposeCapability(): Promise<ComposeCapability> {
+  return request<ComposeCapability>("/api/compose/capability");
+}
+
+/** Step 1: sweep and bind a digest. Reserves no nonce and signs nothing. */
+export async function createComposeDraft(input: {
+  readonly room: string;
+  readonly text: string;
+}): Promise<ComposeDraft> {
+  return mutate<ComposeDraft>("/api/compose/draft", {
+    room: input.room,
+    text: input.text,
+  });
+}
+
+/**
+ * Step 2: the explicit signing approval.
+ *
+ * `draftDigest` is echoed back so the server can refuse a digest that no
+ * longer matches the draft - an old approval cannot sign new content.
+ * The passphrase is passed straight through from component state and is never
+ * stored, echoed or logged here.
+ */
+export async function signComposeDraft(input: {
+  readonly draftId: string;
+  readonly draftDigest: string;
+  readonly vaultPassphrase: string | null;
+}): Promise<ComposeSignature> {
+  return mutate<ComposeSignature>(
+    "/api/compose/sign",
+    {
+      draft_id: input.draftId,
+      draft_digest: input.draftDigest,
+      vault_passphrase: input.vaultPassphrase,
+    },
+    SIGN_TIMEOUT_MS,
+  );
+}
+
+/**
+ * Step 3: spend the approval and publish once.
+ *
+ * The token is the entire request body on purpose: everything else that
+ * matters was bound to it at signing time, so there is nothing here a caller
+ * could steer. There is no retry wrapper and there must never be one - the
+ * nonce is spent whatever the outcome (ADR-0002 3).
+ */
+export async function sendComposeMessage(sendToken: string): Promise<ComposeSendResult> {
+  return mutate<ComposeSendResult>(
+    "/api/compose/send",
+    { send_token: sendToken },
+    SEND_TIMEOUT_MS,
+  );
 }
 
 /**

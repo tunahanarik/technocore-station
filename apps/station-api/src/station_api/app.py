@@ -14,10 +14,14 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import Engine
 
+from station_api.compose.nonce import NonceReserver
+from station_api.compose.service import ComposeService
+from station_api.compose.signer import MessageSigner, VaultMessageSigner
 from station_api.config import LOOPBACK_HOST, Settings
 from station_api.conformance import ConformanceService, default_conformance_service
 from station_api.identity.service import IdentityService
 from station_api.routes import api as api_routes
+from station_api.routes import compose as compose_routes
 from station_api.routes import conformance as conformance_routes
 from station_api.routes import identity as identity_routes
 from station_api.routes import session as session_routes
@@ -34,6 +38,8 @@ from station_api.security.middleware import (
 from station_api.security.sessions import SessionStore
 from station_api.security.tokens import BootstrapTokenStore
 from station_api.technocore.service import TechnocoreService
+from station_api.technocore.write_client import SignedWriteClient
+from station_api.vault import DpapiVault
 
 #: apps/station-api/src/station_api/app.py -> repo root
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -108,6 +114,8 @@ def create_app(
     token_store: BootstrapTokenStore | None = None,
     conformance: ConformanceService | None = None,
     technocore: TechnocoreService | None = None,
+    write_client: SignedWriteClient | None = None,
+    signer: MessageSigner | None = None,
 ) -> FastAPI:
     """Build the application.
 
@@ -155,12 +163,40 @@ def create_app(
         else None
     )
 
+    # The composer. It needs a database (for the nonce counter) and an
+    # identity service (for the gate and the vault handle); without either it
+    # is absent and its routes answer 503 rather than pretending.
+    #
+    # ``write_client`` and ``signer`` are test seams in the same sense as the
+    # read client's transport: neither can widen anything, because the URL is
+    # still built from the closed write registry and re-checked against the
+    # origin allow-list, and the signer still receives only a canonical
+    # payload. Nothing reads either from the environment.
+    app.state.compose = (
+        ComposeService(
+            identity=app.state.identity_service,
+            technocore=app.state.technocore,
+            reserver=NonceReserver(engine),
+            signer=(
+                signer
+                if signer is not None
+                else VaultMessageSigner(DpapiVault(settings.data_dir))
+            ),
+            write_client=(
+                write_client if write_client is not None else SignedWriteClient()
+            ),
+        )
+        if engine is not None and app.state.identity_service is not None
+        else None
+    )
+
     app.include_router(session_routes.router)
     app.include_router(api_routes.router)
     app.include_router(identity_routes.router)
     app.include_router(identity_routes.gate_router)
     app.include_router(conformance_routes.router)
     app.include_router(technocore_routes.router)
+    app.include_router(compose_routes.router)
 
     # Registered last so it cannot shadow /api or /session.
     if web_dist is not None:
