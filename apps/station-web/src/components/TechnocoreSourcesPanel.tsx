@@ -1,13 +1,14 @@
 import { Alert, Button, Separator } from "@heroui/react";
 import { useCallback, useEffect, useState } from "react";
 
-import { fetchTechnocore, refreshTechnocore } from "../api/client";
+import { type ApiError, fetchTechnocore, refreshTechnocore, toApiError } from "../api/client";
 import type {
   DriftState,
   FieldOutcome,
   ProtocolFieldStatus,
   TechnocoreStatus,
 } from "../api/types";
+import { ErrorRegion } from "./ErrorRegion";
 import { StatusPill, type StatusTone } from "./StatusPill";
 
 /**
@@ -125,15 +126,16 @@ function outcomeLabel(outcome: string, httpStatus: number): string {
 }
 
 function CopyableUrl({ url }: { readonly url: string }) {
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
   async function copy(): Promise<void> {
     try {
       await navigator.clipboard.writeText(url);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
+      setCopyState("copied");
+      window.setTimeout(() => setCopyState("idle"), 2000);
     } catch {
-      setCopied(false);
+      // Clipboard access can be refused; say so instead of silently resetting.
+      setCopyState("failed");
     }
   }
 
@@ -150,7 +152,7 @@ function CopyableUrl({ url }: { readonly url: string }) {
         size="sm"
         variant="ghost"
       >
-        {copied ? "Kopyalandi" : "Kopyala"}
+        {copyState === "copied" ? "Kopyalandi" : copyState === "failed" ? "Kopyalanamadi" : "Kopyala"}
       </Button>
     </span>
   );
@@ -159,14 +161,25 @@ function CopyableUrl({ url }: { readonly url: string }) {
 export function TechnocoreSourcesPanel() {
   const [status, setStatus] = useState<TechnocoreStatus | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ApiError | null>(null);
+  // Which action failed decides what "Yeniden dene" repeats: re-reading local
+  // state is harmless, but re-running the outbound check must stay the same
+  // explicit action the user already took, never an upgrade of a mere read.
+  const [errorSource, setErrorSource] = useState<"load" | "check">("load");
+  // Kept apart from `busy`: reading local state must not disable the outbound
+  // check button, and a retry must reflect whichever action it repeats.
+  const [loadBusy, setLoadBusy] = useState(true);
 
   const load = useCallback(async (): Promise<void> => {
+    setLoadBusy(true);
     try {
       setStatus(await fetchTechnocore());
       setError(null);
-    } catch {
-      setError("Durum okunamadi. Yerel servise baglanilamadi.");
+    } catch (caught) {
+      setError(toApiError(caught));
+      setErrorSource("load");
+    } finally {
+      setLoadBusy(false);
     }
   }, []);
 
@@ -180,7 +193,8 @@ export function TechnocoreSourcesPanel() {
     try {
       setStatus(await refreshTechnocore());
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Denetim tamamlanamadi.");
+      setError(toApiError(caught));
+      setErrorSource("check");
     } finally {
       setBusy(false);
     }
@@ -229,13 +243,13 @@ export function TechnocoreSourcesPanel() {
       </dl>
 
       {error !== null && (
-        <Alert status="danger">
-          <Alert.Indicator />
-          <Alert.Content>
-            <Alert.Title>Denetim yapilamadi</Alert.Title>
-            <Alert.Description>{error}</Alert.Description>
-          </Alert.Content>
-        </Alert>
+        <ErrorRegion
+          error={error}
+          onRetry={() => void (errorSource === "check" ? check() : load())}
+          retryPending={errorSource === "check" ? busy : loadBusy}
+          section="Kaynaklar / Resmi kaynak denetimi"
+          title={errorSource === "check" ? "Denetim yapilamadi" : "Durum okunamadi"}
+        />
       )}
 
       {state === "unavailable" && unevaluable > 0 && (

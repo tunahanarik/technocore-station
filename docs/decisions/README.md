@@ -124,6 +124,16 @@ sürece burada tutulurlar.
 | IMP-257 | Pattern değerleri derlenir, asla uzak girdiyle çalıştırılmaz | Derlenemeyen kalıp uygulanamaz şemadır; payload'daki herhangi bir kalıp değerlendirilemez → kapı kapanır |
 | IMP-258 | `required` tekliği metaşema gereğidir | Kendi metaşemasını kıran belge "doğru okundu" sayılamaz |
 
+## 2f. Paket C uygulama kararları
+
+| ID | Karar | Gerekçe |
+|---|---|---|
+| IMP-259 | `RequestIdMiddleware` SecurityHeaders'ın hemen içine yerleştirilir; kimlik `uuid4().hex` olarak sunucuda üretilir, istemciden yansıtılmaz | SecurityHeaders en dışta kalır (SI-33) ve guard retleri dahil her yanıt kimliği taşır (SI-125); rastgele kimlik hiçbir istek içeriği taşımadığı için redaksiyon katmanıyla çakışmaz |
+| IMP-260 | `Exception` zırhı sertleştirme başlıklarını ve request id'yi paylaşılan `apply_security_headers` yardımcıyla **kendisi** uygular | Starlette `Exception` handler'ını ServerErrorMiddleware'de, yani SecurityHeaders'ın da dışında çalıştırır; başlıklar orada otomatik eklenmez, tek kaynaklı yardımcı iki yolun birbirinden sapmasını imkânsız kılar (SI-126) |
+| IMP-261 | `RedactingFilter` traceback'i **kendisi** üretip `record.exc_text`'e yazar; `stack_info` ve önceden dolmuş `exc_text` de redakte edilir | Filtre yalnız `getMessage()`'ı temizlerken traceback'i `Formatter.formatException` daha *sonra* `exc_info`'dan üretiyordu — Paket C uygulama katmanında bilerek `exc_info` logladığı için bu bypass ilk kez gerçek oldu. `Formatter.format` dolu gelen `exc_text`'i yeniden üretmez; istisnanın kendi `repr`'i (ör. `ResponseValidationError`) yanıt gövdesini gömdüğünden mesaja hiçbir şey konmadan sızıntı olur (SI-127) |
+| IMP-262 | Filtre kök handler'ın yanı sıra `uvicorn`, `uvicorn.error`, `uvicorn.access`, `uvicorn.asgi` logger'larına **doğrudan** takılır; uvicorn'un kendi handler'ları ezilmez | `ServerErrorMiddleware` handler'dan sonra istisnayı her zaman yeniden fırlatır, uvicorn da aynı traceback'i `uvicorn.error` üzerinden ikinci kez yazar. Bugün `log_config=None` sayesinde bu kayıtlar köke propagate olur; filtreyi kaynağa bağlamak, uvicorn ileride kendi handler'ını kurarsa da yolu kapalı tutar — üçüncü parti handler'ı ezmekten daha az kırılgan (SI-127) |
+| IMP-263 | Zırh `apply_security_headers(..., no_store=True)` çağırır; `NO_STORE_PREFIXES` genişletilmez | `NO_STORE_PREFIXES` oturum durumu taşıyan iki yol ailesini kapsar, hata ise her yolda doğabilir (üretimde SPA catch-all'ı dahil). Prefix listesini genişletmek statik varlıkların önbelleklenmesini de bozardı; kararı çağrı yerine taşımak yalnız hata yanıtını etkiler (SI-128) |
+
 ## 2e. Ayrı dosyalı ADR'ler
 
 Künyeden sonra alınan ve tam metni ayrı dosyada yaşayan kararlar:

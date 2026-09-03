@@ -26,8 +26,10 @@ from station_api.security.middleware import (
     CsrfMiddleware,
     FetchMetadataMiddleware,
     HostGuardMiddleware,
+    RequestIdMiddleware,
     SecurityHeadersMiddleware,
     SessionMiddleware,
+    unhandled_exception_shield,
 )
 from station_api.security.sessions import SessionStore
 from station_api.security.tokens import BootstrapTokenStore
@@ -165,12 +167,22 @@ def create_app(
         _mount_spa(app, web_dist)
 
     # Starlette wraps the LAST added middleware outermost, so this block reads
-    # innermost-first. Effective order: SecurityHeaders -> HostGuard ->
-    # FetchMetadata -> Session -> Csrf. There is no CORS middleware (INV-03).
+    # innermost-first. Effective order: SecurityHeaders -> RequestId ->
+    # HostGuard -> FetchMetadata -> Session -> Csrf. SecurityHeaders stays
+    # outermost so every guard rejection carries the hardening headers (SI-33);
+    # RequestId sits directly inside it so those same rejections also carry
+    # the correlation id (SI-125). There is no CORS middleware (INV-03).
     app.add_middleware(CsrfMiddleware)
     app.add_middleware(SessionMiddleware, store=app.state.sessions)
     app.add_middleware(FetchMetadataMiddleware, allowed_origins=app.state.allowed_origins)
     app.add_middleware(HostGuardMiddleware, allowed_hosts=app.state.allowed_hosts)
+    app.add_middleware(RequestIdMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
+
+    # Starlette runs the Exception handler in ServerErrorMiddleware, outside
+    # even SecurityHeaders, which is why the shield sets the hardening headers
+    # and the request id itself (SI-126). The body is a constant
+    # {"detail": "internal_error"}; the traceback goes to the server log only.
+    app.add_exception_handler(Exception, unhandled_exception_shield)
 
     return app

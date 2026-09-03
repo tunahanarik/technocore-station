@@ -964,8 +964,47 @@ sonu özetlerini almaya devam eder.
       `effective_payload_limits` composer'ın (Paket D) uygulayacağı, tavanla
       kırpılmış değerleri dışa verir. 4 yeni WARNING alanı.
 - [x] 20 test fonksiyonu / 56 parametrik senaryo; **795 pytest** + 59 Vitest
-      (inceleme düzeltmeleriyle 801'e çıktı; aşağıda).
+      (bağımsız inceleme düzeltmeleriyle — P2-1/P2-2/P3-1/P3-2/P3-3 —
+      **804**'e çıktı; ilk kayıt burada yanlışlıkla 801 diyordu).
 - [x] SI-120…SI-124, IMP-254…IMP-258.
+
+### Paket C — Dashboard kabuğu ve hata sözleşmesi
+
+- [x] **Sol navigasyonlu kabuk** (ADR-0001 m.2; üç-sekme sınırı kalktı):
+      `src/sections.ts` 9 bölümün tamamını kaydeder, 6'sı görünür
+      (Genel Bakis, Kimlik ve Guvenlik, Olustur ve Dogrula, Kaynaklar,
+      Kanitlar, Ayarlar ve Yardim); `Is Tara`/`Gorevler`/`Aktivite`
+      `ready: false` — boş bölüm görünmez, H1/H2'de açılır. Düz `<nav>` +
+      Button; **yeni HeroUI bileşeni yok** (A1-R1 CSP riski tetiklenmedi).
+- [x] **Genel Bakis**: kimlik/Technocore/uygunluk/servis özeti + "sonraki
+      guvenli adim" (ortak `lib/identityGuidance.ts`); hash listesi yok.
+      **Kaynaklar**: Technocore kaynak paneli buraya taşındı. **Ayarlar ve
+      Yardim**: tema, servis bilgisi, `/api/write-gate` özeti (ilk tüketici).
+- [x] **Hata sözleşmesi** — backend additive: her yanıtta
+      `X-Station-Request-Id`; işlenmeyen istisna zırhı `internal_error`
+      (traceback yalnız sunucu loguna; sertleştirme başlıkları paylaşılan
+      yardımcıyla — IMP-260). Frontend: `AbortSignal.timeout` (15/30 sn),
+      `ApiError.{code,kind,requestId,userMessage,retryable}` (8 kind; bozuk
+      yanıt ≠ bağlantı kopması), kalıcı `ErrorRegion` (role="alert",
+      kurtarma eylemi, **redakte** tanı kopyalama), çift-tık koruması,
+      `catch {}` kalmadı.
+- [x] [`docs/ui-action-map.md`](docs/ui-action-map.md): sözleşme + her
+      etkileşim için ekran yolu / önkoşul / API / loading-success-error-
+      timeout-iptal / test kimliği. Browser QA yok (ADR-0001 m.4; manuel
+      kabul Paket J kılavuzuna).
+- [x] **Bağımsız inceleme bir P1 buldu ve merge öncesi kapatıldı:**
+      `RedactingFilter` yalnız log mesajını temizliyordu; traceback'i
+      formatter sonradan `record.exc_info`'dan üretiyordu ve filtre ona
+      dokunmuyordu. Paket C, uygulama katmanında bilerek `exc_info`
+      logladığı için bypass'ı bu paket açtı. Artık `exc_text`, traceback ve
+      `stack_info` da redakte edilir; filtre `uvicorn*` logger'larına
+      doğrudan bağlıdır (Starlette istisnayı yeniden fırlattığı için uvicorn
+      aynı traceback'i ikinci kez yazıyordu). Testler **formatlanmış handler
+      çıktısı** üzerinde iddia kurar.
+- [x] **823 pytest** (+10 hata sözleşmesi, +9 inceleme düzeltmesi) +
+      **130 Vitest** (59 → 115 → 130). Rapor:
+      [`docs/verification/paket-c.md`](docs/verification/paket-c.md).
+- [x] SI-125…SI-128, IMP-259…IMP-263.
 
 ## Sonraki aşama: Aşama 4 — Composer & Participation
 

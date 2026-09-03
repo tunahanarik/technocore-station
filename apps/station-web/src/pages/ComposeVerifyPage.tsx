@@ -1,8 +1,9 @@
 import { Alert, Card, Separator } from "@heroui/react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import { fetchIdentity } from "../api/client";
+import { type ApiError, fetchIdentity, toApiError } from "../api/client";
 import type { IdentityStatus } from "../api/types";
+import { ErrorRegion } from "../components/ErrorRegion";
 import { StatusPill, type StatusTone } from "../components/StatusPill";
 
 /**
@@ -40,28 +41,29 @@ function labelFor(state: string, stage: string): string {
 
 export function ComposeVerifyPage() {
   const [status, setStatus] = useState<IdentityStatus | null>(null);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<ApiError | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async (): Promise<void> => {
+    setLoading(true);
+    try {
+      setStatus(await fetchIdentity());
+      setError(null);
+    } catch (caught) {
+      setError(toApiError(caught));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    async function load(): Promise<void> {
-      try {
-        const next = await fetchIdentity();
-        if (!cancelled) setStatus(next);
-      } catch {
-        if (!cancelled) setError(true);
-      }
-    }
     void load();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  }, [load]);
 
   return (
     <Card>
       <Card.Header>
-        <Card.Title>Compose &amp; Verify</Card.Title>
+        <Card.Title>Olustur ve Dogrula</Card.Title>
         <Card.Description>
           Ham metin, sweep farki, canonical bicim, imza, onay ve gonderim.
         </Card.Description>
@@ -87,13 +89,17 @@ export function ComposeVerifyPage() {
         <section aria-label="On kosullar" className="flex flex-col gap-3">
           <h3 className="text-sm font-semibold text-foreground">On kosullar</h3>
 
-          {error && (
-            <p className="text-sm text-muted">
-              Kapi durumu okunamadi. Yerel servise baglanilamadi.
-            </p>
+          {error !== null && (
+            <ErrorRegion
+              error={error}
+              onRetry={() => void load()}
+              retryPending={loading}
+              section="Olustur ve Dogrula / On kosullar"
+              title="Kapi durumu okunamadi"
+            />
           )}
 
-          {status === null && !error && (
+          {status === null && error === null && (
             <p className="text-sm text-muted">Kapi durumu okunuyor...</p>
           )}
 

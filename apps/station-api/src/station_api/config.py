@@ -25,6 +25,12 @@ SESSION_COOKIE_NAME = "station_session"
 #: Header carrying the per-session CSRF value on state-changing requests.
 CSRF_HEADER_NAME = "X-Station-CSRF"
 
+#: Header carrying the per-request correlation id on every response. The value
+#: is a fresh ``uuid4().hex`` per request: random, meaningless and safe to show
+#: anywhere, so a user can quote it when reporting a failure and the matching
+#: server log line can be found without either side handling a secret.
+REQUEST_ID_HEADER_NAME = "X-Station-Request-Id"
+
 #: Default port used ONLY in development, so the Vite proxy has a fixed target.
 #: Production always takes an ephemeral port from the operating system.
 DEFAULT_DEV_PORT = 8787

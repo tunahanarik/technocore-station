@@ -185,6 +185,15 @@ kontrolü ve CSRF katmanından gelir.
 | SI-123 | Nonce aralığını daraltan sınır kapıyı kapatır (SOME-exclusion) | `drifted` | Aşama B nonce sınır matrisi | B |
 | SI-124 | Payload limit değişikliği uyarıdır; etkin limit tavanla kırpılıp dışa verilir | `current`+uyarı | Aşama B payload testleri | B |
 
+## 9d. Paket C değişmezleri — hata sözleşmesi (uygulandı)
+
+| ID | Değişmez | Beklenen | Test | Durum |
+|---|---|---|---|---|
+| SI-125 | Her HTTP yanıtı sunucu üretimi `X-Station-Request-Id` taşır; middleware retleri (421/403) dahil, değer istemciden asla yansıtılmaz | 32-hex `uuid4().hex`, istek başına benzersiz | `test_error_contract.py::test_every_response_class_carries_a_unique_request_id`, `::test_a_csrf_rejection_carries_a_request_id`, `::test_a_client_supplied_request_id_is_never_reflected` | C |
+| SI-126 | İşlenmeyen istisna istemciye traceback sızdırmaz: gövde tam olarak `{"detail": "internal_error"}`, traceback yalnız sunucu logunda ve request id ile anahtarlı | 500 + sertleştirme başlıkları + request id | `test_error_contract.py::test_an_unhandled_exception_returns_exactly_the_contract_body`, `::test_the_500_body_leaks_no_traceback_and_no_secret_shape`, `::test_the_500_response_is_as_hardened_as_any_other` | C |
+| SI-127 | Redaksiyon kaydın **her** metin yüzeyine uygulanır: mesaj, traceback (`exc_info`/`exc_text`) ve `stack_info`. Traceback'i formatlayıcı, filtreler çalıştıktan *sonra* üretir; istisnanın kendi `repr`'i sızdıran değeri taşıyabilir. Zırhın logladığı traceback ile uvicorn'un yeniden fırlatma sonrası yazdığı ikinci kopya aynı filtreden geçer | Formatlanmış handler çıktısında `<redacted>`; kayıtlı gizli değer ve `/session/<token>` yok | `test_logging.py::test_a_traceback_is_redacted_in_the_formatted_log_output`, `::test_a_chained_cause_in_a_traceback_is_redacted`, `::test_a_stack_dump_is_redacted_in_the_formatted_log_output`, `::test_an_already_rendered_exc_text_is_redacted`, `::test_the_uvicorn_loggers_carry_the_filter_themselves`, `::test_the_shielded_500_traceback_is_redacted_end_to_end` | C |
+| SI-128 | Hata yanıtı hangi yolda doğarsa doğsun önbelleklenemez: zırh `no-store` + `Pragma: no-cache` başlıklarını `NO_STORE_PREFIXES`'ten bağımsız uygular | 500 → `Cache-Control: no-store`, `Pragma: no-cache`; `/api` dışı yollarda da | `test_error_contract.py::test_a_500_outside_the_no_store_prefixes_is_still_uncacheable`, `::test_the_500_response_is_as_hardened_as_any_other`, `::test_a_success_outside_the_no_store_prefixes_stays_cacheable` | C |
+
 ## 9b. Aşama 2B değişmezleri (uygulandı)
 
 | ID | Değişmez | Beklenen | Test | Durum |
