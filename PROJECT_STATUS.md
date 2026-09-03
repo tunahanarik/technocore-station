@@ -1039,11 +1039,28 @@ Kapsam kararları:
       ediyor.
 - [x] **Test emniyet ağı:** autouse fixture gerçek giden taşıyıcıyı devre
       dışı bırakıyor; `MockTransport` unutulursa test gürültüyle kırılıyor.
-- [x] **1009 pytest** (823 → 1009; +176 backend) + **155 Vitest**
-      (130 → 155). Rapor:
-      [`docs/verification/paket-d.md`](docs/verification/paket-d.md).
+- [x] **1049 pytest** (823 → 1009 → 1049) + **155 Vitest** (130 → 155).
+      Rapor: [`docs/verification/paket-d.md`](docs/verification/paket-d.md).
 - [x] SI-83 bilinçli olarak değişti (görünür kayıtla, sessizce silinmedi);
-      SI-73 daraltıldı; SI-129…SI-161, IMP-264…IMP-288.
+      SI-73 daraltıldı; SI-129…SI-170, IMP-264…IMP-297.
+- [x] **PR #13 bağımsız inceleme düzeltmeleri** (P0/P1 yok; yedi P2/P3
+      bulgusu kapatıldı, +40 test):
+      - yazma yanıtı `client.stream`+`iter_bytes` ile akış üstünde sınırlanır
+        ve istenmeyen `Content-Encoding` hiç açılmaz (SI-163, SI-164);
+      - iki giden istemcinin `transport` seam'i `httpx.MockTransport`'a
+        daraltıldı — `HTTPTransport(verify=False)` enjekte edilemez (SI-165);
+      - `signer.py`'nin iddia ettiği üretim-wiring testi gerçekten yazıldı
+        (SI-166);
+      - kasa parolası imzalama süresince redaksiyon registry'sindedir
+        (SI-162);
+      - `send`'in her ret yolu rezervasyonu defterde kapatır (SI-167);
+      - kilitli sayaç veritabanı `NonceStorageError` → 409 olur, zırhlı 500
+        değil (SI-168);
+      - `/api/compose/sign` ve `/send` event loop'u tutmaz (SI-169);
+      - test ağ kesicisi `socket.socket.connect` katmanını da kapsar ve
+        docstring'i gerçeğe indirildi (SI-170).
+      `ComposerPanel` parolayı imza hatasında bilinçli olarak state'te tutar;
+      kod değiştirilmedi, gerekçe `docs/ui-action-map.md` §5.1'dedir.
 - [x] **AC-13 ve AC-16** karşılandı. **AC-14 Paket E'dedir** — aşağıdaki
       "Kabul kriterleri" satırı yanlışlıkla AC-14'ü Aşama 4'e koyuyordu;
       `docs/evidence-model.md` onu Aşama 5'e koyar ve ADR-0002 §4.3 bu

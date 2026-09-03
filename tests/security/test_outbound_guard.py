@@ -12,9 +12,19 @@ test that has a mock transport behaves identically with or without it. So the
 probes below assert the patch is installed, that it refuses a request that
 would leave this machine, and - the load-bearing one - that a client
 constructed *without* a transport now fails loudly rather than succeeding.
+
+Two layers, and each is probed for what it actually covers. The httpx patch
+closes httpx; it never saw ``socket``, ``urllib`` or a bare ``httpcore`` pool,
+and the fixture's docstring used to imply that it did. The socket patch sits
+under all of them. Both allow loopback, and both allow this host's own
+addresses, because ``test_bind.py`` proves the loopback bind by probing them
+and needing the OS - not a fixture - to refuse.
 """
 
 from __future__ import annotations
+
+import socket
+import urllib.request
 
 import httpx
 import pytest
@@ -25,9 +35,12 @@ from station_api.technocore.write_client import SignedWriteClient, WriteOutcome
 from station_api.technocore.write_targets import WriteTarget
 
 from tests.conftest import (
+    OWN_HOST_ADDRESSES,
     REAL_ASYNC_HANDLE_REQUEST,
+    REAL_SOCKET_CONNECT,
     REAL_SYNC_HANDLE_REQUEST,
     OutboundNetworkBlockedError,
+    is_local_address,
 )
 
 pytestmark = pytest.mark.security
@@ -110,6 +123,95 @@ def test_loopback_is_still_reachable() -> None:
     # means the guard let the attempt through.
     with pytest.raises(httpx.TransportError):
         httpx.HTTPTransport().handle_request(request)
+
+
+# ---------------------------------------------------------------------------
+# The second layer: below httpx, where the first one does not reach
+# ---------------------------------------------------------------------------
+
+
+def test_the_socket_layer_guard_is_installed() -> None:
+    """Compared against the method captured at import, as above."""
+    assert socket.socket.connect is not REAL_SOCKET_CONNECT
+
+
+def test_a_raw_socket_to_a_foreign_host_is_refused() -> None:
+    """The gap the httpx patch could never have covered.
+
+    Nothing in the product opens a socket directly - httpx is confined to two
+    reviewed modules and a test asserts it. This is about the *next* test:
+    reaching for ``socket`` or a second HTTP library is how a suite quietly
+    grows a live dependency, and the layer that catches all of them is this
+    one.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.5)
+        with pytest.raises(OutboundNetworkBlockedError) as caught:
+            probe.connect(("93.184.216.34", 80))
+
+    assert "INV-05" in str(caught.value)
+
+
+def test_urllib_cannot_reach_a_foreign_host() -> None:
+    """Named because the reviewer named it: ``urlopen`` bypassed the old patch.
+
+    It never touches httpx, so it went straight out. It does end at
+    ``socket.connect``, which is the point of putting the second layer there
+    rather than enumerating libraries.
+    """
+    with pytest.raises(OutboundNetworkBlockedError):
+        urllib.request.urlopen("http://93.184.216.34/nothing", timeout=1)
+
+
+def test_httpcore_cannot_reach_a_foreign_host() -> None:
+    """The third name on the reviewer's list, through httpx's own dependency.
+
+    A pool used directly is not an ``httpx.HTTPTransport``, so the first layer
+    never sees it.
+    """
+    import httpcore
+
+    with pytest.raises(OutboundNetworkBlockedError):
+        httpcore.ConnectionPool().request("GET", "http://93.184.216.34/nothing")
+
+
+def test_a_loopback_socket_is_still_reachable() -> None:
+    """The same allowance as the httpx layer, asserted at the socket layer.
+
+    ``tests/integration`` connects to a real uvicorn over a real socket, so a
+    refusal here would be a control that has to be switched off.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.settimeout(2.0)
+            probe.connect(("127.0.0.1", port))
+            assert probe.getpeername()[0] == "127.0.0.1"
+
+
+def test_this_machines_own_addresses_are_treated_as_local() -> None:
+    """Why the allowance exists, stated where it can be checked.
+
+    ``test_bind.py`` proves the loopback bind by *probing* this host's LAN
+    addresses and requiring the OS to refuse. A guard that intercepted those
+    probes would delete the evidence, and connecting to an address this host
+    answers on has not left this host anyway.
+    """
+    for address in OWN_HOST_ADDRESSES:
+        assert is_local_address(socket.AF_INET, (address, 9))
+
+
+@pytest.mark.parametrize(
+    "address",
+    ["93.184.216.34", "8.8.8.8", "technocore.chat", "2606:4700:4700::1111"],
+)
+def test_a_foreign_address_is_not_treated_as_local(address: str) -> None:
+    """The deny side, including a *name*, which could resolve anywhere."""
+    family = socket.AF_INET6 if ":" in address else socket.AF_INET
+    assert not is_local_address(family, (address, 443))
 
 
 def test_the_write_outcome_enum_still_has_the_shape_the_guard_assumes() -> None:

@@ -22,11 +22,14 @@ and the lobby is never a target (INV-05).
 
 from __future__ import annotations
 
+import io
+import logging
 import time
 
 import httpx
 import pytest
 from sqlalchemy import Engine
+from station_api.app import create_app
 from station_api.compose.approvals import (
     SEND_TOKEN_TTL_SECONDS,
     DraftStore,
@@ -39,9 +42,12 @@ from station_api.compose.service import (
     ComposeError,
     ComposeService,
 )
+from station_api.compose.signer import VaultMessageSigner
+from station_api.config import Settings
 from station_api.db.models import NonceState, WriteOutcomeValue
+from station_api.logging_setup import configure_logging, redact
 from station_api.security.tokens import SingleUseStore
-from station_api.technocore.write_client import WriteOutcome
+from station_api.technocore.write_client import SignedWriteClient, WriteOutcome
 from technocore_conform import (
     MESSAGE_POLICY,
     canonical_message,
@@ -57,11 +63,13 @@ from tests.security.compose_fixtures import (
     TEST_ROOM_ALT,
     ComposeHarness,
     StubIdentity,
+    TestOnlySigner,
     answering,
     build_harness,
     checked_technocore,
     raising,
 )
+from tests.security.conftest import TEST_PORT
 
 pytestmark = pytest.mark.security
 
@@ -736,6 +744,77 @@ def test_a_body_that_drifted_from_the_signed_bytes_is_not_sent(
     assert harness.writes.send_count == 0
 
 
+def test_a_body_refusal_settles_the_reservation_like_every_other_refusal(
+    harness: ComposeHarness,
+) -> None:
+    """The one exit from ``send`` that used to leave the ledger mid-sentence.
+
+    Never a reuse hole - a reservation is never returned to circulation - but
+    every other refusal in ``send`` recorded *why* it ended and this one left
+    the row sitting at ``reserved`` for a request that had provably stopped.
+    A ledger with a silent exit is a ledger nobody can read after the fact.
+    """
+    _, signed = _approve(harness)
+    _tamper(harness, signed.send_token, swept_text=TEXT + " tampered")
+
+    with pytest.raises(ComposeError):
+        harness.service.send(
+            session_id=harness.session_id, send_token=signed.send_token
+        )
+
+    state, outcome = _state_of_last_nonce(harness)
+    assert state == NonceState.CANCELLED.value
+    assert outcome == WriteOutcomeValue.NOT_SENT.value
+    assert harness.writes.send_count == 0
+
+
+def test_every_refusal_path_in_send_leaves_a_settled_reservation(
+    engine: Engine,
+) -> None:
+    """The property, not one instance of it.
+
+    Each row below is a different reason ``send`` refuses after an approval
+    exists. All of them must leave the number recorded as spent-and-not-sent;
+    none may leave it at ``reserved``.
+    """
+    cases: list[tuple[str, object]] = []
+
+    # A foreign session.
+    harness = build_harness(engine)
+    _, signed = _approve(harness)
+    with pytest.raises(ComposeError) as foreign:
+        harness.service.send(session_id="TEST-ONLY-other", send_token=signed.send_token)
+    cases.append((foreign.value.reason, _state_of_last_nonce(harness)))
+
+    # A body that no longer matches the signature.
+    _, signed = _approve(harness)
+    _tamper(harness, signed.send_token, swept_text=TEXT + " tampered")
+    with pytest.raises(ComposeError) as drifted:
+        harness.service.send(
+            session_id=harness.session_id, send_token=signed.send_token
+        )
+    cases.append((drifted.value.reason, _state_of_last_nonce(harness)))
+
+    # A room that stopped resolving.
+    _, signed = _approve(harness)
+    _tamper(harness, signed.send_token, room="lobby")
+    with pytest.raises(ComposeError) as refused_room:
+        harness.service.send(
+            session_id=harness.session_id, send_token=signed.send_token
+        )
+    cases.append((refused_room.value.reason, _state_of_last_nonce(harness)))
+
+    assert {reason for reason, _ in cases} == {
+        "approval_foreign_session",
+        "canonical_mismatch",
+        "room_refused",
+    }
+    for reason, (state, outcome) in cases:
+        assert state == NonceState.CANCELLED.value, reason
+        assert outcome == WriteOutcomeValue.NOT_SENT.value, reason
+    assert harness.writes.send_count == 0
+
+
 def test_a_signature_that_does_not_verify_is_never_sent(
     harness: ComposeHarness,
 ) -> None:
@@ -1226,3 +1305,191 @@ def test_time_moves_forward_between_two_sends(harness: ComposeHarness) -> None:
     _, second = _approve(harness)
 
     assert int(second.nonce) > int(first.nonce)
+
+
+# ---------------------------------------------------------------------------
+# The vault passphrase and the redaction registry (SI-162)
+# ---------------------------------------------------------------------------
+
+
+def _shipped_sink() -> tuple[logging.Logger, io.StringIO]:
+    """A logger carrying the product's own formatter and filter.
+
+    Not a replica of the redaction: ``configure_logging`` builds the shipped
+    handler and this reuses that handler's formatter and filters, so what is
+    asserted on is the text the product would actually write.
+    """
+    configure_logging()
+    shipped = logging.getLogger().handlers[0]
+
+    stream = io.StringIO()
+    sink = logging.StreamHandler(stream)
+    sink.setFormatter(shipped.formatter)
+    for existing in shipped.filters:
+        sink.addFilter(existing)
+
+    logger = logging.getLogger("station.test.compose-sink")
+    logger.handlers = [sink]
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+    return logger, stream
+
+
+def test_the_vault_passphrase_is_registered_for_redaction_while_signing(
+    engine: Engine,
+) -> None:
+    """The registry exists for exactly this value, and was not being told.
+
+    No leak path is known today: the product's own exceptions do not put the
+    passphrase in their message, and CPython does not print locals in a
+    traceback. But "no formatter renders it today" is a property nobody
+    maintains, and the mechanism that would make it not matter costs two
+    calls. This drives a real log line through the shipped filter *during* the
+    signing call and requires the value to come out redacted.
+    """
+    logger, stream = _shipped_sink()
+    secret = "TEST-ONLY-vault-passphrase-0001"
+
+    class _LoggingSigner:
+        """A signer whose failure mode is the realistic one: it logs."""
+
+        def __init__(self) -> None:
+            self.inner = TestOnlySigner()
+
+        def sign(self, payload, *, identity_id, passphrase):  # type: ignore[no-untyped-def]
+            logger.error("vault refused; passphrase was %s", passphrase)
+            return self.inner.sign(
+                payload, identity_id=identity_id, passphrase=passphrase
+            )
+
+    harness = build_harness(engine)
+    harness.service._signer = _LoggingSigner()
+
+    draft = harness.service.draft(
+        session_id=harness.session_id, room=TEST_ROOM, text=TEXT
+    )
+    harness.service.sign(
+        session_id=harness.session_id,
+        draft_id=draft.draft_id,
+        confirmed_digest=draft.draft_digest,
+        vault_passphrase=secret,
+    )
+
+    output = stream.getvalue()
+    assert secret not in output, "the vault passphrase reached a log line"
+    assert "<redacted>" in output
+
+
+def test_the_passphrase_is_dropped_from_the_registry_when_signing_ends(
+    engine: Engine,
+) -> None:
+    """Registered for the call, not for the life of the process.
+
+    A registry that only grows would scrub an ever-widening set of strings out
+    of unrelated log lines, and would hold the value long after the only call
+    that could have emitted it returned.
+    """
+    secret = "TEST-ONLY-vault-passphrase-0001"
+    harness = build_harness(engine)
+
+    draft = harness.service.draft(
+        session_id=harness.session_id, room=TEST_ROOM, text=TEXT
+    )
+    harness.service.sign(
+        session_id=harness.session_id,
+        draft_id=draft.draft_id,
+        confirmed_digest=draft.draft_digest,
+        vault_passphrase=secret,
+    )
+
+    assert redact(f"leftover {secret}") == f"leftover {secret}"
+
+
+def test_the_passphrase_is_dropped_even_when_signing_fails(
+    engine: Engine,
+) -> None:
+    """The ``finally`` is the point: a refusal is the common case here."""
+    secret = "TEST-ONLY-vault-passphrase-0001"
+
+    class _Exploding:
+        def sign(self, payload, *, identity_id, passphrase):  # type: ignore[no-untyped-def]
+            raise RuntimeError("TEST ONLY - signer failed")
+
+    harness = build_harness(engine)
+    harness.service._signer = _Exploding()
+
+    draft = harness.service.draft(
+        session_id=harness.session_id, room=TEST_ROOM, text=TEXT
+    )
+    with pytest.raises(RuntimeError):
+        harness.service.sign(
+            session_id=harness.session_id,
+            draft_id=draft.draft_id,
+            confirmed_digest=draft.draft_digest,
+            vault_passphrase=secret,
+        )
+
+    assert redact(f"leftover {secret}") == f"leftover {secret}"
+
+
+# ---------------------------------------------------------------------------
+# Production wiring: what the application actually constructs
+# ---------------------------------------------------------------------------
+
+
+def test_the_application_wires_the_vault_signer_and_the_write_client(
+    settings: Settings, engine: Engine
+) -> None:
+    """The test ``signer.py`` claimed existed, and did not.
+
+    Its docstring said "a security test asserts the application wires the
+    vault implementation". A ``grep`` for ``VaultMessageSigner`` across
+    ``tests/`` returned nothing. A docstring that names a control which is not
+    there is worse than one that names nothing, because it retires the
+    reviewer's suspicion without retiring the risk.
+
+    Three things are asserted, and the third is the one the seam made
+    possible: the injected transport must be absent on the production path, so
+    the client builds httpx's own verifying default.
+    """
+    app = create_app(settings=settings, port=TEST_PORT, engine=engine, web_dist=None)
+    compose = app.state.compose
+
+    assert compose is not None
+    assert isinstance(compose._signer, VaultMessageSigner)
+    assert isinstance(compose._write_client, SignedWriteClient)
+    assert compose._write_client._transport is None, (
+        "the production write client was built with an injected transport"
+    )
+
+
+def test_the_production_read_client_also_carries_no_injected_transport(
+    settings: Settings, engine: Engine
+) -> None:
+    """Same property on the read lane, which shares the same claim."""
+    app = create_app(settings=settings, port=TEST_PORT, engine=engine, web_dist=None)
+
+    assert app.state.technocore._client._transport is None
+
+
+def test_the_seams_are_still_seams(settings: Settings, engine: Engine) -> None:
+    """The wiring assertion must not be satisfied by removing the seam.
+
+    Tests inject a signer and a write client; a version of ``create_app`` that
+    ignored them would make the two tests above pass and every composer test
+    below meaningless.
+    """
+    signer = TestOnlySigner()
+    client = SignedWriteClient(transport=httpx.MockTransport(answering(200)))
+
+    app = create_app(
+        settings=settings,
+        port=TEST_PORT,
+        engine=engine,
+        web_dist=None,
+        signer=signer,
+        write_client=client,
+    )
+
+    assert app.state.compose._signer is signer
+    assert app.state.compose._write_client is client

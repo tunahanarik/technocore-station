@@ -29,8 +29,14 @@ The seam and why it exists
 :class:`MessageSigner` protocol exists so the composer can be exercised on a
 machine without DPAPI, in the same way ``IdentityService`` accepts a vault -
 it is a test seam, not a configuration switch: nothing reads it from the
-environment, and a security test asserts the application wires the vault
-implementation.
+environment, and ``test_compose_flow.py::test_the_application_wires_the_vault
+_signer_and_the_write_client`` asserts that an application built the way the
+launcher builds it holds a :class:`VaultMessageSigner` and a
+``SignedWriteClient`` with no transport injected.
+
+That test exists because this paragraph used to claim it. It did not, and a
+docstring that names a control which is not there is worse than one that
+names nothing: it retires the reviewer's suspicion without retiring the risk.
 """
 
 from __future__ import annotations

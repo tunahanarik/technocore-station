@@ -21,8 +21,11 @@ never the lobby (INV-05).
 
 from __future__ import annotations
 
+import inspect
 import json
 import sys
+import threading
+import time
 from collections.abc import Iterator
 
 import httpx
@@ -32,6 +35,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine
 from station_api.app import create_app
 from station_api.config import Settings
+from station_api.routes.compose import send_message, sign_draft
 from station_api.schemas import CREATE_IDENTITY_CONFIRMATION
 from station_api.technocore.client import ReadOnlyTechnocoreClient
 from station_api.technocore.service import TechnocoreService
@@ -42,7 +46,12 @@ from tests.conftest import (
     TEST_ONLY_RECOVERY_PASSPHRASE,
     TEST_ONLY_VAULT_PASSPHRASE,
 )
-from tests.security.compose_fixtures import TEST_ROOM, official_documents_transport
+from tests.security.compose_fixtures import (
+    TEST_ROOM,
+    ComposeHarness,
+    build_harness,
+    official_documents_transport,
+)
 from tests.security.conftest import TEST_PORT, establish_session
 
 pytestmark = pytest.mark.integration
@@ -423,3 +432,217 @@ def test_no_response_in_the_chain_carries_key_material(
     assert TEST_ONLY_VAULT_PASSPHRASE.lower() not in blob
     for forbidden in ("seed", "private_key", "mnemonic", "passphrase"):
         assert forbidden not in blob
+
+
+# ---------------------------------------------------------------------------
+# The blocking work runs off the event loop
+#
+# The composer harness is swapped in for ``app.state.compose`` so the whole
+# chain can be walked over HTTP on any platform, without a DPAPI vault. The
+# routes, the middleware, the session and the CSRF guard are the real ones;
+# only the identity and the signer behind them are the published TEST-ONLY
+# fixtures. Nothing here contacts Technocore.
+# ---------------------------------------------------------------------------
+
+
+def _app_with_harness(
+    settings: Settings,
+    engine: Engine,
+    handler: object | None = None,
+) -> tuple[FastAPI, ComposeHarness]:
+    app = create_app(settings=settings, port=TEST_PORT, engine=engine, web_dist=None)
+    harness = build_harness(engine, handler=handler)  # type: ignore[arg-type]
+    app.state.compose = harness.service
+    return app, harness
+
+
+def _walk_to_a_send_token(client: TestClient, csrf: str) -> str:
+    headers = {"X-Station-CSRF": csrf}
+    drafted = client.post(
+        "/api/compose/draft", headers=headers, json={"room": TEST_ROOM, "text": TEXT}
+    )
+    assert drafted.status_code == 200, drafted.text
+    body = drafted.json()
+
+    signed = client.post(
+        "/api/compose/sign",
+        headers=headers,
+        json={"draft_id": body["draft_id"], "draft_digest": body["draft_digest"]},
+    )
+    assert signed.status_code == 200, signed.text
+    token: str = signed.json()["send_token"]
+    return token
+
+
+def test_the_blocking_composer_routes_are_not_coroutines() -> None:
+    """Structural, because the bug is invisible in a passing functional test.
+
+    ``async def`` on these two reads perfectly and behaves perfectly until two
+    requests overlap. FastAPI runs a sync path operation in a worker thread;
+    an ``async`` one holds the event loop for the whole call, which here means
+    an Argon2id derivation and a 15-second outbound read timeout.
+    """
+    assert not inspect.iscoroutinefunction(send_message)
+    assert not inspect.iscoroutinefunction(sign_draft)
+
+
+def test_a_send_in_flight_does_not_stall_another_request(
+    settings: Settings, engine: Engine, base_url: str
+) -> None:
+    """The actual property, not the shape of the declaration.
+
+    One send is parked inside the write client - the position a real 15-second
+    read timeout puts it in - and a second, unrelated request has to be served
+    while it sits there. On the event loop it would have waited for the first
+    to finish.
+    """
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocking(request: httpx.Request) -> httpx.Response:
+        entered.set()
+        assert release.wait(30), "the parked send was never released"
+        return httpx.Response(200, json={"ok": True})
+
+    app, _ = _app_with_harness(settings, engine, blocking)
+
+    with TestClient(app, base_url=base_url) as client:
+        csrf = establish_session(client, app)
+        token = _walk_to_a_send_token(client, csrf)
+
+        sent: dict[str, httpx.Response] = {}
+
+        def do_send() -> None:
+            sent["response"] = client.post(
+                "/api/compose/send",
+                headers={"X-Station-CSRF": csrf},
+                json={"send_token": token},
+            )
+
+        sender = threading.Thread(target=do_send)
+        sender.start()
+        try:
+            assert entered.wait(30), "the send never reached the write client"
+
+            started = time.monotonic()
+            other = client.get("/api/compose/capability")
+            elapsed = time.monotonic() - started
+
+            assert other.status_code == 200
+            assert elapsed < 5.0, (
+                "an unrelated request waited on the parked send; the route is "
+                "holding the event loop"
+            )
+        finally:
+            release.set()
+            sender.join(timeout=30)
+
+        assert not sender.is_alive()
+        assert sent["response"].status_code == 200
+        assert sent["response"].json()["outcome"] == "accepted"
+
+
+def test_two_concurrent_sends_over_http_publish_exactly_once(
+    settings: Settings, engine: Engine, base_url: str
+) -> None:
+    """The property the threading change must not have cost.
+
+    Moving the route into a worker thread means two clicks really can run at
+    the same instant rather than being serialised by the loop. The approval
+    token is consumed under a lock before anything leaves, so one wins and one
+    is refused - and exactly one request reaches the transport.
+    """
+    app, harness = _app_with_harness(settings, engine)
+
+    with TestClient(app, base_url=base_url) as client:
+        csrf = establish_session(client, app)
+        token = _walk_to_a_send_token(client, csrf)
+
+        barrier = threading.Barrier(2)
+        responses: list[httpx.Response] = []
+        lock = threading.Lock()
+
+        def click() -> None:
+            barrier.wait(timeout=30)
+            response = client.post(
+                "/api/compose/send",
+                headers={"X-Station-CSRF": csrf},
+                json={"send_token": token},
+            )
+            with lock:
+                responses.append(response)
+
+        threads = [threading.Thread(target=click) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=60)
+            assert not thread.is_alive()
+
+    assert harness.writes.send_count == 1, "a double click published twice"
+    assert sorted(response.status_code for response in responses) == [200, 409]
+    refused = next(item for item in responses if item.status_code == 409)
+    assert refused.headers["x-station-compose-reason"] == "approval_invalid"
+
+
+def test_a_slow_signature_does_not_stall_another_request(
+    settings: Settings, engine: Engine, base_url: str
+) -> None:
+    """The same property on the step that runs the key derivation.
+
+    ``sign`` unlocks a passphrase-protected vault, which is an Argon2id
+    derivation sized to take real time, and it holds a database transaction
+    while it does.
+    """
+    entered = threading.Event()
+    release = threading.Event()
+
+    app, harness = _app_with_harness(settings, engine)
+    inner = harness.service._signer
+
+    class _SlowSigner:
+        def sign(self, payload, *, identity_id, passphrase):  # type: ignore[no-untyped-def]
+            entered.set()
+            assert release.wait(30), "the parked signature was never released"
+            return inner.sign(payload, identity_id=identity_id, passphrase=passphrase)
+
+    harness.service._signer = _SlowSigner()
+
+    with TestClient(app, base_url=base_url) as client:
+        csrf = establish_session(client, app)
+        headers = {"X-Station-CSRF": csrf}
+        drafted = client.post(
+            "/api/compose/draft",
+            headers=headers,
+            json={"room": TEST_ROOM, "text": TEXT},
+        ).json()
+
+        signed: dict[str, httpx.Response] = {}
+
+        def do_sign() -> None:
+            signed["response"] = client.post(
+                "/api/compose/sign",
+                headers=headers,
+                json={
+                    "draft_id": drafted["draft_id"],
+                    "draft_digest": drafted["draft_digest"],
+                },
+            )
+
+        signer_thread = threading.Thread(target=do_sign)
+        signer_thread.start()
+        try:
+            assert entered.wait(30), "the signature never reached the signer"
+
+            started = time.monotonic()
+            other = client.get("/api/compose/capability")
+            elapsed = time.monotonic() - started
+
+            assert other.status_code == 200
+            assert elapsed < 5.0, "the sign route is holding the event loop"
+        finally:
+            release.set()
+            signer_thread.join(timeout=30)
+
+        assert not signer_thread.is_alive()
+        assert signed["response"].status_code == 200

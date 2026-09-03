@@ -179,13 +179,20 @@ async def create_draft(
 
 
 @router.post("/sign", response_model=ComposeSignResponse)
-async def sign_draft(
+def sign_draft(
     request: Request, session: CurrentSession, body: ComposeSignRequest
 ) -> Response:
     """Step 2. The explicit signing approval.
 
     Reserves the nonce inside a transaction *before* signing, because the
     nonce is part of the bytes being signed.
+
+    ``def`` rather than ``async def`` on purpose: FastAPI runs a sync path
+    operation in a worker thread. The body of this one unlocks a
+    passphrase-protected vault, which means an Argon2id derivation sized to
+    take real time, and it holds a database transaction while it does. On the
+    event loop that would stall *every* other request for the whole
+    derivation, including the session and gate reads the same page is making.
     """
     passphrase = (
         body.vault_passphrase.get_secret_value() if body.vault_passphrase else None
@@ -217,10 +224,21 @@ async def sign_draft(
 
 
 @router.post("/send", response_model=ComposeSendResponse)
-async def send_message(
+def send_message(
     request: Request, session: CurrentSession, body: ComposeSendRequest
 ) -> Response:
-    """Step 3. Spend the approval and POST once. No retry, ever."""
+    """Step 3. Spend the approval and POST once. No retry, ever.
+
+    ``def`` for the same reason as ``sign``, and here the number is concrete:
+    the write client is synchronous ``httpx`` with a 15-second read timeout,
+    so an ``async def`` would hand the event loop a call that can hold it for
+    fifteen seconds. Nothing else would be served in that window - not the
+    countdown the composer is polling, not another tab.
+
+    Exactly-once is unaffected: the approval token is consumed under a lock in
+    the service, before anything is sent, so two threads racing on the same
+    token still produce one request and one refusal.
+    """
     try:
         result = _service(request).send(
             session_id=session.session_id, send_token=body.send_token

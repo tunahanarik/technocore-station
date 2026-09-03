@@ -64,11 +64,13 @@ from station_api.compose.nonce import (
     NonceReservation,
     NonceReservationError,
     NonceReserver,
+    NonceStorageError,
 )
 from station_api.compose.signer import MessageSigner
 from station_api.db.models import WriteOutcomeValue
 from station_api.identity.service import IdentityServiceError, SigningIdentity
 from station_api.identity.write_gate import WriteGateStatus
+from station_api.logging_setup import forget_secret, register_secret
 from station_api.security.tokens import SingleUseStore
 from station_api.technocore.projection import PLANNED_BODY_FIELDS, Lane, SentLength
 from station_api.technocore.service import TechnocoreService, TechnocoreStatus
@@ -264,7 +266,36 @@ class ComposeService:
         Everything after the reservation is wrapped so that a failure
         releases nothing back into circulation but does mark the number as
         spent-and-not-sent rather than leaving it dangling.
+
+        The vault passphrase is registered with the log redactor for exactly
+        this call. No leak path is known today - the product's own exceptions
+        do not put it in their message, and a CPython traceback does not print
+        locals - but the registry exists for values that travel through a call
+        stack, and this is the only such value the composer handles. Relying on
+        "no formatter renders it today" is relying on a property nobody
+        maintains (SI-162).
         """
+        if vault_passphrase is not None:
+            register_secret(vault_passphrase)
+        try:
+            return self._sign(
+                session_id=session_id,
+                draft_id=draft_id,
+                confirmed_digest=confirmed_digest,
+                vault_passphrase=vault_passphrase,
+            )
+        finally:
+            if vault_passphrase is not None:
+                forget_secret(vault_passphrase)
+
+    def _sign(
+        self,
+        *,
+        session_id: str,
+        draft_id: str,
+        confirmed_digest: str,
+        vault_passphrase: str | None,
+    ) -> SignResult:
         status = self._require_open_gate()
         record = self._require_draft(draft_id, session_id=session_id)
 
@@ -393,13 +424,20 @@ class ComposeService:
             )
 
         target = self._resolve_target_or_cancel(approval, status)
-        body = self._build_body(approval, status)
+        body = self._build_body_or_cancel(approval, status)
 
         # Spending starts here, in the same step as the send and before it:
         # a crash, a killed process or a lost response must leave the nonce
         # burnt rather than reusable.
         try:
             self._reserver.commit_to_send(approval.reservation_id)
+        except NonceStorageError as exc:
+            # The counter's database, not the counter's rules. Separated so the
+            # UI does not tell a user their nonce was already spent when the
+            # truth is that a second process is holding the file.
+            raise _approval_rejected(
+                str(exc), reason="nonce_storage_unavailable"
+            ) from exc
         except NonceReservationError as exc:
             raise _approval_rejected(str(exc), reason="nonce_already_spent") from exc
 
@@ -604,6 +642,23 @@ class ComposeService:
                 "gonderilmedi.",
                 reason="signature_invalid",
             ) from exc
+
+    def _build_body_or_cancel(
+        self, approval: SendApproval, status: TechnocoreStatus
+    ) -> dict[str, str]:
+        """Settle the reservation on the last refusal path in ``send``.
+
+        Not a reuse hole either way - the number stays burnt, because a
+        reservation is never returned to circulation - but every other refusal
+        in ``send`` records *why* it ended, and one that did not left the row
+        sitting at ``reserved`` for a request that provably stopped. A ledger
+        with one silent exit is a ledger a reader cannot trust.
+        """
+        try:
+            return self._build_body(approval, status)
+        except ComposeError:
+            self._reserver.cancel(approval.reservation_id, detail="govde dogrulanamadi")
+            raise
 
     def _build_body(
         self, approval: SendApproval, status: TechnocoreStatus

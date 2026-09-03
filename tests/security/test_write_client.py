@@ -14,18 +14,22 @@ below count attempts, not just outcomes.
 from __future__ import annotations
 
 import ast
+import gzip
 import inspect
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import httpx
 import pytest
-from station_api.technocore.client import MAX_ATTEMPTS
+from station_api.technocore.client import MAX_ATTEMPTS, ReadOnlyTechnocoreClient
 from station_api.technocore.errors import SourceFetchError
 from station_api.technocore.sources import TECHNOCORE_ORIGIN
 from station_api.technocore.write_client import (
+    MAX_EXCERPT_CHARS,
+    MAX_RESPONSE_BYTES,
     REFUSED_STATUSES,
+    UNREAD_BODY_NOTE,
     WRITE_TIMEOUT,
     SignedWriteClient,
     WriteOutcome,
@@ -357,6 +361,122 @@ def test_the_response_excerpt_is_bounded_and_swept() -> None:
     assert "‮" not in result.response_excerpt
 
 
+# ---------------------------------------------------------------------------
+# The body cap is on what is buffered, not on what is kept
+# ---------------------------------------------------------------------------
+
+
+def _streaming(
+    status: int, chunks: list[bytes], *, headers: dict[str, str] | None = None
+) -> tuple[Handler, dict[str, int]]:
+    """A handler whose body is a generator, so consumption can be counted.
+
+    This is the whole point of the fixture. A short excerpt proves nothing
+    about buffering - ``response.content[:cap]`` produces a short excerpt too,
+    after materialising the entire body. Counting the bytes the *server side*
+    was asked for is the only observation that separates the two.
+    """
+    pulled = {"bytes": 0}
+
+    def generate() -> Iterator[bytes]:
+        for chunk in chunks:
+            pulled["bytes"] += len(chunk)
+            yield chunk
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, content=generate(), headers=headers or {})
+
+    return handler, pulled
+
+
+def test_an_oversized_body_is_never_fully_buffered() -> None:
+    """The reviewer's probe, as a test: 8 MiB offered, a cap's worth taken.
+
+    ``response.content[:MAX_RESPONSE_BYTES]`` passed every excerpt assertion
+    in this file while buffering all eight megabytes first, because the slice
+    ran after the buffering. So this asserts on the bytes actually read.
+    """
+    chunk = b"x" * 8192
+    offered = [chunk] * 1024  # 8 MiB
+    handler, pulled = _streaming(200, offered)
+
+    result = _client(handler).send(TEST_TARGET, TEST_BODY)
+
+    assert result.outcome is WriteOutcome.ACCEPTED, "a long receipt is not a refusal"
+    assert pulled["bytes"] <= MAX_RESPONSE_BYTES + len(chunk)
+    assert pulled["bytes"] < 8 * 1024 * 1024, "the whole body was buffered"
+    assert len(result.response_excerpt) <= MAX_EXCERPT_CHARS
+
+
+def test_a_compressed_bomb_is_never_decompressed_at_all() -> None:
+    """65 KB on the wire, 64 MiB decompressed - and not one byte read.
+
+    ``Accept-Encoding: identity`` is a request the server may ignore, which is
+    exactly what this handler does. The cap alone would still have to decode
+    to find out how big the body was; refusing the encoding means nothing is
+    decoded, so nothing can expand.
+    """
+    payload = b" " * (64 * 1024 * 1024)
+    compressed = gzip.compress(payload)
+    assert len(compressed) < 512 * 1024, "the fixture is not a bomb"
+
+    raw = [compressed[at : at + 4096] for at in range(0, len(compressed), 4096)]
+    handler, pulled = _streaming(200, raw, headers={"Content-Encoding": "gzip"})
+
+    result = _client(handler).send(TEST_TARGET, TEST_BODY)
+
+    assert result.outcome is WriteOutcome.ACCEPTED
+    assert pulled["bytes"] == 0, "a body we refuse to decode was still read"
+    assert result.response_excerpt == UNREAD_BODY_NOTE.decode("ascii")
+
+
+@pytest.mark.parametrize("encoding", ["gzip", "deflate", "br", "zstd", "GZIP"])
+def test_any_unrequested_content_encoding_leaves_the_body_unread(
+    encoding: str,
+) -> None:
+    """Not a gzip special case: anything but identity is left alone."""
+    handler, pulled = _streaming(
+        400, [b"{}"], headers={"Content-Encoding": encoding}
+    )
+
+    result = _client(handler).send(TEST_TARGET, TEST_BODY)
+
+    assert result.outcome is WriteOutcome.REFUSED, "the status still classifies"
+    assert pulled["bytes"] == 0
+
+
+def test_an_identity_encoded_body_is_still_read() -> None:
+    """The guard must not swallow the ordinary case it was built around."""
+    handler, pulled = _streaming(
+        200, [b'{"seq": 1}'], headers={"Content-Encoding": "identity"}
+    )
+
+    result = _client(handler).send(TEST_TARGET, TEST_BODY)
+
+    assert pulled["bytes"] == len(b'{"seq": 1}')
+    assert "seq" in result.response_excerpt
+
+
+def test_the_write_client_streams_rather_than_buffering(
+    api_source_root: Path,
+) -> None:
+    """Structural, because the buffering version reads correctly by eye.
+
+    ``response.content`` is one attribute access away and looks like a bounded
+    read the moment a slice is written next to it. It must not come back.
+    """
+    source = (
+        api_source_root / "station_api" / "technocore" / "write_client.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    assert ".stream(" in source
+    assert "iter_bytes" in source
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr in ("content", "text"):
+            pytest.fail("the write client reads a whole response body again")
+
+
 def test_no_tls_setting_is_passed_anywhere(api_source_root: Path) -> None:
     """``verify`` is never named, so there is no line to flip to False."""
     source = (
@@ -369,6 +489,48 @@ def test_no_tls_setting_is_passed_anywhere(api_source_root: Path) -> None:
             assert node.arg != "verify"
     assert "_create_unverified_context" not in source
     assert "CERT_NONE" not in source
+
+
+def test_a_transport_with_tls_verification_off_cannot_be_injected() -> None:
+    """The hole the source scan above cannot see.
+
+    ``verify`` being absent from every line of this module says nothing about
+    the *object graph*: ``httpx.HTTPTransport(verify=False)`` carries the
+    disabled check inside it and used to be accepted through the test seam
+    without a word. Narrowing the seam to ``MockTransport`` - which speaks no
+    TLS at all - is what makes the docstring's claim true rather than
+    aspirational.
+    """
+    with pytest.raises(TypeError) as caught:
+        SignedWriteClient(transport=httpx.HTTPTransport(verify=False))
+
+    assert "MockTransport" in str(caught.value)
+
+
+def test_even_a_verifying_real_transport_is_refused() -> None:
+    """The rule is the type, not an inspection of the SSL context.
+
+    Reading ``verify`` back off a transport would mean reaching into httpx's
+    private attributes, and a guard that silently stops matching after an
+    upgrade is worse than none. A type check cannot rot that way.
+    """
+    with pytest.raises(TypeError):
+        SignedWriteClient(transport=httpx.HTTPTransport())
+
+
+def test_the_read_client_refuses_the_same_injection() -> None:
+    """Both outbound clients, because both carried the same claim."""
+    with pytest.raises(TypeError):
+        ReadOnlyTechnocoreClient(transport=httpx.HTTPTransport(verify=False))
+
+
+def test_a_mock_transport_is_still_accepted() -> None:
+    """The seam has to keep working, or it gets removed and nothing is tested."""
+    handler, seen = _answering(200)
+
+    _client(handler).send(TEST_TARGET, TEST_BODY)
+
+    assert len(seen) == 1
 
 
 # ---------------------------------------------------------------------------

@@ -102,6 +102,10 @@ class StubIdentity:
 class TestOnlySigner:
     """Signs with the published TEST-ONLY seed. Never touches a vault."""
 
+    #: The name starts with ``Test``, so pytest would otherwise try to collect
+    #: it as a test class and warn that it cannot.
+    __test__ = False
+
     def __init__(self, seed: bytes = TEST_ONLY_SEED) -> None:
         self._seed = seed
         #: Every payload this signer was asked to sign, so a test can assert

@@ -31,14 +31,23 @@ read-side reconciliation and a fresh human decision, with a fresh nonce.
 
 Transport rules, same as the read client
 ----------------------------------------
-* TLS verification is always on: ``verify`` is never passed, never exposed
-  and never configurable.
+* TLS verification is always on. ``verify`` is never named in this module, so
+  there is no line to flip to ``False``; and the only transport this client
+  accepts through its test seam is an ``httpx.MockTransport``, which speaks no
+  TLS at all. A real transport carrying ``verify=False`` is therefore not
+  merely absent - it cannot be handed in.
 * Redirects are never followed. A 3xx is ``outcome_unknown``, because the
   request may have been acted on before the hop and following one leaves the
   allow-listed origin.
 * Timeouts are explicit on all four phases.
-* The response body is read under a hard cap and kept only as a bounded,
-  swept excerpt.
+* The response body is **streamed** under a cap, so what is buffered is
+  bounded by ``MAX_RESPONSE_BYTES`` rather than by whatever the server chose
+  to send. ``response.content`` would have buffered the whole body and sliced
+  it afterwards, which is not a cap. Only a bounded, swept excerpt survives.
+* A body that arrives with a ``Content-Encoding`` we did not ask for is not
+  decompressed at all. ``Accept-Encoding: identity`` is a request and a server
+  may ignore it; refusing the encoding on the way back is what makes the
+  decompression-bomb question actually absent here rather than merely bounded.
 * Nothing identifying is attached: no cookie, no authorization header, no
   fingerprint. The DID and signature travel in the body because the protocol
   puts them there, and nowhere else.
@@ -66,11 +75,26 @@ WRITE_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=5.0)
 REFUSED_STATUSES = frozenset({400, 403, 413, 422})
 
 #: Cap on the response body we will read back. A write answers with a small
-#: JSON receipt; anything larger is not something we need.
+#: JSON receipt; anything larger is not something we need. Enforced while
+#: streaming, on decompressed bytes.
 MAX_RESPONSE_BYTES = 64 * 1024
+
+#: Read granularity for the streaming cap, mirroring the read client. The
+#: transient overshoot is bounded by this value and trimmed immediately.
+_CHUNK_BYTES = 8 * 1024
 
 #: Longest excerpt kept from that body.
 MAX_EXCERPT_CHARS = 1024
+
+#: Content codings that mean "no decoding happens". Anything else was not
+#: asked for and is not unpacked.
+IDENTITY_ENCODINGS = frozenset({"", "identity"})
+
+#: Stands in for a body we deliberately did not read. Our own bytes, so it
+#: carries nothing the server chose.
+UNREAD_BODY_NOTE = (
+    b"[govde okunmadi: sunucu istenmeyen bir Content-Encoding ile yanitladi]"
+)
 
 
 class WriteOutcome(StrEnum):
@@ -103,14 +127,26 @@ class WriteResult:
 class SignedWriteClient:
     """POSTs one approved body to one resolved room. Once.
 
-    ``transport`` exists so tests can substitute ``httpx.MockTransport``; it
-    is not a security setting, because the URL is still built from the write
-    registry and re-checked against the origin allow-list before the request.
-    There is no ``url``, ``method``, ``headers`` or ``verify`` parameter, so
-    a caller cannot steer the request anywhere.
+    ``transport`` exists so tests can substitute ``httpx.MockTransport``, and
+    that is the *only* thing it accepts. Documenting it as "not a security
+    setting" was not enough: an ``httpx.HTTPTransport`` built with
+    ``verify=False`` has the shape of a test seam and the effect of a disabled
+    TLS check, and nothing refused it. Narrowing the accepted type makes the
+    difference structural - a mock transport terminates the request in the
+    process and negotiates no TLS at all, so there is no verification to
+    disable - without taking the seam away from the tests that need it.
+
+    There is still no ``url``, ``method``, ``headers`` or ``verify``
+    parameter, so a caller cannot steer the request anywhere.
     """
 
-    def __init__(self, *, transport: httpx.BaseTransport | None = None) -> None:
+    def __init__(self, *, transport: httpx.MockTransport | None = None) -> None:
+        if transport is not None and not isinstance(transport, httpx.MockTransport):
+            raise TypeError(
+                "SignedWriteClient accepts only an httpx.MockTransport. The "
+                "production path passes none, so httpx's verifying default "
+                "stands and no transport-level TLS setting can be injected."
+            )
         self._transport = transport
 
     def send(self, target: WriteTarget, body: Mapping[str, str]) -> WriteResult:
@@ -125,10 +161,12 @@ class SignedWriteClient:
         attempted_at = datetime.now(UTC)
 
         try:
-            with self._client() as client:
-                response = client.request(WRITE_METHOD, url, json=dict(body))
+            with (
+                self._client() as client,
+                client.stream(WRITE_METHOD, url, json=dict(body)) as response,
+            ):
                 status_code = response.status_code
-                excerpt = _excerpt(response.content[:MAX_RESPONSE_BYTES])
+                excerpt = _excerpt(_read_capped(response))
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             return WriteResult(
                 outcome=WriteOutcome.OUTCOME_UNKNOWN,
@@ -163,9 +201,10 @@ class SignedWriteClient:
             headers={
                 "User-Agent": USER_AGENT,
                 "Accept": "application/json",
-                # Identity encoding: a write receipt is small, and refusing
-                # compression removes the decompression-bomb question here
-                # entirely rather than bounding it.
+                # Identity encoding: a write receipt is small, so there is no
+                # bandwidth to save by accepting compression. This is only a
+                # *request*, though, so ``_read_capped`` enforces the same rule
+                # on the answer rather than trusting the server to honour it.
                 "Accept-Encoding": "identity",
             },
             cookies=None,
@@ -230,6 +269,42 @@ def _refusal_detail(status_code: int) -> str:
     return "Sunucu istegi reddetti; hicbir sey yazilmadi."
 
 
+def _read_capped(response: httpx.Response) -> bytes:
+    """Buffer at most ``MAX_RESPONSE_BYTES`` of a body we do not trust.
+
+    The read client's pattern, applied here for the same reason: ``iter_bytes``
+    yields **decompressed** data, so the limit applies to what would actually
+    be held in memory rather than to the wire size. ``response.content`` would
+    buffer the whole body first and slice afterwards, which is not a cap at
+    all - a 64 MiB expansion of a 65 KB gzip would be fully materialised before
+    the slice ever ran.
+
+    A body carrying a ``Content-Encoding`` we did not ask for is not read at
+    all. ``Accept-Encoding: identity`` is a request, not a guarantee; a server
+    that ignores it could answer a 65 KB gzip that expands to 64 MiB, and
+    decoding *any* of it to find out is the part worth not doing. Nothing is
+    decompressed, so nothing can expand.
+
+    Reaching the cap stops the read; it is not an error. The receipt is
+    already longer than anything worth keeping, and refusing to classify a
+    write because its receipt was oversized would turn an ``accepted`` into an
+    ``outcome_unknown`` - the one conversion this module exists to avoid. The
+    same holds for a refused encoding: the status still classifies the write.
+    """
+    encoding = response.headers.get("content-encoding", "").strip().lower()
+    if encoding not in IDENTITY_ENCODINGS:
+        return UNREAD_BODY_NOTE
+
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in response.iter_bytes(_CHUNK_BYTES):
+        chunks.append(chunk)
+        total += len(chunk)
+        if total >= MAX_RESPONSE_BYTES:
+            break
+    return b"".join(chunks)[:MAX_RESPONSE_BYTES]
+
+
 def _excerpt(body: bytes) -> str:
     """A bounded, swept excerpt of a response we do not trust."""
     if not body:
@@ -239,9 +314,11 @@ def _excerpt(body: bytes) -> str:
 
 
 __all__ = [
+    "IDENTITY_ENCODINGS",
     "MAX_EXCERPT_CHARS",
     "MAX_RESPONSE_BYTES",
     "REFUSED_STATUSES",
+    "UNREAD_BODY_NOTE",
     "WRITE_TIMEOUT",
     "SignedWriteClient",
     "WriteOutcome",

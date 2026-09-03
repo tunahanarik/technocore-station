@@ -11,7 +11,9 @@ below is a way for that rule to be broken, tested to prove it is not:
 * a process that dies between reserving and sending, and comes back;
 * a reservation that is abandoned;
 * the 19-digit ceiling the wire format imposes;
-* a leading zero, which is the same number and different signed bytes.
+* a leading zero, which is the same number and different signed bytes;
+* the store's own database refusing to answer at all, which must fail closed
+  *and* explainably rather than as an armoured 500.
 
 Every DID here is a TEST-ONLY fixture string. No vault, no seed and no
 network is involved: this is the counter, on its own.
@@ -25,11 +27,15 @@ from collections.abc import Callable, Iterator
 
 import pytest
 from sqlalchemy import Engine, select
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
+from station_api.compose import nonce as nonce_module
 from station_api.compose.nonce import (
     MAX_NONCE_VALUE,
     NonceExhaustedError,
+    NonceReservationError,
     NonceReserver,
+    NonceStorageError,
     UnknownReservationError,
 )
 from station_api.config import Settings
@@ -459,3 +465,120 @@ def test_the_reservation_row_holds_only_public_protocol_values(
 
     for forbidden in ("seed", "private", "passphrase", "mnemonic", "vault"):
         assert forbidden not in blob
+
+
+# ---------------------------------------------------------------------------
+# The counter's own database refusing to answer
+# ---------------------------------------------------------------------------
+
+
+def _locked_session(*args: object, **kwargs: object) -> Session:
+    """Stand in for SQLite answering "database is locked".
+
+    Driven from the store's own ``Session`` symbol rather than by contending
+    for a real file: a genuine lock waits out the busy timeout on every one of
+    the eight attempts, and a test that takes forty seconds gets deleted. The
+    exception raised here is the exception SQLAlchemy raises there.
+    """
+    raise OperationalError("BEGIN", {}, Exception("database is locked"))
+
+
+def test_a_locked_counter_database_is_an_explainable_refusal_not_a_crash(
+    reserver: NonceReserver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two Station processes on one file is the realistic cause.
+
+    Only ``IntegrityError`` was caught, so ``OperationalError`` walked past
+    the bounded retry, past ``ComposeService`` - which catches
+    ``NonceReservationError`` and nothing else - and out to the armoured 500,
+    where the user is told nothing at all.
+    """
+    monkeypatch.setattr(nonce_module, "Session", _locked_session)
+
+    with pytest.raises(NonceStorageError) as caught:
+        reserver.reserve(did=TEST_ONLY_DID, room=TEST_ROOM)
+
+    assert isinstance(caught.value, NonceReservationError)
+    assert "mesgul" in str(caught.value)
+
+
+def test_a_locked_counter_database_hands_out_no_nonce(
+    reserver: NonceReserver, engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail-closed, which is the half that matters more than the message."""
+    monkeypatch.setattr(nonce_module, "Session", _locked_session)
+
+    with pytest.raises(NonceStorageError):
+        reserver.reserve(did=TEST_ONLY_DID, room=TEST_ROOM)
+
+    monkeypatch.undo()
+    assert reserver.last_value(did=TEST_ONLY_DID, room=TEST_ROOM) == 0
+    with Session(engine) as session:
+        assert session.scalars(select(MessageNonceReservation)).all() == []
+
+
+def test_a_collision_and_a_lock_are_reported_differently(
+    reserver: NonceReserver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """"Keep clicking" is right for one and wrong for the other.
+
+    A constraint collision resolves on the next pass and the sentence may say
+    so. A held file will not resolve by retrying, and telling a user it is a
+    counter collision sends them back to the button.
+    """
+
+    def _colliding(*args: object, **kwargs: object) -> Session:
+        raise IntegrityError("INSERT", {}, Exception("UNIQUE constraint failed"))
+
+    monkeypatch.setattr(nonce_module, "Session", _colliding)
+    with pytest.raises(NonceReservationError) as collision:
+        reserver.reserve(did=TEST_ONLY_DID, room=TEST_ROOM)
+
+    assert not isinstance(collision.value, NonceStorageError)
+    assert "cakisma" in str(collision.value)
+
+
+def test_a_locked_database_at_commit_time_refuses_before_anything_is_sent(
+    reserver: NonceReserver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``commit_to_send`` is what burns the number before the request leaves.
+
+    If it cannot write, nothing may be sent - that part was already true,
+    because the exception propagated. What was not true is that the caller
+    could recognise it: ``ComposeService`` catches ``NonceReservationError``
+    there, so an ``OperationalError`` became a 500 instead of a sentence.
+    """
+    reservation = reserver.reserve(did=TEST_ONLY_DID, room=TEST_ROOM)
+    monkeypatch.setattr(nonce_module, "Session", _locked_session)
+
+    with pytest.raises(NonceStorageError):
+        reserver.commit_to_send(reservation.id)
+
+
+def test_the_composer_turns_a_locked_counter_into_a_refusal(
+    engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end through the service, which is where the 500 came from."""
+    from station_api.compose.service import ComposeError
+
+    from tests.security.compose_fixtures import build_harness
+
+    harness = build_harness(engine)
+    draft = harness.service.draft(
+        session_id=harness.session_id,
+        room=TEST_ROOM,
+        text="TEST ONLY - bu mesaj hicbir yere gitmez.",
+    )
+    monkeypatch.setattr(nonce_module, "Session", _locked_session)
+
+    with pytest.raises(ComposeError) as caught:
+        harness.service.sign(
+            session_id=harness.session_id,
+            draft_id=draft.draft_id,
+            confirmed_digest=draft.draft_digest,
+            vault_passphrase=None,
+        )
+
+    assert caught.value.status_code == 409
+    assert caught.value.reason == "nonce_unavailable"
+    assert harness.writes.send_count == 0

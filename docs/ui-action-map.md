@@ -256,6 +256,29 @@ Bu yüzden ikinci bir gönderim, yeni bir taslak ve yeni bir imza onayı ister;
 tek tıkla tekrar yoktur (test: `::requires a fresh draft and a fresh signature
 for any further send`).
 
+#### Kasa parolası imza hatasında neden state'te kalıyor (bilinçli karar)
+
+`ComposerPanel.tsx` parolayı **başarılı** imzadan hemen sonra siler
+(`setPassphrase("")`), gönderim adımının `finally`'sinde tekrar siler ve metin
+veya oda düzenlendiğinde `dropApprovals()` içinde bir kez daha siler. Ama
+imza **başarısız** olduğunda parola alanda kalır.
+
+Bu bir unutma değil, seçilmiş davranış: yanlış parola bu adımın en sık hata
+sebebidir ve kullanıcıya uzun bir parolayı yeniden yazdırmak, onu daha kısa
+bir parola veya panoya kopyalama alışkanlığı seçmeye iter — ikisi de bu
+alandan daha kötüdür. Değeri temizleyen dört yol zaten var:
+
+1. başarılı imza (`sign()` içinde, istek döner dönmez);
+2. metin veya hedef oda düzenlemesi (`dropApprovals()`);
+3. gönderim denemesinin `finally`'si, sonuç ne olursa olsun;
+4. bileşenin unmount olması — bölüm değişince state yok olur; hiçbir yerde
+   `localStorage`/`sessionStorage` yok (SI-24), yani parola sayfa yenilenmesini
+   de geçemez.
+
+Sunucu tarafında aynı değer imzalama çağrısı boyunca redaksiyon registry'sine
+kayıtlıdır ve çağrı biter bitmez düşürülür (SI-162), dolayısıyla bir hata
+yolunda log'a düşmesi de mümkün değildir. **Kod değiştirilmedi.**
+
 ### 5.2 Üç sonuç durumu (ADR-0002 §3)
 
 | `outcome` | Nasıl sunulur | Retry butonu |

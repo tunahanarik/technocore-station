@@ -41,11 +41,19 @@ Two guards, and they answer different questions:
 * a ``UNIQUE(did, room, nonce_value)`` constraint, because a lock cannot
   reach a second process opening the same database file.
 
-The bounded retry below runs **only** when the constraint rejects an insert -
-a local write that provably did not happen, against a database we own. It is
-not, and must not be confused with, a retry of an outbound request: ADR-0002
-3 forbids those precisely because a failed HTTP write is not proof that
-nothing was written.
+The bounded retry below runs **only** when the local store rejects an insert -
+a write that provably did not happen, against a database we own. It is not,
+and must not be confused with, a retry of an outbound request: ADR-0002 3
+forbids those precisely because a failed HTTP write is not proof that nothing
+was written.
+
+Two rejections count as that, not one. ``IntegrityError`` is the constraint
+firing; ``OperationalError`` - "database is locked" - is the second process
+holding the file while we tried. Both mean the same thing here (no row was
+written, re-read and try again), and both must end as a
+``NonceReservationError``: the composer catches that class and turns it into
+an explainable 409, while anything else escapes to the armoured 500 and tells
+the user nothing.
 """
 
 from __future__ import annotations
@@ -58,7 +66,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import Engine, func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 from technocore_conform import MAX_NONCE_DIGITS, validate_nonce
 
@@ -95,6 +103,15 @@ class NonceExhaustedError(NonceReservationError):
 
 class UnknownReservationError(NonceReservationError):
     """No such reservation, or it has already been settled."""
+
+
+class NonceStorageError(NonceReservationError):
+    """The counter's own database refused to answer.
+
+    A second Station process holding the SQLite file is the realistic cause.
+    Fail-closed and explainable: no nonce is handed out, none is reused, and
+    the caller gets a sentence instead of an armoured 500.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,7 +151,8 @@ class NonceReserver:
         nonce must not proceed to sign anything.
         """
         with self._lock:
-            last_error: IntegrityError | None = None
+            last_error: Exception | None = None
+            locked = False
             for _ in range(MAX_RESERVE_ATTEMPTS):
                 try:
                     return self._reserve_once(did=did, room=room)
@@ -142,6 +160,19 @@ class NonceReserver:
                     # Another writer took the number between our read and our
                     # insert. Nothing was written; re-read and try again.
                     last_error = exc
+                    locked = False
+                except OperationalError as exc:
+                    # A second process is holding the file. Also "nothing was
+                    # written", so the same bounded retry applies - but the
+                    # sentence at the end has to name a different cause,
+                    # because "keep clicking" is the wrong advice for a lock.
+                    last_error = exc
+                    locked = True
+            if locked:
+                raise NonceStorageError(
+                    "Nonce ayrilamadi: sayac veritabani mesgul. Baska bir "
+                    "Station penceresi aciksa kapatip yeniden deneyin."
+                ) from last_error
             raise NonceReservationError(
                 "Nonce ayrilamadi: sayac uzerinde surekli cakisma var."
             ) from last_error
@@ -249,6 +280,33 @@ class NonceReserver:
         detail: str,
         require_reserved: bool,
     ) -> None:
+        try:
+            self._settle_once(
+                reservation_id,
+                state=state,
+                outcome=outcome,
+                detail=detail,
+                require_reserved=require_reserved,
+            )
+        except OperationalError as exc:
+            # Same reasoning as ``reserve``: a locked file must not surface as
+            # an armoured 500. Settling is what marks the number spent before
+            # a request leaves, so failing here means nothing is sent - which
+            # is the fail-closed side, and now it says so.
+            raise NonceStorageError(
+                "Nonce defteri guncellenemedi: sayac veritabani mesgul. "
+                "Hicbir sey gonderilmedi."
+            ) from exc
+
+    def _settle_once(
+        self,
+        reservation_id: str,
+        *,
+        state: NonceState,
+        outcome: WriteOutcomeValue,
+        detail: str,
+        require_reserved: bool,
+    ) -> None:
         with Session(self._engine) as session, session.begin():
             row = session.get(MessageNonceReservation, reservation_id)
             if row is None:
@@ -295,5 +353,6 @@ __all__ = [
     "NonceReservation",
     "NonceReservationError",
     "NonceReserver",
+    "NonceStorageError",
     "UnknownReservationError",
 ]

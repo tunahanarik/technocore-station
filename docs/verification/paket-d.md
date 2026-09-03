@@ -100,7 +100,7 @@ olduğunu ve mock'suz her iki istemcinin de gürültüyle kırıldığını doğ
 
 | Kapı | Sonuç |
 |---|---|
-| pytest | **1009 geçti** (823 → 1009) |
+| pytest | **1049 geçti** (823 → 1009 → inceleme düzeltmeleriyle 1049) |
 | Vitest | **155 geçti** (130 → 155) |
 | ruff (iki koşu) | geçti |
 | mypy strict | `mypy src` **61 dosya** / `mypy --config-file` (CI) **63 dosya** — ikisi de 0 hata |
@@ -145,8 +145,63 @@ bunun nedeni docstring'e yazıldı.
 
 ## Bağımsız inceleme sonucu
 
-(PR üzerinde doldurulacak — temiz bağlamlı reviewer subagent koşulacak; bu
-insan güvenlik incelemesi değildir, ADR-0001 §5 kalan risk.)
+Temiz bağlamlı, yazardan ayrı bir Claude reviewer subagent'ı head `0e27b9e`
+diffini inceledi, kapıları kendi koştu ve karşı-problarını **fiilen
+çalıştırdı**. Sonuç: **P0/P1 yok.**
+
+### Mutasyon testi — 12/12
+
+İncelemenin en değerli parçası buydu: ürün kodunda on iki kritik davranış
+runtime'da geri alındı ve her birinde hangi testlerin kırmızıya döndüğü
+sayıldı. **On ikisi de yakalandı**, yani yalancı koruma yok.
+
+| Geri alınan davranış | Yakalayan test |
+|---|---|
+| nonce burn (`commit_to_send` no-op) | 2 |
+| token spend (consume → peek) | 2 |
+| gate'in her adımda yeniden koşması (cache'lendi) | 5 |
+| imza öz-doğrulaması kaldırıldı | 2 |
+| canonical digest karşılaştırması | 1 |
+| verdict kimliği sabitlendi | 2 |
+| oturum bağı atlandı | 1 |
+| nonce sıfır dolgulu üretildi | 3 |
+| yazma tekrarı eklendi | 9 |
+| draft digest sabitlendi | 25 |
+| `DENIED_ROOMS` boşaltıldı | 5 |
+| ağ kesici etkisizleştirildi | 3 |
+
+### Kıramadıkları
+
+25 oda-adı bypass denemesi (unicode homoglif `lоbby`, Roma rakamı, path
+traversal, URL-encode, null byte, satır sonu, 49 karakter, büyük harf)
+**hepsi reddedildi**. 24 thread × 15 = **360 nonce rezervasyonu, 360
+benzersiz, 0 hata**; saat 20 yıl geri alındığında monotonluk bozulmadı;
+tavan üstünde `NonceExhaustedError` ve **satır yazılmadı**. Onay token'ının
+beş bağı tek tek bayatlatıldı — canonical digest, oda, nonce, DID, verdict,
+oturum — **hepsi ayrı ayrı reddetti ve hiçbirinde giden istek olmadı**. 32
+thread tek token üzerinde yarıştı: **tam olarak 1 POST**. İmza vendor
+oracle'ına karşı 7 vakada **karakter karakter aynı** (pipe karakterleri,
+19 haneli nonce, emoji/CJK, `"0"` ve `"007"` nonce'ları dahil); sahtecilik
+denemelerinin hepsi reddedildi. 31 statüde tam 1 deneme; `Retry-After`
+hiçbir davranışı değiştirmedi. Frontend'de `outcome_unknown` dalında
+**gizli bile olsa** retry kontrolü yok; kopyalanan tanı canonical/DID/imza/
+nonce/oda/token taşımıyor.
+
+### Bulgular ve merge öncesi yapılanlar
+
+| Bulgu | Düzeltme |
+|---|---|
+| **P2-1:** Yazma istemcisi `response.content[:CAP]` kullanıyordu — `.content` **önce tüm gövdeyi belleğe alır**. Prob: 8 MiB tamamen tamponlandı; 65 KB'lık sıkıştırılmış gövde 64 MiB'a açıldı. Modül docstring'i "hard cap" ve "decompression-bomb sorusunu **tamamen** ortadan kaldırır" diyordu — ikisi de gerçek değildi | `client.stream` + `iter_bytes` ile okuma istemcisinin deseni; sınır decompress edilmiş baytlarda. **Ötesi:** istemediğimiz bir `Content-Encoding` taşıyan yanıt artık hiç açılmıyor — `Accept-Encoding: identity` cevapta **dayatılıyor**, güvenilmiyor. İki yanlış cümle ve IMP-279'un gerekçesi düzeltildi |
+| **P2-2:** `signer.py` "bir güvenlik testi uygulamanın vault implementasyonunu bağladığını iddia eder" diyordu — **öyle bir test yoktu**. Ayrıca `transport=` seam'i üzerinden `HTTPTransport(verify=False)` enjekte edilebiliyordu; `write_client.py` "never configurable" diyordu | İddia edilen wiring testi **gerçekten yazıldı** (`VaultMessageSigner`, `SignedWriteClient`, `_transport is None`) + seam'lerin silinerek testin tatmin edilemeyeceğini kanıtlayan ikiz test. Seçilen yol: `verify`'ı taşıyıcıdan geri okumak yerine (httpx private attribute'ları; sessizce eşleşmeyi bırakan bir guard hiç yoktan kötüdür) **her iki istemci de yalnız `httpx.MockTransport` kabul eder** — mock hiç TLS müzakere etmediği için `verify=False` temsil edilemez hale gelir. Depodaki her enjeksiyon zaten MockTransport'tu |
+| **P2-3:** Ağ kesici yalnız httpx taşıma katmanındaydı; `socket.create_connection`, `urllib`, `httpcore` kaçıyordu (yalnız test kodunda boşluk — ürün kodu zaten korunuyor) | `socket.socket.connect` seviyesine indirildi; üç boşluk da tek katmanla kapandı. İki mevcut test bu makinenin kendi LAN adreslerini **bilerek** yokluyordu; yama düşürülmek yerine kendi arayüz adreslerine izin verildi (bu hosta cevap veren bir adrese bağlanmak hostu terk etmemektir). Docstring hangi katmanın neyi kapsadığı konusunda dürüstleştirildi |
+| **P3-1:** Vault parolası redaksiyon registry'sine kaydedilmiyordu | `sign()` çağrısı `register_secret`/`forget_secret` ile sarıldı (SI-162) |
+| **P3-2:** `_build_body` reddi rezervasyonu `reserved` durumunda asılı bırakıyordu (yeniden kullanım deliği değil, defter tutarsızlığı) | `_build_body_or_cancel`; her ret yolunun rezervasyonu uzlaştırdığı testle kapsandı |
+| **P3-4:** Nonce rezervasyonu `OperationalError` yakalamıyordu — kilitli SQLite dosyası zırhlanmış 500'e çıkıyordu | `NonceStorageError` eklendi; composer bunu ayrı bir `nonce_storage_unavailable` gerekçesine çeviriyor, böylece tutulan bir dosya "nonce'unuz zaten harcandı" diye raporlanmıyor |
+| **P3-5:** `send` (ve aynı hatayla `sign`) `async def` içinde bloklayan çağrı yapıyordu — read timeout boyunca event loop kilitleniyordu | İkisi de `def` yapıldı (FastAPI worker thread'de koşturur); eşzamanlı iki send'in yine tam olarak bir gönderim ürettiği korundu. Route'ları `async def`'e geri çevirmek 3 testi kırıyor |
+| **P3-3:** İmza hatasından sonra parola React state'inde kalıyor | **Bilinçli bırakıldı** (kullanıcı yeniden yazmasın diye); metin/oda düzenlemesi, başarılı imza, `send()` finally'si ve unmount temizliyor. Dört temizleme yolu `ui-action-map.md` §5.1'de adlandırıldı |
+
+Düzeltmeler sonrası tam suite: **1049 pytest** + **155 Vitest**. Bu inceleme
+bir **insan güvenlik incelemesi değildir** (ADR-0001 §5 kalan risk).
 
 ## Sınırlar
 
