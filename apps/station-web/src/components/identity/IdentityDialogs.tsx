@@ -3,7 +3,7 @@ import { useEffect, useId, useRef, useState } from "react";
 
 import {
   adoptRecovery,
-  ApiError,
+  type ApiError,
   createIdentity,
   exportRecovery,
   fetchIdentity,
@@ -13,6 +13,7 @@ import {
   verifyRecovery,
 } from "../../api/client";
 import type { IdentityStatus, ProtectionMode, RecoveryInspectResult } from "../../api/types";
+import { ErrorRegion } from "../ErrorRegion";
 import { StatusPill } from "../StatusPill";
 
 /**
@@ -23,6 +24,16 @@ import { StatusPill } from "../StatusPill";
  *    into a store, a context or browser storage.
  * 2. There is no seed anywhere - no field that accepts one, and no field that
  *    displays one.
+ *
+ * Failures are shown with the same `ErrorRegion` the pages use. These are the
+ * operations a user is most likely to need help with - creating an identity,
+ * exporting or adopting a recovery file, revoking - so they must carry the
+ * stable code, the HTTP status and the backend request id, plus the redacted
+ * "copy diagnostics" button that the help screen tells the user to send. A
+ * bare sentence here would be the one place that advice does not work.
+ *
+ * `onRetry` is deliberately omitted: re-firing a half-completed mutation from
+ * an alert is not a safe recovery. The user resubmits, or closes the dialog.
  */
 
 interface DialogProps {
@@ -30,20 +41,6 @@ interface DialogProps {
   readonly onClose: () => void;
   readonly onUpdated: (status: IdentityStatus) => void;
   readonly status: IdentityStatus;
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof ApiError) {
-    // Always a safe Turkish sentence, never a bare machine code.
-    return error.userMessage;
-  }
-  if (error instanceof Error && error.message === "session_not_bootstrapped") {
-    return toApiError(error).userMessage;
-  }
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-  return "Islem tamamlanamadi.";
 }
 
 /** A labelled passphrase input. Never bound to a saved-password autofill. */
@@ -102,18 +99,6 @@ function DialogShell({
         </Modal.Container>
       </Modal.Backdrop>
     </Modal>
-  );
-}
-
-function ErrorAlert({ title, message }: { readonly title: string; readonly message: string }) {
-  return (
-    <Alert status="danger">
-      <Alert.Indicator />
-      <Alert.Content>
-        <Alert.Title>{title}</Alert.Title>
-        <Alert.Description>{message}</Alert.Description>
-      </Alert.Content>
-    </Alert>
   );
 }
 
@@ -224,7 +209,7 @@ export function CreateIdentityDialog({ isOpen, onClose, onUpdated, status }: Dia
   const [acceptRisk, setAcceptRisk] = useState(false);
   const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ApiError | null>(null);
 
   // Wipe every secret-bearing field whenever the dialog is not on screen.
   useEffect(() => {
@@ -263,7 +248,7 @@ export function CreateIdentityDialog({ isOpen, onClose, onUpdated, status }: Dia
       onUpdated(next);
       onClose();
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(toApiError(caught));
     } finally {
       setBusy(false);
     }
@@ -390,7 +375,9 @@ export function CreateIdentityDialog({ isOpen, onClose, onUpdated, status }: Dia
         <Input autoComplete="off" variant="secondary" />
       </TextField>
 
-      {error !== null && <ErrorAlert message={error} title="Kimlik olusturulamadi" />}
+      {error !== null && (
+        <ErrorRegion error={error} section="Kimlik ve Guvenlik / Yeni kimlik olustur" title="Kimlik olusturulamadi" />
+      )}
     </DialogShell>
   );
 }
@@ -402,7 +389,7 @@ export function ExportRecoveryDialog({ isOpen, onClose, onUpdated, status }: Dia
   const [confirmPassphrase, setConfirmPassphrase] = useState("");
   const [vaultPassphrase, setVaultPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ApiError | null>(null);
   const [done, setDone] = useState(false);
 
   useEffect(() => {
@@ -443,7 +430,7 @@ export function ExportRecoveryDialog({ isOpen, onClose, onUpdated, status }: Dia
       setDone(true);
       onUpdated(await fetchIdentity());
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(toApiError(caught));
     } finally {
       setBusy(false);
     }
@@ -514,7 +501,9 @@ export function ExportRecoveryDialog({ isOpen, onClose, onUpdated, status }: Dia
         </Alert>
       )}
 
-      {error !== null && <ErrorAlert message={error} title="Recovery olusturulamadi" />}
+      {error !== null && (
+        <ErrorRegion error={error} section="Kimlik ve Guvenlik / Recovery dosyasi olustur" title="Recovery olusturulamadi" />
+      )}
     </DialogShell>
   );
 }
@@ -525,7 +514,7 @@ export function RestoreTestDialog({ isOpen, onClose, onUpdated }: DialogProps) {
   const [file, setFile] = useState<File | null>(null);
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ApiError | null>(null);
 
   useEffect(() => {
     if (!isOpen) {
@@ -545,7 +534,7 @@ export function RestoreTestDialog({ isOpen, onClose, onUpdated }: DialogProps) {
       onUpdated(next);
       onClose();
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(toApiError(caught));
     } finally {
       setBusy(false);
     }
@@ -586,7 +575,9 @@ export function RestoreTestDialog({ isOpen, onClose, onUpdated }: DialogProps) {
         value={passphrase}
       />
 
-      {error !== null && <ErrorAlert message={error} title="Restore-test basarisiz" />}
+      {error !== null && (
+        <ErrorRegion error={error} section="Kimlik ve Guvenlik / Restore-test" title="Restore-test basarisiz" />
+      )}
     </DialogShell>
   );
 }
@@ -600,7 +591,7 @@ export function AdoptRecoveryDialog({ isOpen, onClose, onUpdated, status }: Dial
   const [protection, setProtection] = useState<ProtectionMode>(status.default_protection);
   const [vaultPassphrase, setVaultPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ApiError | null>(null);
 
   useEffect(() => {
     if (!isOpen) {
@@ -620,7 +611,7 @@ export function AdoptRecoveryDialog({ isOpen, onClose, onUpdated, status }: Dial
     try {
       setInspected(await inspectRecovery(file, recoveryPassphrase));
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(toApiError(caught));
     } finally {
       setBusy(false);
     }
@@ -644,7 +635,7 @@ export function AdoptRecoveryDialog({ isOpen, onClose, onUpdated, status }: Dial
       onUpdated(next);
       onClose();
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(toApiError(caught));
     } finally {
       setBusy(false);
     }
@@ -741,7 +732,9 @@ export function AdoptRecoveryDialog({ isOpen, onClose, onUpdated, status }: Dial
         </>
       )}
 
-      {error !== null && <ErrorAlert message={error} title="Kimlik kurulamadi" />}
+      {error !== null && (
+        <ErrorRegion error={error} section="Kimlik ve Guvenlik / Recovery dosyasindan kur" title="Kimlik kurulamadi" />
+      )}
     </DialogShell>
   );
 }
@@ -751,7 +744,7 @@ export function AdoptRecoveryDialog({ isOpen, onClose, onUpdated, status }: Dial
 export function RevokeIdentityDialog({ isOpen, onClose, onUpdated, status }: DialogProps) {
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ApiError | null>(null);
 
   useEffect(() => {
     if (!isOpen) {
@@ -770,7 +763,7 @@ export function RevokeIdentityDialog({ isOpen, onClose, onUpdated, status }: Dia
       onUpdated(next);
       onClose();
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(toApiError(caught));
     } finally {
       setBusy(false);
     }
@@ -813,7 +806,9 @@ export function RevokeIdentityDialog({ isOpen, onClose, onUpdated, status }: Dia
       </TextField>
       <p className="font-mono text-xs break-all text-muted">{did}</p>
 
-      {error !== null && <ErrorAlert message={error} title="Revoke edilemedi" />}
+      {error !== null && (
+        <ErrorRegion error={error} section="Kimlik ve Guvenlik / Kimligi revoke et" title="Revoke edilemedi" />
+      )}
     </DialogShell>
   );
 }

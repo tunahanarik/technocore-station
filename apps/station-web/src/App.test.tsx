@@ -257,7 +257,6 @@ describe("App shell", () => {
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     await user.click(toggle);
 
-    expect(screen.queryByRole("navigation", { name: "Ana bolumler" })).toBeNull();
     const reopen = screen.getByRole("button", { name: "Menuyu ac" });
     expect(reopen).toHaveAttribute("aria-expanded", "false");
     // The selected section stays mounted while the menu is collapsed.
@@ -268,6 +267,51 @@ describe("App shell", () => {
       "aria-current",
       "page",
     );
+  });
+
+  it("keeps the navigation landmark and every section name while collapsed", async () => {
+    // Collapsing narrows the menu for a sighted user. Unmounting the landmark
+    // took the whole menu away from a screen-reader user, which is a
+    // different and much larger change than "narrower".
+    stubBackend();
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Technocore durumu");
+
+    await user.click(screen.getByRole("button", { name: "Menuyu daralt" }));
+
+    const nav = screen.getByRole("navigation", { name: "Ana bolumler" });
+    const names = within(nav)
+      .getAllByRole("button")
+      .map((button) => button.textContent?.replace(" (secili bolum)", "") ?? "");
+    // The visible initial is aria-hidden; the accessible name stays whole.
+    expect(names).toEqual(VISIBLE_SECTIONS.map((label) => `${label.slice(0, 1)}${label}`));
+    for (const label of VISIBLE_SECTIONS) {
+      expect(within(nav).getByRole("button", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
+    }
+  });
+
+  it("points the collapse toggle at the region it controls", async () => {
+    stubBackend();
+    render(<App />);
+
+    const nav = await screen.findByRole("navigation", { name: "Ana bolumler" });
+    const toggle = screen.getByRole("button", { name: "Menuyu daralt" });
+    expect(toggle).toHaveAttribute("aria-controls", nav.id);
+    expect(nav.id).not.toBe("");
+  });
+
+  it("selects a section from the collapsed menu", async () => {
+    stubBackend();
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Technocore durumu");
+
+    await user.click(screen.getByRole("button", { name: "Menuyu daralt" }));
+    const nav = screen.getByRole("navigation", { name: "Ana bolumler" });
+    await user.click(within(nav).getByRole("button", { name: /^Kimlik ve Guvenlik/ }));
+
+    expect(await screen.findByText("Kimlik olusturulmadi")).toBeInTheDocument();
   });
 
   it("reports Technocore as not yet checked on a fresh launch", async () => {
@@ -319,6 +363,60 @@ describe("App shell", () => {
     await user.click(retry);
     await waitFor(() => {
       expect(fetchMock.mock.calls.length).toBeGreaterThan(callsBefore);
+    });
+  });
+
+  it("disables the shell retry while the retry is in flight", async () => {
+    // The shell already tracked a loading flag; it just never reached the
+    // retry button, so a stuck connection could be retried five times over.
+    let bootstrapCalls = 0;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    // Routed by URL: the overview section fires its own reads on mount, so
+    // counting raw calls would count the wrong ones.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : new URL(input as URL).pathname;
+        if (url === "/api/session/bootstrap") {
+          bootstrapCalls += 1;
+          if (bootstrapCalls === 1) return Promise.reject(new TypeError("Failed to fetch"));
+          return gate.then(() =>
+            jsonResponse({
+              csrf_token: "test-only-value-not-a-real-token",
+              csrf_header: "X-Station-CSRF",
+            }),
+          );
+        }
+        if (url === "/api/app/status") return gate.then(() => jsonResponse(HEALTHY_STATUS));
+        if (url === "/api/identity") return Promise.resolve(jsonResponse(NO_IDENTITY));
+        if (url === "/api/technocore/status")
+          return Promise.resolve(jsonResponse(TECHNOCORE_NEVER_CHECKED));
+        return Promise.resolve(jsonResponse(CONFORMANT));
+      }),
+    );
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    const region = await screen.findByText("Yerel cekirdege baglanilamadi");
+    const alert = region.closest("[role='alert']") as HTMLElement;
+    await user.click(within(alert).getByRole("button", { name: "Yeniden dene" }));
+
+    const busy = await screen.findByRole("button", { name: "Yeniden deneniyor..." });
+    expect(busy).toBeDisabled();
+
+    // A second activation while pending must not start another bootstrap.
+    expect(bootstrapCalls).toBe(2);
+    await user.click(busy);
+    expect(bootstrapCalls).toBe(2);
+
+    release();
+    await waitFor(() => {
+      expect(screen.queryByText("Yerel cekirdege baglanilamadi")).toBeNull();
     });
   });
 

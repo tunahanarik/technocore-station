@@ -23,14 +23,18 @@ interface SettingsHelpPageProps {
 export function SettingsHelpPage({ status }: SettingsHelpPageProps) {
   const [gate, setGate] = useState<WriteGateStatus | null>(null);
   const [gateError, setGateError] = useState<ApiError | null>(null);
+  const [gateLoading, setGateLoading] = useState(true);
 
   const load = useCallback(async (): Promise<void> => {
+    setGateLoading(true);
     try {
       setGate(await fetchWriteGate());
       setGateError(null);
     } catch (caught) {
       setGate(null);
       setGateError(toApiError(caught));
+    } finally {
+      setGateLoading(false);
     }
   }, []);
 
@@ -111,6 +115,7 @@ export function SettingsHelpPage({ status }: SettingsHelpPageProps) {
             <ErrorRegion
               error={gateError}
               onRetry={() => void load()}
+              retryPending={gateLoading}
               section="Ayarlar ve Yardim / Guvenlik kapilari"
               title="Kapi durumu okunamadi"
             />

@@ -596,6 +596,127 @@ describe("Create identity dialog", () => {
   });
 });
 
+describe("Identity dialog error surfaces", () => {
+  //: TEST-ONLY request id: 32 lower-case hex characters, like the header.
+  const REQUEST_ID = "00112233445566778899aabbccddeeff";
+
+  function bootstrapResponse(): Response {
+    return new Response(
+      JSON.stringify({
+        csrf_token: "test-only-value-not-a-real-token",
+        csrf_header: "X-Station-CSRF",
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  it("carries the code, HTTP status and request id when creation fails", async () => {
+    // The help screen tells the user to send the "copy diagnostics" output.
+    // These dialogs used to print a bare sentence, so exactly where support
+    // is most needed there was no code, no request id and nothing to copy.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes("/api/session/bootstrap")) return Promise.resolve(bootstrapResponse());
+        if (url.includes("/api/conformance/status")) {
+          return Promise.resolve(
+            new Response(JSON.stringify(CONFORMANT), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          );
+        }
+        if (init?.method === "POST") {
+          return Promise.resolve(
+            new Response(JSON.stringify({ detail: "vault_locked" }), {
+              status: 500,
+              headers: {
+                "Content-Type": "application/json",
+                "X-Station-Request-Id": REQUEST_ID,
+              },
+            }),
+          );
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(NO_IDENTITY), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }),
+    );
+
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<IdentityPage />);
+    await screen.findByText("Kimlik olusturulmadi");
+
+    await user.click(screen.getByRole("button", { name: "Yeni kimlik olustur" }));
+    const passphrases = await screen.findAllByLabelText(/Kasa parolasi/);
+    await user.type(passphrases[0]!, "TEST-ONLY-passphrase-01");
+    await user.type(passphrases[1]!, "TEST-ONLY-passphrase-01");
+    await user.type(
+      screen.getByLabelText(/Onaylamak icin tam olarak/),
+      NO_IDENTITY.create_confirmation_text,
+    );
+    await user.click(screen.getByRole("button", { name: "Kimligi olustur" }));
+
+    expect(await screen.findByText("Kimlik olusturulamadi")).toBeInTheDocument();
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("Kod: vault_locked");
+    expect(text).toContain("HTTP: 500");
+    expect(text).toContain(`Istek: ${REQUEST_ID}`);
+    expect(
+      screen.getByRole("button", { name: "Tani bilgisini kopyala" }),
+    ).toBeInTheDocument();
+    // A mutation is not re-fired from an alert; the user resubmits instead.
+    expect(screen.queryByRole("button", { name: "Yeniden dene" })).toBeNull();
+  });
+
+  it("never shows a raw JavaScript message when a non-ApiError escapes", async () => {
+    // `URL.createObjectURL` throwing a TypeError is a real path in the export
+    // dialog. The old helper fell through to `error.message`, which would put
+    // an internal engine string in front of the user.
+    stubIdentity(READY);
+    await bootstrapSession();
+
+    const original = Object.getOwnPropertyDescriptor(URL, "createObjectURL");
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      writable: true,
+      value: () => {
+        throw new TypeError("TEST-ONLY-RAW-INTERNAL-DETAIL");
+      },
+    });
+
+    try {
+      const user = userEvent.setup();
+      render(<IdentityPage />);
+      await screen.findByText(/did:key:z6Mk/);
+
+      await user.click(screen.getByRole("button", { name: "Recovery dosyasi olustur" }));
+      const fields = await screen.findAllByLabelText(/Recovery parolasi/);
+      await user.type(fields[0]!, "TEST-ONLY-recovery-passphrase-01");
+      await user.type(fields[1]!, "TEST-ONLY-recovery-passphrase-01");
+      await user.click(screen.getByRole("button", { name: "Recovery dosyasini indir" }));
+
+      expect(await screen.findByText("Recovery olusturulamadi")).toBeInTheDocument();
+      const text = document.body.textContent ?? "";
+      expect(text).not.toContain("TEST-ONLY-RAW-INTERNAL-DETAIL");
+      expect(text).toContain("Kod: unexpected_error");
+      expect(text).toContain("Istek tamamlanamadi.");
+    } finally {
+      if (original !== undefined) {
+        Object.defineProperty(URL, "createObjectURL", original);
+      } else {
+        Reflect.deleteProperty(URL, "createObjectURL");
+      }
+    }
+  });
+});
+
 describe("Compose and Verify surface", () => {
   it("stays locked and reflects the real write gate", async () => {
     stubIdentity(NO_IDENTITY);
@@ -1184,6 +1305,46 @@ describe("Ayarlar ve Yardim surface", () => {
 
     expect(await screen.findByText("Kapi durumu okunamadi")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Yeniden dene" })).toBeInTheDocument();
+  });
+
+  it("disables the gate retry while the retry is in flight", async () => {
+    // This page had no loading state at all, so its retry could be clicked
+    // repeatedly and start a request each time.
+    let calls = 0;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => {
+        calls += 1;
+        if (calls === 1) return Promise.reject(new TypeError("Failed to fetch"));
+        return gate.then(
+          () =>
+            new Response(JSON.stringify(NO_IDENTITY.gate), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+        );
+      }),
+    );
+
+    const user = userEvent.setup();
+    render(<SettingsHelpPage status={null} />);
+
+    await screen.findByText("Kapi durumu okunamadi");
+    await user.click(screen.getByRole("button", { name: "Yeniden dene" }));
+
+    const busy = await screen.findByRole("button", { name: "Yeniden deneniyor..." });
+    expect(busy).toBeDisabled();
+    const callsAfterRetry = calls;
+    fireEvent.click(busy);
+    expect(calls).toBe(callsAfterRetry);
+
+    release();
+    expect(await screen.findByText("Dis yazma kapali")).toBeInTheDocument();
   });
 
   it("is honest about what arrives in later packages", async () => {

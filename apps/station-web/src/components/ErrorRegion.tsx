@@ -24,6 +24,15 @@ interface ErrorRegionProps {
   readonly title?: string;
   /** Offered when the failure class is retryable. */
   readonly onRetry?: () => void;
+  /**
+   * True while the retried operation is in flight.
+   *
+   * Retry is an async action like any other, so it obeys the same rule as
+   * every other async control here: disabled with a pending label until the
+   * request settles. Without it, five clicks on a failed 15-second read start
+   * five concurrent requests.
+   */
+  readonly retryPending?: boolean;
 }
 
 type CopyState = "idle" | "copied" | "failed";
@@ -45,7 +54,13 @@ function recoveryHint(error: ApiError): string | null {
   return null;
 }
 
-export function ErrorRegion({ error, section, title, onRetry }: ErrorRegionProps) {
+export function ErrorRegion({
+  error,
+  section,
+  title,
+  onRetry,
+  retryPending = false,
+}: ErrorRegionProps) {
   const [copyState, setCopyState] = useState<CopyState>("idle");
   const hint = recoveryHint(error);
 
@@ -86,8 +101,13 @@ export function ErrorRegion({ error, section, title, onRetry }: ErrorRegionProps
               </span>
               <span className="flex flex-wrap gap-2">
                 {error.retryable && onRetry !== undefined && (
-                  <Button onPress={onRetry} size="sm" variant="secondary">
-                    Yeniden dene
+                  <Button
+                    isDisabled={retryPending}
+                    onPress={onRetry}
+                    size="sm"
+                    variant="secondary"
+                  >
+                    {retryPending ? "Yeniden deneniyor..." : "Yeniden dene"}
                   </Button>
                 )}
                 <Button onPress={() => void copyDiagnostics()} size="sm" variant="ghost">

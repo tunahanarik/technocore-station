@@ -19,6 +19,8 @@ function errorOfKind(kind: ApiErrorKind): ApiError {
   switch (kind) {
     case "timeout":
       return new ApiError(0, "timeout", { kind: "timeout" });
+    case "canceled":
+      return new ApiError(0, "request_canceled", { kind: "canceled" });
     case "network":
       return new ApiError(0, "network_error", { kind: "network" });
     case "malformed":
@@ -38,6 +40,7 @@ function errorOfKind(kind: ApiErrorKind): ApiError {
 
 const ALL_KINDS: readonly ApiErrorKind[] = [
   "timeout",
+  "canceled",
   "network",
   "malformed",
   "auth",
@@ -80,6 +83,48 @@ describe("ErrorRegion", () => {
     render(<ErrorRegion error={errorOfKind("timeout")} onRetry={onRetry} section="Test" />);
 
     await user.click(screen.getByRole("button", { name: "Yeniden dene" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables the retry and says so while the retried request is in flight", async () => {
+    // Section 1.4 of the action map: an async control is disabled with a
+    // pending label while its request is in flight. Retry is no exception -
+    // five clicks on a failed 15-second read used to start five requests.
+    const onRetry = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ErrorRegion error={errorOfKind("timeout")} onRetry={onRetry} retryPending section="Test" />,
+    );
+
+    const button = screen.getByRole("button", { name: "Yeniden deneniyor..." });
+    expect(button).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Yeniden dene" })).toBeNull();
+
+    await user.click(button);
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
+  it("starts no second request when the retry is clicked repeatedly", async () => {
+    // The probe that found this: five clicks, five callback invocations.
+    // The pending flag is what stops the second activation.
+    const onRetry = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <ErrorRegion error={errorOfKind("network")} onRetry={onRetry} section="Test" />,
+    );
+
+    const button = screen.getByRole("button", { name: "Yeniden dene" });
+    await user.click(button);
+    expect(onRetry).toHaveBeenCalledTimes(1);
+
+    // The caller flips its loading flag the moment the request starts.
+    rerender(
+      <ErrorRegion error={errorOfKind("network")} onRetry={onRetry} retryPending section="Test" />,
+    );
+
+    for (let click = 0; click < 4; click += 1) {
+      await user.click(screen.getByRole("button", { name: "Yeniden deneniyor..." }));
+    }
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 

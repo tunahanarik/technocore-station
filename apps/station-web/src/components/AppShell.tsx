@@ -1,5 +1,5 @@
 import { Button } from "@heroui/react";
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import type { ApiError } from "../api/client";
 import type { AppStatus } from "../api/types";
@@ -30,10 +30,17 @@ interface AppShellProps {
  * mounted, so each page keeps the existing fetch-your-own-data pattern.
  * There is no router and no URL sync (no deep links, no new dependency),
  * and the collapse state is React state only - never browser storage.
+ *
+ * Collapsing narrows the menu; it never removes it. The `<nav>` landmark and
+ * every section button stay in the tree, with the label reduced to an initial
+ * for sighted users and kept in full as the button's accessible name. An
+ * unmounted landmark would take the whole menu away from a screen-reader user
+ * while a sighted user still sees a narrow one.
  */
 export function AppShell({ status, loading, connectionError, onRetryConnection }: AppShellProps) {
   const [selected, setSelected] = useState<SectionId>(DEFAULT_SECTION_ID);
   const [collapsed, setCollapsed] = useState(false);
+  const navId = useId();
 
   return (
     <div className="flex min-h-screen bg-background text-foreground">
@@ -44,6 +51,7 @@ export function AppShell({ status, loading, connectionError, onRetryConnection }
       >
         <div>
           <Button
+            aria-controls={navId}
             aria-expanded={!collapsed}
             onPress={() => setCollapsed((current) => !current)}
             size="sm"
@@ -53,32 +61,42 @@ export function AppShell({ status, loading, connectionError, onRetryConnection }
           </Button>
         </div>
 
-        {!collapsed && (
-          <nav aria-label="Ana bolumler">
-            <ul className="flex flex-col gap-1">
-              {READY_SECTIONS.map((section) => {
-                const isSelected = selected === section.id;
-                return (
-                  <li key={section.id}>
-                    <button
-                      aria-current={isSelected ? "page" : undefined}
-                      className={`w-full rounded-lg px-3 py-2 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:outline-none ${
-                        isSelected
-                          ? "bg-surface-secondary font-semibold text-foreground"
-                          : "text-muted hover:bg-surface-secondary/60 hover:text-foreground"
-                      }`}
-                      onClick={() => setSelected(section.id)}
-                      type="button"
-                    >
-                      {section.label}
-                      {isSelected && <span className="sr-only"> (secili bolum)</span>}
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </nav>
-        )}
+        <nav aria-label="Ana bolumler" id={navId}>
+          <ul className="flex flex-col gap-1">
+            {READY_SECTIONS.map((section) => {
+              const isSelected = selected === section.id;
+              return (
+                <li key={section.id}>
+                  <button
+                    aria-current={isSelected ? "page" : undefined}
+                    className={`w-full rounded-lg py-2 text-sm transition-colors focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:outline-none ${
+                      collapsed ? "px-2 text-center" : "px-3 text-left"
+                    } ${
+                      isSelected
+                        ? "bg-surface-secondary font-semibold text-foreground"
+                        : "text-muted hover:bg-surface-secondary/60 hover:text-foreground"
+                    }`}
+                    onClick={() => setSelected(section.id)}
+                    type="button"
+                  >
+                    {collapsed ? (
+                      <>
+                        {/* Visual shorthand only. The accessible name stays
+                            the full label, so the menu reads identically
+                            collapsed or not. */}
+                        <span aria-hidden="true">{section.label.slice(0, 1)}</span>
+                        <span className="sr-only">{section.label}</span>
+                      </>
+                    ) : (
+                      section.label
+                    )}
+                    {isSelected && <span className="sr-only"> (secili bolum)</span>}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </nav>
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -97,6 +115,7 @@ export function AppShell({ status, loading, connectionError, onRetryConnection }
               <ErrorRegion
                 error={connectionError}
                 onRetry={onRetryConnection}
+                retryPending={loading}
                 section="Kabuk / Oturum baslatma"
                 title="Yerel cekirdege baglanilamadi"
               />

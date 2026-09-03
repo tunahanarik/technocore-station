@@ -992,10 +992,19 @@ sonu özetlerini almaya devam eder.
       etkileşim için ekran yolu / önkoşul / API / loading-success-error-
       timeout-iptal / test kimliği. Browser QA yok (ADR-0001 m.4; manuel
       kabul Paket J kılavuzuna).
-- [x] **814 pytest** (+10 `test_error_contract.py`) + **115 Vitest**
-      (59 → 115). Rapor:
+- [x] **Bağımsız inceleme bir P1 buldu ve merge öncesi kapatıldı:**
+      `RedactingFilter` yalnız log mesajını temizliyordu; traceback'i
+      formatter sonradan `record.exc_info`'dan üretiyordu ve filtre ona
+      dokunmuyordu. Paket C, uygulama katmanında bilerek `exc_info`
+      logladığı için bypass'ı bu paket açtı. Artık `exc_text`, traceback ve
+      `stack_info` da redakte edilir; filtre `uvicorn*` logger'larına
+      doğrudan bağlıdır (Starlette istisnayı yeniden fırlattığı için uvicorn
+      aynı traceback'i ikinci kez yazıyordu). Testler **formatlanmış handler
+      çıktısı** üzerinde iddia kurar.
+- [x] **823 pytest** (+10 hata sözleşmesi, +9 inceleme düzeltmesi) +
+      **130 Vitest** (59 → 115 → 130). Rapor:
       [`docs/verification/paket-c.md`](docs/verification/paket-c.md).
-- [x] SI-125…SI-126, IMP-259…IMP-260.
+- [x] SI-125…SI-128, IMP-259…IMP-263.
 
 ## Sonraki aşama: Aşama 4 — Composer & Participation
 

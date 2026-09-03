@@ -42,13 +42,17 @@ function labelFor(state: string, stage: string): string {
 export function ComposeVerifyPage() {
   const [status, setStatus] = useState<IdentityStatus | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
+  const [loading, setLoading] = useState(true);
 
   const load = useCallback(async (): Promise<void> => {
+    setLoading(true);
     try {
       setStatus(await fetchIdentity());
       setError(null);
     } catch (caught) {
       setError(toApiError(caught));
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -89,6 +93,7 @@ export function ComposeVerifyPage() {
             <ErrorRegion
               error={error}
               onRetry={() => void load()}
+              retryPending={loading}
               section="Olustur ve Dogrula / On kosullar"
               title="Kapi durumu okunamadi"
             />

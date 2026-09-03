@@ -47,16 +47,19 @@ function ConformancePanel({
   conformance,
   error,
   onRetry,
+  retryPending,
 }: {
   readonly conformance: ConformanceStatus | null;
   readonly error: ApiError | null;
   readonly onRetry: () => void;
+  readonly retryPending: boolean;
 }) {
   if (error !== null) {
     return (
       <ErrorRegion
         error={error}
         onRetry={onRetry}
+        retryPending={retryPending}
         section="Kimlik ve Guvenlik / Protokol uygunlugu"
         title="Uygunluk durumu okunamadi"
       />
@@ -183,10 +186,14 @@ export function IdentityPage() {
   const [conformanceError, setConformanceError] = useState<ApiError | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(true);
+  // Tracked separately from `loading` so a failed conformance read can disable
+  // its own retry without the identity surface waiting on it.
+  const [conformanceLoading, setConformanceLoading] = useState(true);
   const [dialog, setDialog] = useState<DialogName>(null);
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true);
+    setConformanceLoading(true);
     try {
       setStatus(await fetchIdentity());
       setError(null);
@@ -205,6 +212,8 @@ export function IdentityPage() {
     } catch (caught) {
       setConformance(null);
       setConformanceError(toApiError(caught));
+    } finally {
+      setConformanceLoading(false);
     }
   }, []);
 
@@ -236,6 +245,7 @@ export function IdentityPage() {
             <ErrorRegion
               error={error}
               onRetry={() => void load()}
+              retryPending={loading}
               section="Kimlik ve Guvenlik"
               title="Kimlik durumu okunamadi"
             />
@@ -277,6 +287,7 @@ export function IdentityPage() {
             <ErrorRegion
               error={error}
               onRetry={() => void load()}
+              retryPending={loading}
               section="Kimlik ve Guvenlik"
               title="Son islem basarisiz oldu"
             />
@@ -408,6 +419,7 @@ export function IdentityPage() {
             conformance={conformance}
             error={conformanceError}
             onRetry={() => void load()}
+            retryPending={conformanceLoading}
           />
 
           <Separator />

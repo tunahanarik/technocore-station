@@ -168,14 +168,39 @@ describe("request deadlines", () => {
     expect(error.userMessage).toContain("zaman asimina");
   });
 
-  it("classifies a plain abort as a timeout as well", async () => {
+  it("calls an abort a timeout only when our own deadline fired", async () => {
+    // Some runtimes surface a timed-out signal as a plain AbortError. The
+    // claim "the service was too slow" is still true there, because the
+    // signal we passed is the one that aborted.
+    const controller = new AbortController();
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => {
+        controller.abort(new DOMException("The operation timed out.", "TimeoutError"));
+        return Promise.reject(new DOMException("Aborted.", "AbortError"));
+      }),
+    );
+
+    const error = await captureApiError(fetchAppStatus());
+    expect(error.kind).toBe("timeout");
+    expect(error.code).toBe("timeout");
+  });
+
+  it("classifies an abort our deadline did not cause as canceled, not a timeout", async () => {
+    // The old code called every abort a timeout, which asserts that the local
+    // service failed to answer in time. Nothing here observed that.
     vi.stubGlobal(
       "fetch",
       vi.fn().mockRejectedValue(new DOMException("Aborted.", "AbortError")),
     );
 
     const error = await captureApiError(fetchAppStatus());
-    expect(error.kind).toBe("timeout");
+    expect(error.kind).toBe("canceled");
+    expect(error.code).toBe("request_canceled");
+    expect(error.status).toBe(0);
+    expect(error.retryable).toBe(true);
+    expect(error.userMessage).not.toContain("zaman asimina");
   });
 });
 
@@ -272,6 +297,22 @@ describe("failure classification", () => {
     const error = await captureApiError(fetchAppStatus());
     expect(error.requestId).toBe(REQUEST_ID);
     expect(error.code).toBe("internal_error");
+  });
+
+  it("refuses an upper-case request id: the server writes lower-case hex", async () => {
+    // uuid4().hex is always lower case, so an upper-case value did not come
+    // from the shape we documented and must not be reported as our id.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({ detail: "internal_error" }, 500, {
+          "X-Station-Request-Id": REQUEST_ID.toUpperCase(),
+        }),
+      ),
+    );
+
+    const error = await captureApiError(fetchAppStatus());
+    expect(error.requestId).toBeNull();
   });
 
   it("treats a missing or malformed request id header as null", async () => {

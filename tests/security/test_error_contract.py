@@ -36,6 +36,10 @@ REQUEST_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 #: the message does (server log) and does not (response body) end up.
 BOOM_MARKER = "TEST-ONLY-unhandled-exception-marker"
 
+#: A path outside both NO_STORE_PREFIXES. In production this family is the
+#: SPA catch-all, which is exactly where an uncached 500 was being lost.
+OUTSIDE_NO_STORE_PATH = "/probe-boom"
+
 
 def _request_id(response: httpx.Response) -> str:
     """The response's request id, after asserting it is well-formed."""
@@ -60,6 +64,24 @@ def exploding_client(
         raise RuntimeError(BOOM_MARKER)
 
     monkeypatch.setattr(api_routes, "HealthResponse", _boom)
+    with TestClient(app, base_url=base_url, raise_server_exceptions=False) as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def exploding_outside_api_client(app: FastAPI, base_url: str) -> Iterator[TestClient]:
+    """A client whose exploding route lives **outside** ``/api`` and ``/session``.
+
+    ``NO_STORE_PREFIXES`` covers only those two families, so a 500 born on any
+    other path - the SPA catch-all in production - is the case that proves the
+    shield forces the cache directives itself rather than inheriting them from
+    the request path (SI-128).
+    """
+
+    @app.get(OUTSIDE_NO_STORE_PATH, include_in_schema=False)
+    async def probe_boom() -> dict[str, str]:
+        raise RuntimeError(BOOM_MARKER)
+
     with TestClient(app, base_url=base_url, raise_server_exceptions=False) as test_client:
         yield test_client
 
@@ -155,6 +177,19 @@ def test_the_500_body_leaks_no_traceback_and_no_secret_shape(
         assert name not in lowered
 
 
+def _assert_hardened_500(response: httpx.Response) -> None:
+    """Every header a 500 must carry, whatever path produced it."""
+    assert response.status_code == 500
+    headers = response.headers
+    assert "default-src 'none'" in headers["content-security-policy"]
+    assert headers["referrer-policy"] == "no-referrer"
+    assert headers["x-content-type-options"] == "nosniff"
+    assert headers["x-frame-options"] == "DENY"
+    assert headers["cache-control"] == "no-store"
+    assert headers["pragma"] == "no-cache"
+    _request_id(response)
+
+
 def test_the_500_response_is_as_hardened_as_any_other(
     exploding_client: TestClient,
 ) -> None:
@@ -168,6 +203,27 @@ def test_the_500_response_is_as_hardened_as_any_other(
     assert headers["x-frame-options"] == "DENY"
     assert headers["cache-control"] == "no-store"  # an /api/ path stays no-store
     _request_id(response)
+    _assert_hardened_500(response)
+
+
+def test_a_500_outside_the_no_store_prefixes_is_still_uncacheable(
+    exploding_outside_api_client: TestClient,
+) -> None:
+    """SI-128. ``NO_STORE_PREFIXES`` covers ``/api`` and ``/session`` only; an
+    error response must never be cached no matter which path produced it."""
+    response = exploding_outside_api_client.get(OUTSIDE_NO_STORE_PATH)
+    assert response.json() == {"detail": "internal_error"}
+    _assert_hardened_500(response)
+
+
+def test_a_success_outside_the_no_store_prefixes_stays_cacheable(
+    client: TestClient,
+) -> None:
+    """The shield forcing no-store must not have widened the prefix rule: a
+    non-error response outside ``/api`` and ``/session`` is unchanged."""
+    response = client.get("/no-such-path")
+    assert response.status_code == 404
+    assert "cache-control" not in response.headers
 
 
 def test_the_traceback_reaches_the_server_log_keyed_by_the_request_id(

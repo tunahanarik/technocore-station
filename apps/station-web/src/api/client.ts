@@ -40,15 +40,23 @@ let csrfToken: string | null = null;
 let csrfHeader: string = DEFAULT_CSRF_HEADER;
 
 /**
- * How a request failed, as one of eight stable classes.
+ * How a request failed, as one of nine stable classes.
  *
  * "malformed" and "network" are deliberately distinct: a response that
  * arrived but could not be parsed is not the same finding as a connection
  * that dropped, and merging them sends whoever is debugging to the wrong
  * layer.
+ *
+ * "timeout" and "canceled" are distinct for the same reason. A timeout is a
+ * claim about the service - it did not answer inside our deadline - and it is
+ * only true when our own `AbortSignal.timeout` actually fired. An abort that
+ * came from anywhere else (the document going away mid-request, or a cancel
+ * control if one is ever added) says nothing about the service, and reporting
+ * it as "the local service was too slow" would be a fabricated finding.
  */
 export type ApiErrorKind =
   | "timeout"
+  | "canceled"
   | "network"
   | "malformed"
   | "auth"
@@ -60,12 +68,19 @@ export type ApiErrorKind =
 /** Machine codes look like `not_found`; anything else is prose for humans. */
 const MACHINE_CODE_RE = /^[a-z0-9_]+$/;
 
-/** The backend request id is 32 hex characters; anything else is noise. */
-const REQUEST_ID_RE = /^[0-9a-f]{32}$/i;
+/**
+ * The backend request id is 32 lower-case hex characters.
+ *
+ * Case-sensitive on purpose: the server writes `uuid4().hex`, which is always
+ * lower case. Accepting upper case would quietly widen the documented shape
+ * and let a header from somewhere else pass as ours.
+ */
+const REQUEST_ID_RE = /^[0-9a-f]{32}$/;
 
 /** Safe Turkish fallbacks, keyed by failure class. */
 const KIND_MESSAGES: Record<ApiErrorKind, string> = {
   timeout: "Istek zaman asimina ugradi. Yerel servis zamaninda yanit vermedi.",
+  canceled: "Istek tamamlanmadan durduruldu.",
   network: "Yerel servise baglanilamadi.",
   malformed: "Yerel servisten beklenmeyen bicimde bir yanit geldi.",
   auth: "Oturum dogrulanamadi. Uygulamayi launcher uzerinden yeniden acin.",
@@ -77,6 +92,7 @@ const KIND_MESSAGES: Record<ApiErrorKind, string> = {
 
 const RETRYABLE_KINDS: ReadonlySet<ApiErrorKind> = new Set([
   "timeout",
+  "canceled",
   "network",
   "rate_limited",
   "unavailable",
@@ -136,13 +152,33 @@ export function toApiError(caught: unknown): ApiError {
   return new ApiError(0, "unexpected_error", { kind: "request" });
 }
 
-/** A fetch that threw instead of responding: deadline or connectivity. */
-function classifyFetchFailure(caught: unknown): ApiError {
-  if (
-    caught instanceof DOMException &&
-    (caught.name === "TimeoutError" || caught.name === "AbortError")
-  ) {
-    return new ApiError(0, "timeout", { kind: "timeout" });
+/** Did *our* deadline fire, or did something else abort the request? */
+function deadlineExpired(deadline: AbortSignal): boolean {
+  if (!deadline.aborted) return false;
+  const reason: unknown = deadline.reason;
+  return reason instanceof DOMException && reason.name === "TimeoutError";
+}
+
+/**
+ * A fetch that threw instead of responding: deadline, cancellation or
+ * connectivity.
+ *
+ * The abort branch checks the signal we passed rather than trusting the name
+ * on the rejection. `TimeoutError` is only ever produced by a timeout signal,
+ * so it is conclusive; a bare `AbortError` is not, and is a timeout only when
+ * our own deadline is the signal that fired. Anything else that aborted the
+ * request is reported as `canceled`, which claims nothing about the service.
+ */
+function classifyFetchFailure(caught: unknown, deadline: AbortSignal): ApiError {
+  if (caught instanceof DOMException) {
+    if (caught.name === "TimeoutError") {
+      return new ApiError(0, "timeout", { kind: "timeout" });
+    }
+    if (caught.name === "AbortError") {
+      return deadlineExpired(deadline)
+        ? new ApiError(0, "timeout", { kind: "timeout" })
+        : new ApiError(0, "request_canceled", { kind: "canceled" });
+    }
   }
   // fetch rejects with TypeError on connection failure; anything else that
   // escapes it is equally "the bytes never arrived".
@@ -159,17 +195,19 @@ async function request<T>(
   init?: RequestInit,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<T> {
+  // Held in a variable so a failure can ask whether *this* deadline fired.
+  const deadline = AbortSignal.timeout(timeoutMs);
   let response: Response;
   try {
     response = await fetch(path, {
       ...init,
       // Same-origin only: the cookie must never ride along to another origin.
       credentials: "same-origin",
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: deadline,
       headers: { Accept: "application/json", ...init?.headers },
     });
   } catch (caught) {
-    throw classifyFetchFailure(caught);
+    throw classifyFetchFailure(caught, deadline);
   }
 
   const requestId = readRequestId(response);
@@ -321,12 +359,13 @@ export async function exportRecovery(input: {
     throw new Error("session_not_bootstrapped");
   }
 
+  const deadline = AbortSignal.timeout(DEFAULT_TIMEOUT_MS);
   let response: Response;
   try {
     response = await fetch("/api/identity/recovery/export", {
       method: "POST",
       credentials: "same-origin",
-      signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+      signal: deadline,
       headers: { "Content-Type": "application/json", [csrfHeader]: csrfToken },
       body: JSON.stringify({
         recovery_passphrase: input.recoveryPassphrase,
@@ -335,7 +374,7 @@ export async function exportRecovery(input: {
       }),
     });
   } catch (caught) {
-    throw classifyFetchFailure(caught);
+    throw classifyFetchFailure(caught, deadline);
   }
 
   const requestId = readRequestId(response);

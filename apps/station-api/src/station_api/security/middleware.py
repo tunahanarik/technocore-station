@@ -130,17 +130,22 @@ def _denied(code: str, status_code: int) -> JSONResponse:
     return JSONResponse({"detail": code}, status_code=status_code)
 
 
-def apply_security_headers(response: Response, path: str) -> None:
+def apply_security_headers(response: Response, path: str, *, no_store: bool = False) -> None:
     """Attach the hardening headers to one response.
 
     The single source of truth for both places a response can be born: the
     middleware chain below, and the unhandled-exception shield that Starlette
     runs outside it. Neither copy can drift from the other because there is
     no copy.
+
+    ``no_store`` forces the cache directives on regardless of ``path``. The
+    path prefixes cover the two families that always carry session state; an
+    error response must never be cached whatever path produced it, and the
+    static frontend lives outside both prefixes (SI-128).
     """
     for header, value in _SECURITY_HEADERS.items():
         response.headers[header] = value
-    if path.startswith(NO_STORE_PREFIXES):
+    if no_store or path.startswith(NO_STORE_PREFIXES):
         response.headers["Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
 
@@ -189,6 +194,15 @@ async def unhandled_exception_shield(request: Request, exc: Exception) -> Respon
     can be matched to the full story. The URL path is deliberately not logged
     here: ``/session/<token>`` would put a live token one formatting layer
     away from disk (SI-07).
+
+    The traceback is written through the application logger, which reaches
+    only handlers carrying ``RedactingFilter``; that filter renders and
+    scrubs the traceback itself, because the formatter would otherwise
+    produce the raw one after every filter has run (SI-127).
+
+    ``no_store=True`` is passed explicitly: a 500 can be produced on any
+    path, including the static frontend's, and an error response must never
+    be cached (SI-128).
     """
     request_id = getattr(request.state, "request_id", None) or uuid4().hex
     _logger.exception(
@@ -198,7 +212,7 @@ async def unhandled_exception_shield(request: Request, exc: Exception) -> Respon
     )
     response = _denied("internal_error", status_code=500)
     response.headers[REQUEST_ID_HEADER_NAME] = request_id
-    apply_security_headers(response, request.url.path)
+    apply_security_headers(response, request.url.path, no_store=True)
     return response
 
 

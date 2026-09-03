@@ -97,8 +97,12 @@ export function OverviewPage({ status, loading, onNavigate }: OverviewPageProps)
   const [technocoreError, setTechnocoreError] = useState<ApiError | null>(null);
   const [conformance, setConformance] = useState<ConformanceStatus | null>(null);
   const [conformanceError, setConformanceError] = useState<ApiError | null>(null);
+  // One flag for all three cards on purpose: every card's retry re-runs the
+  // same load, so while it is in flight no card's retry may start another.
+  const [refreshing, setRefreshing] = useState(true);
 
   const load = useCallback(async (): Promise<void> => {
+    setRefreshing(true);
     // Three independent reads: each failure is its own finding, shown on its
     // own card, and one does not hide the other two.
     try {
@@ -122,6 +126,7 @@ export function OverviewPage({ status, loading, onNavigate }: OverviewPageProps)
       setConformance(null);
       setConformanceError(toApiError(caught));
     }
+    setRefreshing(false);
   }, []);
 
   useEffect(() => {
@@ -151,6 +156,7 @@ export function OverviewPage({ status, loading, onNavigate }: OverviewPageProps)
             <ErrorRegion
               error={identityError}
               onRetry={() => void load()}
+              retryPending={refreshing}
               section="Genel Bakis / Kimlik ozeti"
               title="Kimlik ozeti okunamadi"
             />
@@ -204,6 +210,7 @@ export function OverviewPage({ status, loading, onNavigate }: OverviewPageProps)
             <ErrorRegion
               error={technocoreError}
               onRetry={() => void load()}
+              retryPending={refreshing}
               section="Genel Bakis / Technocore ozeti"
               title="Technocore ozeti okunamadi"
             />
@@ -255,6 +262,7 @@ export function OverviewPage({ status, loading, onNavigate }: OverviewPageProps)
             <ErrorRegion
               error={conformanceError}
               onRetry={() => void load()}
+              retryPending={refreshing}
               section="Genel Bakis / Uygunluk ozeti"
               title="Uygunluk ozeti okunamadi"
             />

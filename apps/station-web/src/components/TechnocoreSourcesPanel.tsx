@@ -166,14 +166,20 @@ export function TechnocoreSourcesPanel() {
   // state is harmless, but re-running the outbound check must stay the same
   // explicit action the user already took, never an upgrade of a mere read.
   const [errorSource, setErrorSource] = useState<"load" | "check">("load");
+  // Kept apart from `busy`: reading local state must not disable the outbound
+  // check button, and a retry must reflect whichever action it repeats.
+  const [loadBusy, setLoadBusy] = useState(true);
 
   const load = useCallback(async (): Promise<void> => {
+    setLoadBusy(true);
     try {
       setStatus(await fetchTechnocore());
       setError(null);
     } catch (caught) {
       setError(toApiError(caught));
       setErrorSource("load");
+    } finally {
+      setLoadBusy(false);
     }
   }, []);
 
@@ -240,6 +246,7 @@ export function TechnocoreSourcesPanel() {
         <ErrorRegion
           error={error}
           onRetry={() => void (errorSource === "check" ? check() : load())}
+          retryPending={errorSource === "check" ? busy : loadBusy}
           section="Kaynaklar / Resmi kaynak denetimi"
           title={errorSource === "check" ? "Denetim yapilamadi" : "Durum okunamadi"}
         />
