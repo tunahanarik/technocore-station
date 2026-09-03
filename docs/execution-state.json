@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-09-03T18:30:00Z",
+  "updated_utc": "2026-09-03T21:15:00Z",
   "base_sha": "5411171dd2302c6fea5a2af22695503859317c27",
   "note": "Kayit ile gercek Git/GitHub durumu celisirse Git/GitHub kaniti esastir.",
   "stages": [
@@ -60,28 +60,36 @@
     {
       "id": "D",
       "name": "Composer & Participation",
-      "status": "implementing",
+      "status": "merged",
       "branch": "stage-d-composer",
-      "pr": null,
-      "reviewed_sha": null,
-      "tested_sha": null,
-      "merge_sha": null,
-      "findings": [],
+      "pr": 13,
+      "reviewed_sha": "4bb0cc137f09e5ed19277f1e39817019e39c63ad",
+      "tested_sha": "4bb0cc137f09e5ed19277f1e39817019e39c63ad",
+      "merge_sha": "d0efd3679ae124f1b6cea3c5465a9593376a0830",
+      "findings": [
+        "ADR-0002: imzali note lane'i yalniz room-owners/room-allow'da kabul edildigi icin note gonderimi KAPSAM DISI; yalniz mesaj lane'i (POST /r/{room})",
+        "Uc adimli onay zinciri (draft/sign/send), send_token bes baga + oturuma bagli, TTL 180 sn; gate uc adimda da kosuyor",
+        "Nonce (did,room) basina monoton, tablo sayacin kendisi; process kilidi + UNIQUE; gercek thread yarislariyla kanitli; leading zero temsil edilemez",
+        "Uc sonuc: accepted / refused (400,403,413,422) / outcome_unknown; hicbir durumda otomatik tekrar yok; nonce ucunde de yanmis kalir",
+        "Vacuous test bulgusu: FastAPI router sarmalayicilari yuzunden 3 guvenlik testi bos kosuyordu; yollar artik ozyinelemeli toplaniyor",
+        "Bagimsiz inceleme (insan DEGIL): P0/P1 yok, mutasyon skoru 12/12. P2-1 govde tamponlama + yanlis docstring, P2-2 var olmayan wiring testi + transport ile TLS kapatilabilmesi, P2-3 ag kesici yalniz httpx katmanindaydi, P3-1/2/4/5 - hepsi kapatildi",
+        "1049 pytest + 155 Vitest; GERCEK SERVISE HICBIR YAZMA YAPILMADI"
+      ],
       "failed_attempts": 0,
-      "next_safe_step": "Mevcut identity/vault/signer/conform yuzeyini kesfet; nonce rezervasyonu (transaction, monoton), taslak-onay-verdict digest baglama, outcome_unknown, POST-only write. CANLI YAZMA YOK."
+      "next_safe_step": null
     },
     {
       "id": "E",
       "name": "Evidence & Audit",
-      "status": "planned",
-      "branch": null,
+      "status": "implementing",
+      "branch": "stage-e-evidence",
       "pr": null,
       "reviewed_sha": null,
       "tested_sha": null,
       "merge_sha": null,
       "findings": [],
       "failed_attempts": 0,
-      "next_safe_step": null
+      "next_safe_step": "Mevcut evidence-model/snapshot/compose yuzeyini kesfet; exact yakalama, 4 guven seviyesi, ayri DPAPI zarfinda HMAC zinciri, deterministik export. AC-14."
     },
     {
       "id": "F",
