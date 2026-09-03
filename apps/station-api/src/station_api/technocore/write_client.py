@@ -43,7 +43,9 @@ Transport rules, same as the read client
 * The response body is **streamed** under a cap, so what is buffered is
   bounded by ``MAX_RESPONSE_BYTES`` rather than by whatever the server chose
   to send. ``response.content`` would have buffered the whole body and sliced
-  it afterwards, which is not a cap. Only a bounded, swept excerpt survives.
+  it afterwards, which is not a cap. What survives is a bounded, swept excerpt
+  for display and - since Package E - the same bounded bytes for the evidence
+  record. Both are inside ``MAX_RESPONSE_BYTES``; neither is the whole body.
 * A body that arrives with a ``Content-Encoding`` we did not ask for is not
   decompressed at all. ``Accept-Encoding: identity`` is a request and a server
   may ignore it; refusing the encoding on the way back is what makes the
@@ -55,6 +57,7 @@ Transport rules, same as the read client
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -62,6 +65,7 @@ from enum import StrEnum
 
 import httpx
 
+from station_api.strict_json import canonical_json_bytes
 from station_api.technocore.client import USER_AGENT, assert_allowed_url
 from station_api.technocore.projection import safe_display
 from station_api.technocore.write_targets import WRITE_METHOD, WriteTarget
@@ -118,10 +122,27 @@ class WriteResult:
     response_excerpt: str
     attempted_at: datetime
     url: str
+    #: The exact bytes of the request body. This client serialises them once
+    #: and sends *those bytes*, so what the evidence record keeps is what left
+    #: the process rather than a second encoding of the same dictionary.
+    #: Empty only when no request was ever built.
+    request_body: bytes = b""
+    #: The response body, already bounded by ``MAX_RESPONSE_BYTES`` and by the
+    #: unrequested-encoding rule. Kept for the evidence record; the excerpt
+    #: above is what a user sees.
+    response_body: bytes = b""
 
     @property
     def is_accepted(self) -> bool:
         return self.outcome is WriteOutcome.ACCEPTED
+
+    @property
+    def request_sha256(self) -> str:
+        return hashlib.sha256(self.request_body).hexdigest()
+
+    @property
+    def response_sha256(self) -> str:
+        return hashlib.sha256(self.response_body).hexdigest()
 
 
 class SignedWriteClient:
@@ -160,13 +181,32 @@ class SignedWriteClient:
         assert_allowed_url(url)
         attempted_at = datetime.now(UTC)
 
+        # Serialised here, once, and sent as raw bytes rather than handed to
+        # httpx as ``json=``. Two reasons, and the second is why it changed in
+        # Package E:
+        #
+        # * the encoding is fixed by this project rather than by a dependency's
+        #   default separators, so a library upgrade cannot silently alter the
+        #   bytes on the wire;
+        # * the evidence record needs *the bytes that were sent*. Reading them
+        #   back off the request object afterwards would work, but keeping the
+        #   single value that was both sent and stored removes the possibility
+        #   of the two being different encodings of one dictionary.
+        #
+        # Key order changes (canonical JSON sorts them); the server parses
+        # JSON, where key order carries no meaning, and the signature covers
+        # the canonical *string*, not this envelope.
+        payload = canonical_json_bytes(dict(body))
+
         try:
             with (
                 self._client() as client,
-                client.stream(WRITE_METHOD, url, json=dict(body)) as response,
+                client.stream(WRITE_METHOD, url, content=payload) as response,
             ):
                 status_code = response.status_code
-                excerpt = _excerpt(_read_capped(response))
+                request_body = payload
+                response_body = _read_capped(response)
+                excerpt = _excerpt(response_body)
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             return WriteResult(
                 outcome=WriteOutcome.OUTCOME_UNKNOWN,
@@ -179,6 +219,10 @@ class SignedWriteClient:
                 response_excerpt="",
                 attempted_at=attempted_at,
                 url=url,
+                # Recorded even here - especially here. ``outcome_unknown`` is
+                # the case where a record of what was sent matters most, and a
+                # transport failure does not mean the body was never built.
+                request_body=payload,
             )
 
         return _classify(
@@ -186,6 +230,8 @@ class SignedWriteClient:
             excerpt=excerpt,
             attempted_at=attempted_at,
             url=url,
+            request_body=request_body,
+            response_body=response_body,
         )
 
     def _client(self) -> httpx.Client:
@@ -201,6 +247,9 @@ class SignedWriteClient:
             headers={
                 "User-Agent": USER_AGENT,
                 "Accept": "application/json",
+                # The body is serialised in ``send`` and sent as raw bytes, so
+                # the content type is declared here rather than inferred.
+                "Content-Type": "application/json",
                 # Identity encoding: a write receipt is small, so there is no
                 # bandwidth to save by accepting compression. This is only a
                 # *request*, though, so ``_read_capped`` enforces the same rule
@@ -212,7 +261,13 @@ class SignedWriteClient:
 
 
 def _classify(
-    *, status_code: int, excerpt: str, attempted_at: datetime, url: str
+    *,
+    status_code: int,
+    excerpt: str,
+    attempted_at: datetime,
+    url: str,
+    request_body: bytes = b"",
+    response_body: bytes = b"",
 ) -> WriteResult:
     """Map a received status onto the three-valued outcome."""
     if 200 <= status_code < 300:
@@ -223,6 +278,8 @@ def _classify(
             response_excerpt=excerpt,
             attempted_at=attempted_at,
             url=url,
+            request_body=request_body,
+            response_body=response_body,
         )
 
     if status_code in REFUSED_STATUSES:
@@ -233,6 +290,8 @@ def _classify(
             response_excerpt=excerpt,
             attempted_at=attempted_at,
             url=url,
+            request_body=request_body,
+            response_body=response_body,
         )
 
     # Everything else, including 3xx. A redirect is not a refusal: the origin
@@ -247,6 +306,8 @@ def _classify(
         response_excerpt=excerpt,
         attempted_at=attempted_at,
         url=url,
+        request_body=request_body,
+        response_body=response_body,
     )
 
 

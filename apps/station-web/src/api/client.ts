@@ -15,11 +15,15 @@
 
 import type {
   AppStatus,
+  AuditChainStatus,
   ComposeCapability,
   ComposeDraft,
   ComposeSendResult,
   ComposeSignature,
   ConformanceStatus,
+  EvidenceCaptureResult,
+  EvidenceExportFormat,
+  EvidenceList,
   IdentityStatus,
   ProtectionMode,
   RecoveryInspectResult,
@@ -58,6 +62,26 @@ export const SIGN_TIMEOUT_MS = 30000;
  * the server's three-valued verdict, not our stopwatch, as the answer.
  */
 export const SEND_TIMEOUT_MS = 45000;
+
+/**
+ * One read-only evidence capture, and the longest deadline in the app.
+ *
+ * A capture is not a local read: the backend opens the room's official export
+ * and scans it line by line, under a 12 MiB ceiling (10 MiB ring plus header
+ * headroom). Its own transport budget is connect 5s + read 30s, but that read
+ * timeout applies **per chunk**, not to the whole scan - so a slow link
+ * delivering megabytes can legitimately keep the route busy far longer than
+ * thirty seconds while never once stalling for thirty.
+ *
+ * Ninety seconds is chosen to sit above that realistic scan and still bound
+ * the UI. Cutting it shorter would abandon a scan that was making progress and
+ * report `timeout` - a claim about the local service - instead of letting the
+ * backend name which of the six capture states it actually reached. That
+ * matters more here than elsewhere: the whole point of the six states is that
+ * "we could not finish reading" is a different finding from "the line is not
+ * there", and a client stopwatch must not collapse the two.
+ */
+export const CAPTURE_TIMEOUT_MS = 90000;
 
 // Memory only. Cleared when the page unloads, exactly like the server session.
 let csrfToken: string | null = null;
@@ -527,6 +551,90 @@ export async function sendComposeMessage(sendToken: string): Promise<ComposeSend
     { send_token: sendToken },
     SEND_TIMEOUT_MS,
   );
+}
+
+// --- Evidence and audit (Paket E) ------------------------------------------
+//
+// Four calls, and none of them can publish anything. `captureEvidenceLine` is
+// a POST because it makes the backend reach outwards, not because it writes:
+// the request body is one stored record id, the room comes from the row, and
+// there is no parameter here - or in the route behind it - that could turn a
+// capture into a second send (ADR-0003 4).
+
+/** The archive plus the audit chain's verdict, in one read. */
+export async function fetchEvidenceRecords(): Promise<EvidenceList> {
+  return request<EvidenceList>("/api/evidence/records");
+}
+
+/**
+ * Ask for one read-only capture of one record's exported line.
+ *
+ * On request only. Nothing in this app calls it on a timer, on mount or as a
+ * step of a send, and the result is never reduced to a boolean by the caller:
+ * the six states mean six different things (`docs/evidence-model.md` 3).
+ */
+export async function captureEvidenceLine(
+  evidenceId: string,
+): Promise<EvidenceCaptureResult> {
+  return mutate<EvidenceCaptureResult>(
+    "/api/evidence/capture",
+    { evidence_id: evidenceId },
+    CAPTURE_TIMEOUT_MS,
+  );
+}
+
+/** Recompute the chain and compare it against its separately held head. */
+export async function fetchAuditChain(): Promise<AuditChainStatus> {
+  return request<AuditChainStatus>("/api/evidence/audit");
+}
+
+/**
+ * Download the evidence archive. Explicit consent is part of the request.
+ *
+ * `acknowledged` is passed through from the caller rather than defaulted here,
+ * because a default in this function would be a way to export without consent
+ * that type-checks. The backend refuses a body without it (422) and refuses a
+ * `false` again in the handler; this is the third refusal, not the only one.
+ *
+ * The response is a file, so it cannot go through `request`. The server's
+ * `Content-Disposition` name is deliberately **not** read back: the download
+ * name is a client-side concern, the server already rebuilds its own from an
+ * allow-list, and parsing a header to recover a name we can state ourselves
+ * would only add a parser to be wrong about.
+ */
+export async function exportEvidence(input: {
+  readonly format: EvidenceExportFormat;
+  readonly acknowledged: boolean;
+}): Promise<{ blob: Blob }> {
+  if (csrfToken === null) {
+    throw new Error("session_not_bootstrapped");
+  }
+
+  const deadline = AbortSignal.timeout(DEFAULT_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch("/api/evidence/export", {
+      method: "POST",
+      credentials: "same-origin",
+      signal: deadline,
+      headers: { "Content-Type": "application/json", [csrfHeader]: csrfToken },
+      body: JSON.stringify({ format: input.format, acknowledged: input.acknowledged }),
+    });
+  } catch (caught) {
+    throw classifyFetchFailure(caught, deadline);
+  }
+
+  const requestId = readRequestId(response);
+
+  if (!response.ok) {
+    throw new ApiError(response.status, await readErrorDetail(response), { requestId });
+  }
+
+  try {
+    return { blob: await response.blob() };
+  } catch {
+    throw new ApiError(response.status, "malformed_response", { kind: "malformed", requestId });
+  }
 }
 
 /**

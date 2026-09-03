@@ -1066,13 +1066,59 @@ Kapsam kararları:
       `docs/evidence-model.md` onu Aşama 5'e koyar ve ADR-0002 §4.3 bu
       çelişkiyi Aşama 5 lehine kapatır.
 
-## Sonraki aşama: Aşama 5 — Evidence & Audit
+### Paket E — Evidence & Audit (Aşama 5)
 
-Kapsam: exact yakalama, dört güven seviyesi, ayrı DPAPI zarfında HMAC
-zinciri, deterministik export. Kabul kriteri: **AC-14**.
+Kapsam kararları:
+[`ADR-0003`](docs/decisions/0003-paket-e-kapsam-kararlari-2026-09-04.md).
 
-Aşama 4 ile giden yazma yolu açıldı; fakat **gerçek servise hiçbir yazma
-yapılmadı** — bütün sonuçlar mock taşıyıcıya karşı üretildi.
+- [x] **Üçüncü kapalı registry.** Pinli `openapi.json` bir export yüzeyi
+      yayımlıyor (`GET /r/{room}/export`, bayt-exact NDJSON,
+      `X-Room-Generation`), ama açıklaması **"No query parameters"** diyor —
+      `Range`/`since`/`limit` yok. Bu yol `SOURCES`'a **eklenmedi**;
+      `evidence_targets.py` açıldı, böylece altı belgelik registry'nin küme
+      eşitliği ve `/r/` yasağı aynen geçiyor. `OUTBOUND_CLIENT_MODULES`
+      iki'den üçe yazılı gerekçeyle genişledi.
+- [x] **Akış tarayıcı**, 12 MiB cap: kendi satırımızın **ham baytları** +
+      offset, satır ve bayt olarak sınırlı çevre penceresi, akışın yürüyen
+      SHA-256'sı. Satır alındıktan sonra tamponlama durur — tepe bellek
+      gövde boyutundan **bağımsız** (testle). Nonce keyfi hassasiyetli
+      `int` (19 hane 2^53'ü aşar; float'a yuvarlanmış nonce iyi imzaları
+      düşürür).
+- [x] **Altı kanıt durumu**, hiçbiri tek yeşil rozete indirgenmedi:
+      `line_captured` (yalnızca Seviye 2 gözlemi) / `line_not_found`
+      (**hiçbir şey kanıtlamaz**) / `generation_changed` (karşılaştırılamaz)
+      / `stream_truncated` / `parse_problem` / `fetch_failed`.
+      `may_retry_write` her durumda `False`; `line_not_found` bir
+      `outcome_unknown`'ı asla `not_sent`'e çevirmez.
+- [x] **HMAC zinciri** ayrı DPAPI zarfındaki başıyla; yalnız-ekleme, asla
+      budanmaz. Truncation **garanti diye sunulmuyor**: aynı-kullanıcı
+      saldırısı testte fiilen uygulanıp zincirin `intact` döndüğü
+      gösteriliyor. Uygulama sırasında gerçek bir hata yakalandı — SQLite
+      naive datetime döndürdüğü için ham `isoformat()` MAC'e girseydi her
+      zincir ilk doğrulamada bozuk okunacaktı (IMP-314).
+- [x] **Secret taraması** allow-list önce (86 karakterlik imza, `did:key:z`,
+      1-19 haneli nonce), sonra red; SHA-256 digest'leri bilinçli olarak
+      muaf tutulmadı. Eşleşme kanıt yazmasını **reddeder**, redakte etmez.
+- [x] **Export** JSON + Markdown, bayt bayt deterministik, onay yapısal
+      (`acknowledged` varsayılansız → 422). Sunucu **hiçbir yola dosya
+      yazmaz**; `downloads.py` dosya adlarını allow-list'ten kurar ve
+      recovery indirmesindeki ham f-string boşluğunu da kapatır.
+- [x] **1179 pytest** (1049 → 1179) + **206 Vitest** (155 → 206). Yeni
+      HeroUI bileşeni yok (küme 11'de kaldı, A1-R1 yeniden açılmadı).
+      Rapor: [`docs/verification/paket-e.md`](docs/verification/paket-e.md).
+- [x] SI-171…SI-198, IMP-298…IMP-326.
+- [x] **AC-14** karşılandı.
+- [x] Aşama numarası tutarsızlığı kapatıldı: API `stage=4`, launcher
+      `stage=3` diyordu; ikisi de **5** oldu.
+      `write_available_from_stage` bilinçli olarak **4** kaldı.
+
+## Sonraki aşama: Aşama 6 — proje/görev modülü temeli (Paket F)
+
+Kapsam: derleme zamanı proje/görev modül registry'si.
+
+Aşama 4 ile giden yazma yolu, Aşama 5 ile kanıt defteri açıldı; fakat
+**gerçek servise hiçbir istek gönderilmedi** — export okuması dahil her şey
+mock taşıyıcıya karşı, autouse ağ kesici altında koştu.
 
 Ön koşul: kullanıcı açıkça "başlayalım" demeden gerçek gönderim yapılmaz.
 

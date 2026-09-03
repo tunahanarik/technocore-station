@@ -408,9 +408,20 @@ class ComposeSendResponse(StrictModel):
     detail: str
     #: A bounded, swept excerpt of the server's answer.
     response_excerpt: str
-    #: True only for ``outcome_unknown``. Reconciliation needs a room read,
-    #: which this release does not open, so the state is shown as it is.
+    #: True only for ``outcome_unknown``. Package E opens the read this needs
+    #: - a user-initiated evidence capture against the official export lane -
+    #: and it means "a capture may be attempted", never "send it again"
+    #: (ADR-0003 4).
     reconciliation_required: bool
+    #: The nonce reservation this send spent. A public uuid that names a
+    #: ledger row; it is not a capability and confers nothing.
+    reservation_id: str = ""
+    #: The archived evidence record, when one was written.
+    evidence_id: str = ""
+    #: Whether the archive was written. A send is reported the same way
+    #: either way: the two facts are separate and stay separate.
+    evidence_recorded: bool = False
+    evidence_detail: str = ""
 
 
 class ComposeCapabilityResponse(StrictModel):
@@ -464,3 +475,150 @@ class TechnocoreStatusResponse(StrictModel):
     critical_unevaluable_count: int
     warning_count: int
     origin: str
+
+
+# --- evidence and audit (Package E) -----------------------------------------
+
+
+class EvidenceLevelStatus(StrictModel):
+    """One of the four trust levels, and whether this record carries it.
+
+    Reported per level rather than summed, because summing them is the exact
+    mistake the model exists to prevent: a signature proof is not a server
+    observation, and neither is a trusted time (charter 15).
+    """
+
+    level: Literal[1, 2, 3, 4]
+    name: str
+    present: bool
+    detail: str
+
+
+class EvidenceRecordResponse(StrictModel):
+    """One archived send.
+
+    Raw request and response bytes are deliberately **absent** from this
+    model. They are stored and they are exported on explicit consent; a list
+    endpoint that returned them would put them in every page load, which is a
+    different decision wearing the same words. Hashes are returned instead.
+    """
+
+    id: str
+    reservation_id: str
+    room: str
+    did: str
+    nonce: str
+    canonical_sha256: str
+    signature: str
+    http_status: int
+    #: The three-valued send result, unchanged (ADR-0002 3).
+    write_outcome: Literal[
+        "in_flight", "accepted", "refused", "outcome_unknown", "not_sent"
+    ]
+    #: One of the six capture states, or "" before any capture was attempted.
+    capture_state: Literal[
+        "",
+        "line_captured",
+        "line_not_found",
+        "generation_changed",
+        "stream_truncated",
+        "parse_problem",
+        "fetch_failed",
+    ]
+    capture_detail: str
+    captured_at: datetime | None
+    room_generation: str
+    captured_line_offset: int | None
+    captured_line_length: int | None
+    stream_sha256: str
+    stream_bytes: int
+    stream_truncated: bool
+    unreadable_lines: int
+    request_sha256: str
+    response_sha256: str
+    recorded_at: datetime
+    #: Level 4. Always ``null`` in this release, and present in the payload so
+    #: "absent" is stated rather than inferred from a missing key.
+    external_anchor: str | None = None
+    levels: list[EvidenceLevelStatus]
+
+
+class EvidenceListResponse(StrictModel):
+    """The archive, newest first, bounded."""
+
+    records: list[EvidenceRecordResponse]
+    record_count: int
+    #: The audit chain's verdict, so a reader never sees records without it.
+    chain_state: Literal[
+        "intact", "empty", "broken_link", "head_mismatch", "unavailable"
+    ]
+    chain_detail: str
+    chain_link_count: int
+
+
+class EvidenceCaptureRequest(StrictModel):
+    """Ask for one read-only capture of one record's export line."""
+
+    evidence_id: str = Field(min_length=1, max_length=64)
+
+
+class EvidenceCaptureResponse(StrictModel):
+    """The result of one capture attempt.
+
+    ``state`` is one of six and is never reduced to a boolean. Five of the
+    six establish nothing about whether the message was published, and
+    ``line_not_found`` in particular never converts an ``outcome_unknown``
+    send into ``not_sent`` (ADR-0003 3).
+    """
+
+    evidence_id: str
+    state: Literal[
+        "line_captured",
+        "line_not_found",
+        "generation_changed",
+        "stream_truncated",
+        "parse_problem",
+        "fetch_failed",
+    ]
+    detail: str
+    #: True only for ``line_captured``, and it means level 2 - no more.
+    server_observation: bool
+    room_generation: str
+    line_offset: int | None
+    line_length: int | None
+    stream_sha256: str
+    scanned_bytes: int
+    stream_truncated: bool
+    #: A read may be retried. A write may not, ever, under any state.
+    read_retry_allowed: Literal[True] = True
+    write_retry_allowed: Literal[False] = False
+
+
+class EvidenceExportRequest(StrictModel):
+    """The explicit consent an export requires.
+
+    ``acknowledged`` has no default. A body that omits it is a 422 before any
+    handler runs, which is the cheapest possible place for "no export without
+    consent" to be enforced (charter 15.6).
+    """
+
+    format: Literal["json", "markdown"]
+    acknowledged: bool
+
+
+class AuditChainResponse(StrictModel):
+    """What verifying the audit chain established.
+
+    The wording is fixed: the chain is *detective against offline change*. It
+    is not tamper-proof, it carries no trusted time, and it proves nothing to
+    a third party - an attacker running as this Windows user can recompute
+    both the chain and its head (ADR-0003 5).
+    """
+
+    state: Literal["intact", "empty", "broken_link", "head_mismatch", "unavailable"]
+    detail: str
+    link_count: int
+    head_count: int | None
+    first_bad_seq: int | None
+    #: The only permitted description of what this mechanism provides.
+    claim: str

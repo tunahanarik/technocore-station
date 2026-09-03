@@ -17,9 +17,11 @@ from enum import StrEnum
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -279,6 +281,179 @@ class MessageNonceReservation(Base):
             f"MessageNonceReservation(room={self.room!r}, nonce={self.nonce!r}, "
             f"state={self.state!r}, outcome={self.outcome!r})"
         )
+
+
+class EvidenceRecord(Base):
+    """One send, and everything that is honestly known about it.
+
+    The four trust levels are kept in four separate groups of columns and are
+    never summed into one boolean (charter 15, ADR-0003). Level 4 is a single
+    nullable column that this release always leaves ``NULL``: an empty level
+    is written as empty, not as a plausible guess.
+
+    Not pruned, ever
+    ----------------
+    ``snapshot.py`` keeps the newest fifty check runs and deletes the rest,
+    which is right for a monitoring log and wrong here twice over: an evidence
+    record is the user's own archive of something they published, and the
+    audit chain that covers these rows breaks if a row in the middle
+    disappears (ADR-0003 7). Growth is one row per send, which is a bound set
+    by human hands on a button. Deletion happens only when a user asks, and
+    that deletion is itself an audit event.
+
+    No column holds a seed, a private key, a passphrase or a vault path. The
+    DID, the room, the nonce and the signature are public protocol values; the
+    request and response bytes are scanned for secret shapes before they are
+    written, and a hit **refuses the write** rather than redacting it
+    (``secret_scan.py``): redacting the raw bytes would destroy the one
+    property that makes them evidence.
+    """
+
+    __tablename__ = "evidence_record"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    #: The nonce reservation this send spent. No ``ON DELETE CASCADE``: a
+    #: reservation row is a ledger entry, and a ledger entry that silently
+    #: takes the evidence with it is not a ledger. Removing evidence is an
+    #: explicit user action, never a side effect of touching something else.
+    reservation_id: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("message_nonce_reservation.id"),
+        nullable=False,
+        unique=True,
+    )
+
+    # --- level 1: signature proof -----------------------------------------
+    did: Mapped[str] = mapped_column(String(128), nullable=False)
+    room: Mapped[str] = mapped_column(String(48), nullable=False)
+    nonce: Mapped[str] = mapped_column(String(19), nullable=False)
+    #: The exact canonical string the signature was taken over.
+    canonical: Mapped[str] = mapped_column(Text, nullable=False)
+    canonical_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    signature: Mapped[str] = mapped_column(String(128), nullable=False)
+    #: Station verified its own signature against its own canonical bytes
+    #: before sending. That is level 1 and nothing beyond it.
+    signature_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+
+    # --- level 2: server observation --------------------------------------
+    #: The approved request bytes, exactly as they went on the wire. Stored so
+    #: the record can be re-read later; the charter is explicit that this does
+    #: **not** license the sentence "the signature covers this JSON"
+    #: (protocol-contract.md 2.4) - it covers the canonical string above.
+    request_body: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    request_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: The response, already bounded by the write client's streaming cap.
+    response_body: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    response_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    http_status: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: One of the WriteOutcomeValue values.
+    write_outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: One of the CaptureState values; empty until a capture is attempted.
+    capture_state: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    capture_detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    captured_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    #: The fixed export URL the capture read. Built from the closed registry.
+    export_url: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: The room's conversation epoch, kept as digits.
+    room_generation: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    #: Our own record's raw exported bytes, without the line terminator.
+    captured_line: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    captured_line_offset: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    captured_line_length: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: The bounded neighbourhood, as canonical JSON of base64url strings.
+    captured_window: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: SHA-256 over every byte of the export that was read.
+    stream_sha256: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    stream_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    stream_truncated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    stream_line_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unreadable_lines: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # --- level 3: local receipt time --------------------------------------
+    #: This machine's clock. Not a trusted timestamp, and never presented as
+    #: one (the phrase is on the forbidden list).
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+    # --- level 4: external anchoring --------------------------------------
+    #: Always ``NULL`` in this release. The column exists so the export can
+    #: state the level as absent rather than omit it, which is the difference
+    #: between "there is no anchor" and "nobody looked".
+    external_anchor: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return (
+            f"EvidenceRecord(room={self.room!r}, nonce={self.nonce!r}, "
+            f"capture_state={self.capture_state!r})"
+        )
+
+
+class AuditEvent(Base):
+    """One link in the append-only HMAC chain.
+
+    ``prev_mac -> mac`` over a canonical line (charter 15.3). What that buys
+    is stated once and not embellished: **an offline change made without the
+    chain's MAC material is detectable**. It is not tamper-proof, it is not
+    a trusted clock, and it is not proof to a third party - an attacker
+    running as this Windows user can recompute both the chain and its head
+    (ADR-0003 5, SECURITY.md 7).
+
+    Never pruned. Deleting a row from the middle is precisely what the chain
+    exists to make visible, so a retention policy here would be a policy of
+    breaking our own evidence on a schedule.
+    """
+
+    __tablename__ = "audit_event"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    #: Strictly increasing from 1, with no gaps. Both properties are checked
+    #: on verification: a gap is a removed row, and an out-of-order pair is a
+    #: reordered one.
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    event: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: What the event is about: an evidence id, a reservation id, a room.
+    subject: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    #: A short, swept, already-redacted sentence. Never a response body.
+    detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    prev_mac: Mapped[str] = mapped_column(String(64), nullable=False)
+    mac: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"AuditEvent(seq={self.seq!r}, event={self.event!r})"
+
+
+class AuditChainMetadata(Base):
+    """Facts *about* the chain's MAC material. Never the material itself.
+
+    The same shape as :class:`SecretMetadata`, for the same reason: the file
+    path relative to the application data directory, when it was created, and
+    a fingerprint derived from the material - which is an HMAC of a fixed
+    public label, so it identifies the material without revealing it.
+
+    Nothing here is ever returned by an API response model.
+    """
+
+    __tablename__ = "audit_chain_metadata"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    envelope_relpath: Mapped[str] = mapped_column(Text, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"AuditChainMetadata(id={self.id!r})"
 
 
 class RecoveryRecord(Base):

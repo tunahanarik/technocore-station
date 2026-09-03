@@ -467,25 +467,34 @@ def test_the_lobby_is_refused_as_a_write_target() -> None:
 #: The modules allowed to import an HTTP client, and why each one is here.
 #:
 #: Stage 3 added the first: one read-only client, one fixed source registry.
-#: Package D adds the second, deliberately and as a separate module, because
+#: Package D added the second, deliberately and as a separate module, because
 #: the two have opposite failure policies - the read client retries transport
 #: faults, 5xx and 429, and a write client that inherited that policy would
 #: turn one approved message into several published ones.
 #:
-#: This list is the review boundary. A third entry means a third outbound
+#: Package E adds the third, and the widening is the point of this list rather
+#: than a hole in it (ADR-0003 1). ``evidence_client.py`` reads one room's
+#: export: a *third* capability, with a third registry
+#: (``evidence_targets.py``) and a third failure policy - a read that may be
+#: retried by a person, scanned as it streams under a 12 MiB cap, and never
+#: joined into a buffer. Folding it into either existing client would have
+#: meant inheriting the wrong rule, exactly as folding the write client into
+#: the read client would have (IMP-277).
+#:
+#: This list is the review boundary. A fourth entry means a fourth outbound
 #: surface, and adding one here is the change a reviewer must see.
-OUTBOUND_CLIENT_MODULES = {"client.py", "write_client.py"}
+OUTBOUND_CLIENT_MODULES = {"client.py", "write_client.py", "evidence_client.py"}
 
 
-def test_httpx_is_imported_only_by_the_two_reviewed_clients(
+def test_httpx_is_imported_only_by_the_reviewed_clients(
     api_source_root: Path,
 ) -> None:
-    """Exactly two outbound clients, in exactly two named modules.
+    """Exactly three outbound clients, in exactly three named modules.
 
     Before Stage 3 this asserted no HTTP client existed anywhere. That was
     the honest statement while none did. The assertion has been narrowed
-    twice since, never dropped: any *other* module importing an HTTP client
-    is a new outbound surface that nothing has reviewed.
+    three times since, never dropped: any *other* module importing an HTTP
+    client is a new outbound surface that nothing has reviewed.
     """
     clients = ("httpx", "requests", "aiohttp", "urllib3", "http.client")
 
@@ -509,7 +518,7 @@ def test_httpx_is_imported_only_by_the_two_reviewed_clients(
     assert offenders == [], f"an HTTP client is imported outside the reviewed clients: {offenders}"
 
 
-def test_both_reviewed_client_modules_actually_exist(api_source_root: Path) -> None:
+def test_every_reviewed_client_module_actually_exists(api_source_root: Path) -> None:
     """An allow-list entry for a module that is gone is a silent widening.
 
     Deleting ``write_client.py`` while leaving its name on the list would

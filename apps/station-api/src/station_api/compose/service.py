@@ -115,6 +115,50 @@ class ComposeIdentity(Protocol):
         ...  # pragma: no cover - protocol declaration
 
 
+class EvidenceOutcome(Protocol):
+    """What archiving one send established. Read-only by declaration."""
+
+    @property
+    def recorded(self) -> bool:
+        ...  # pragma: no cover - protocol declaration
+
+    @property
+    def evidence_id(self) -> str:
+        ...  # pragma: no cover - protocol declaration
+
+    @property
+    def detail(self) -> str:
+        ...  # pragma: no cover - protocol declaration
+
+
+class EvidenceRecorder(Protocol):
+    """The one thing the composer asks the evidence layer for.
+
+    Narrow for the same reason ``ComposeIdentity`` is (IMP-271): the composer
+    has no business with capture, export or the audit chain, and naming the
+    whole service here would be naming a dependency that could grow into
+    them. ``EvidenceService`` satisfies this structurally.
+    """
+
+    def record_send(
+        self,
+        *,
+        reservation_id: str,
+        did: str,
+        room: str,
+        nonce: str,
+        canonical: str,
+        signature: str,
+        signature_verified: bool,
+        request_body: bytes,
+        response_body: bytes,
+        http_status: int,
+        write_outcome: str,
+    ) -> EvidenceOutcome:
+        """Archive one send. Never raises for a storage condition."""
+        ...  # pragma: no cover - protocol declaration
+
+
 class ComposeError(Exception):
     """A composer step was refused. The message is safe to show a user."""
 
@@ -187,7 +231,22 @@ class SendResult:
     detail: str
     response_excerpt: str
     #: True only for ``outcome_unknown``: the server may have written.
+    #: Package E narrows what this *asks for*: a read-only evidence capture
+    #: may be attempted. It has never meant "send it again" and still does
+    #: not (ADR-0003 4).
     reconciliation_required: bool
+    #: The nonce reservation this send spent. A public uuid, not a
+    #: capability: it names a ledger row and confers nothing. Returned so the
+    #: UI can ask for a capture against this exact send instead of guessing
+    #: which record it is looking at.
+    reservation_id: str = ""
+    #: The archived evidence record, when one was written.
+    evidence_id: str = ""
+    #: False when nothing was archived - including when the secret-shape scan
+    #: refused the write. The send still happened either way, and saying so
+    #: is the whole point of keeping the two facts apart.
+    evidence_recorded: bool = False
+    evidence_detail: str = ""
 
 
 class ComposeService:
@@ -203,12 +262,19 @@ class ComposeService:
         write_client: SignedWriteClient,
         drafts: DraftStore | None = None,
         approvals: SingleUseStore[SendApproval] | None = None,
+        evidence: EvidenceRecorder | None = None,
     ) -> None:
         self._identity = identity
         self._technocore = technocore
         self._reserver = reserver
         self._signer = signer
         self._write_client = write_client
+        # Optional on purpose. The composer worked before there was an
+        # evidence layer and must keep working if one cannot be built (no
+        # database, no DPAPI): a send that succeeds and is not archived is
+        # worse than a send that is archived, and far better than a send that
+        # was refused because the archive was unavailable.
+        self._evidence = evidence
         self._drafts = drafts if drafts is not None else DraftStore()
         self._approvals: SingleUseStore[SendApproval] = (
             approvals
@@ -447,6 +513,7 @@ class ComposeService:
             outcome=WriteOutcomeValue(result.outcome.value),
             detail=result.detail,
         )
+        archived = self._archive(approval, result)
 
         return SendResult(
             outcome=result.outcome,
@@ -459,7 +526,51 @@ class ComposeService:
             detail=_send_detail(result),
             response_excerpt=result.response_excerpt,
             reconciliation_required=result.outcome is WriteOutcome.OUTCOME_UNKNOWN,
+            reservation_id=approval.reservation_id,
+            evidence_id=archived[0],
+            evidence_recorded=archived[1],
+            evidence_detail=archived[2],
         )
+
+    def _archive(
+        self, approval: SendApproval, result: WriteResult
+    ) -> tuple[str, bool, str]:
+        """Record the send as evidence, and never let that failure win.
+
+        Ordered after the ledger update and after the send, and wrapped:
+        the message is already published (or already unknown), so an archive
+        that cannot be written is a fact to report, not a reason to raise.
+        Turning a completed send into an HTTP 500 would leave the user with
+        no idea what happened - which is precisely the state ADR-0002 3
+        exists to keep them out of.
+        """
+        if self._evidence is None:
+            return "", False, "Kanit katmani kullanilabilir degil."
+
+        canonical = canonical_message(
+            room=approval.room, nonce=approval.nonce, text=approval.swept_text
+        ).canonical
+
+        try:
+            outcome = self._evidence.record_send(
+                reservation_id=approval.reservation_id,
+                did=approval.did,
+                room=approval.room,
+                nonce=approval.nonce,
+                canonical=canonical,
+                signature=approval.signature,
+                # Level 1 as this product can honestly assert it: the
+                # signature was verified against our own canonical bytes
+                # before the request left (``_verify_own_signature``).
+                signature_verified=True,
+                request_body=result.request_body,
+                response_body=result.response_body,
+                http_status=result.http_status,
+                write_outcome=result.outcome.value,
+            )
+        except Exception as exc:  # a completed send must not become a 500
+            return "", False, f"Kanit kaydi yazilamadi ({type(exc).__name__})."
+        return outcome.evidence_id, outcome.recorded, outcome.detail
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -756,6 +867,8 @@ __all__ = [
     "ComposeIdentity",
     "ComposeService",
     "DraftResult",
+    "EvidenceOutcome",
+    "EvidenceRecorder",
     "SendResult",
     "SignResult",
 ]

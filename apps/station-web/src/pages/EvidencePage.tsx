@@ -1,6 +1,6 @@
 import { Alert, Card, Separator } from "@heroui/react";
 
-import { EmptyState } from "../components/EmptyState";
+import { EvidenceLedgerPanel } from "../components/evidence/EvidenceLedgerPanel";
 
 interface TrustLevel {
   readonly level: number;
@@ -9,13 +9,16 @@ interface TrustLevel {
 }
 
 /**
- * Kanitlar: the evidence ledger and its four trust levels.
+ * Kanitlar: the evidence ledger, its four trust levels and the audit chain.
  *
  * The official-source panel used to live here; it moved to the Kaynaklar
  * section, because document access and protocol drift describe the remote
  * server, while this section records what this Station itself did.
  *
- * Level 4 is empty in the MVP and is shown as absent rather than implied.
+ * The list below is the *reference*: what each level would mean if a record
+ * carried it. It is not a verdict about anything. Every real record states its
+ * own four levels, one line each, inside the ledger panel - and level 4 is
+ * absent in this release, on every record, stated rather than implied.
  */
 const TRUST_LEVELS: readonly TrustLevel[] = [
   {
@@ -47,22 +50,23 @@ export function EvidencePage() {
     <Card>
       <Card.Header>
         <Card.Title>Kanitlar</Card.Title>
-        <Card.Description>Kanit kayitlari ve guven seviyeleri.</Card.Description>
+        <Card.Description>
+          Kanit kayitlari, dort guven seviyesi, audit zinciri ve disa aktarim.
+        </Card.Description>
       </Card.Header>
 
       <Card.Content className="flex flex-col gap-4">
-        <EmptyState
-          description="Bu bilgisayarda henuz hicbir kanit kaydi yok. Kayitlar ancak kullanici onayli bir gonderim yapildiktan sonra olusur; kanit defteri gorunumu Evidence paketi (Paket E) ile bu bolume eklenecek."
-          title="Henuz kanit kaydi yok"
-        />
+        <EvidenceLedgerPanel />
 
         <Separator />
 
         <section aria-label="Guven seviyeleri" className="flex flex-col gap-3">
           <h3 className="text-sm font-semibold text-foreground">Guven seviyeleri</h3>
           <p className="text-xs text-muted">
-            Bir kayit olustugunda hangi seviyenin dolu, hangisinin bos oldugu
-            acikca gosterilir. Seviyeler birbirinin yerine gecmez.
+            Asagidakiler seviyelerin tanimidir, bir kaydin durumu degildir. Her
+            kayit hangi seviyenin dolu hangisinin bos oldugunu kendi tasir ve
+            seviyeler tek bir rozete toplanmaz; seviyeler birbirinin yerine
+            gecmez.
           </p>
           <ul className="flex flex-col gap-2">
             {TRUST_LEVELS.map((item) => (
@@ -71,7 +75,7 @@ export function EvidencePage() {
                 className="flex flex-col gap-1 rounded-lg border border-border p-3"
               >
                 <span className="text-sm font-medium text-foreground">
-                  {`Seviye ${item.level} · ${item.name}`}
+                  {`Seviye ${String(item.level)}: ${item.name}`}
                 </span>
                 <p className="text-xs text-muted">{item.proves}</p>
               </li>

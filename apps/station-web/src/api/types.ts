@@ -294,6 +294,139 @@ export interface ComposeSendResult {
   readonly reconciliation_required: boolean;
 }
 
+// --- Evidence and audit (Paket E) ------------------------------------------
+//
+// Hand-written mirrors of the `Evidence*` and `AuditChain*` models in
+// `station_api/schemas.py`. Two absences are deliberate and must stay:
+//
+// 1. There are **no raw request or response bytes** here, because the listing
+//    endpoint does not return them. Only digests cross this boundary; the
+//    bytes themselves leave the machine solely through an explicitly
+//    acknowledged export.
+// 2. There is no field, flag or parameter that re-sends anything. A capture is
+//    a read (ADR-0003 4), and the type system offers nothing else.
+
+/** One of the four trust levels, reported per record and never summed. */
+export interface EvidenceLevelStatus {
+  readonly level: 1 | 2 | 3 | 4;
+  readonly name: string;
+  readonly present: boolean;
+  readonly detail: string;
+}
+
+/**
+ * How one capture attempt ended.
+ *
+ * Six values, and five of them establish nothing about whether the message was
+ * published. `line_not_found` in particular never turns an `outcome_unknown`
+ * send into `not_sent` (ADR-0003 3).
+ */
+export type CaptureAttemptState =
+  | "line_captured"
+  | "line_not_found"
+  | "generation_changed"
+  | "stream_truncated"
+  | "parse_problem"
+  | "fetch_failed";
+
+/** A record's stored capture state. `""` means no capture has been asked for. */
+export type EvidenceCaptureState = "" | CaptureAttemptState;
+
+/**
+ * The archived write outcome.
+ *
+ * Wider than `WriteOutcome` by two: a record can exist for an attempt that is
+ * still in flight, or for one that never left this machine.
+ */
+export type EvidenceWriteOutcome =
+  | "in_flight"
+  | "accepted"
+  | "refused"
+  | "outcome_unknown"
+  | "not_sent";
+
+/** The audit chain's five verdicts. `unavailable` is never "passed". */
+export type AuditChainState =
+  | "intact"
+  | "empty"
+  | "broken_link"
+  | "head_mismatch"
+  | "unavailable";
+
+/** One archived send. Hashes only - the raw bytes are not in this payload. */
+export interface EvidenceRecord {
+  readonly id: string;
+  readonly reservation_id: string;
+  readonly room: string;
+  readonly did: string;
+  readonly nonce: string;
+  /** 64 hex characters. Never rendered whole; the UI shows a short prefix. */
+  readonly canonical_sha256: string;
+  readonly signature: string;
+  readonly http_status: number;
+  readonly write_outcome: EvidenceWriteOutcome;
+  readonly capture_state: EvidenceCaptureState;
+  readonly capture_detail: string;
+  readonly captured_at: string | null;
+  readonly room_generation: string;
+  readonly captured_line_offset: number | null;
+  readonly captured_line_length: number | null;
+  readonly stream_sha256: string;
+  readonly stream_bytes: number;
+  readonly stream_truncated: boolean;
+  readonly unreadable_lines: number;
+  readonly request_sha256: string;
+  readonly response_sha256: string;
+  readonly recorded_at: string;
+  /** Level 4. Always `null` in this release; present so "absent" is stated. */
+  readonly external_anchor: string | null;
+  readonly levels: readonly EvidenceLevelStatus[];
+}
+
+export interface EvidenceList {
+  readonly records: readonly EvidenceRecord[];
+  readonly record_count: number;
+  /** The chain's verdict, returned beside the records so neither stands alone. */
+  readonly chain_state: AuditChainState;
+  readonly chain_detail: string;
+  readonly chain_link_count: number;
+}
+
+/** The result of one read-only capture attempt. */
+export interface EvidenceCaptureResult {
+  readonly evidence_id: string;
+  readonly state: CaptureAttemptState;
+  readonly detail: string;
+  /** True only for `line_captured`, and it means level 2 - no more. */
+  readonly server_observation: boolean;
+  readonly room_generation: string;
+  readonly line_offset: number | null;
+  readonly line_length: number | null;
+  readonly stream_sha256: string;
+  readonly scanned_bytes: number;
+  readonly stream_truncated: boolean;
+  /** A read may be retried. */
+  readonly read_retry_allowed: true;
+  /** A write may not, ever. The field is `false` by construction server-side. */
+  readonly write_retry_allowed: false;
+}
+
+export interface AuditChainStatus {
+  readonly state: AuditChainState;
+  readonly detail: string;
+  readonly link_count: number;
+  readonly head_count: number | null;
+  readonly first_bad_seq: number | null;
+  /**
+   * The only permitted description of what this mechanism provides, produced
+   * by the backend so the wording cannot drift between the two surfaces. It is
+   * rendered verbatim; the UI never composes a claim of its own.
+   */
+  readonly claim: string;
+}
+
+export type EvidenceExportFormat = "json" | "markdown";
+
 export interface TechnocoreStatus {
   readonly state: DriftState;
   readonly manifest_current: boolean;

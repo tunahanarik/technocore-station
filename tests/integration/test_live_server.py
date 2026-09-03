@@ -98,12 +98,12 @@ def test_full_session_handoff_over_the_wire(live_server: LiveServer) -> None:
         # proof that starting Station makes no outbound request.
         assert payload["technocore"]["state"] == "never_checked"
 
-        # Stage 4 is the stage that opens writes, and it is now the stage
-        # this build implements. The two agreeing is the point: while they
-        # disagreed, the field was a promise about a future release rather
-        # than a statement about this one.
+        # These two deliberately differ now. Stage 4 is the stage that opened
+        # writes and that does not move again; stage 5 is the stage this build
+        # implements. Collapsing them would either backdate the evidence work
+        # or claim writes arrived a release later than they did.
         assert payload["technocore"]["write_available_from_stage"] == 4
-        assert payload["service"]["stage"] == 4
+        assert payload["service"]["stage"] == 5
 
         # And the composer is honest about being shut on a fresh launch: no
         # check has run, so the manifest half of the gate blocks.

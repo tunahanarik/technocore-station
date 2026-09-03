@@ -65,6 +65,23 @@ def clear_secret_registry() -> None:
         _secret_registry.clear()
 
 
+def contains_registered_secret(text: str) -> bool:
+    """Whether ``text`` carries a value that must never be persisted.
+
+    The evidence writer needs to *refuse* rather than scrub (ADR-0003 8):
+    redacting the raw bytes of an exported record would destroy the one
+    property that makes them evidence. ``redact`` cannot answer that question
+    without the caller comparing before and after, and a comparison that
+    happens to be equal for an unrelated reason would read as "clean".
+
+    The session-path shape is not consulted here. It is a *rendering* rule for
+    log lines, and a URL in a message body is the user's own text.
+    """
+    with _registry_lock:
+        secrets_snapshot = tuple(_secret_registry)
+    return any(secret in text for secret in secrets_snapshot)
+
+
 def redact(text: str) -> str:
     """Remove every known secret shape from ``text``."""
     scrubbed = _SESSION_PATH_RE.sub(rf"\1{_REDACTED}", text)
