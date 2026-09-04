@@ -15,6 +15,7 @@ The two claims that carry this file:
 from __future__ import annotations
 
 import ast
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -43,7 +44,7 @@ from station_api.workscan.candidates import (
 )
 from station_api.workscan.client import RoomScanClient
 from station_api.workscan.errors import CandidateError
-from station_api.workscan.snapshot import parse_room_messages
+from station_api.workscan.snapshot import parse_room_messages, staleness_note
 from station_api.workscan.targets import resolve_room_target
 
 from tests.security.workscan_fixtures import (
@@ -65,12 +66,24 @@ def _capability(*, write_gate_open: bool = True) -> CandidateCapability:
     return capability_for(ModuleId.WORK_SCAN, write_gate_open=write_gate_open)
 
 
-def _derive(messages: list[dict[str, object]], *, write_gate_open: bool = True):  # type: ignore[no-untyped-def]
+#: A reading moment far from "now", so a test that moves the clock is
+#: obviously moving it rather than racing it.
+_LATER = datetime(2031, 3, 4, 5, 6, 7, 891011, tzinfo=UTC)
+
+
+def _derive(  # type: ignore[no-untyped-def]
+    messages: list[dict[str, object]],
+    *,
+    write_gate_open: bool = True,
+    read_at: datetime | None = None,
+):
     transport, _ = json_transport(room_document(messages=messages))  # type: ignore[arg-type]
     client = RoomScanClient(transport=transport, sleep=lambda _: None)
     snapshot = parse_room_messages(
         client.fetch_room_messages(resolve_room_target(ROOM, markers=MARKERS))
     )
+    if read_at is not None:
+        snapshot = replace(snapshot, staleness=staleness_note(read_at))
     return derive_from_room(
         snapshot, capability=_capability(write_gate_open=write_gate_open)
     )
@@ -117,7 +130,7 @@ def test_the_same_line_produces_the_same_candidate_every_time() -> None:
     name nothing, which is the second reason ADR-0007 2 gives.
     """
     first = _derive([message(1, HELP_LINE)])
-    second = _derive([message(1, HELP_LINE)])
+    second = _derive([message(1, HELP_LINE)], read_at=_LATER)
 
     assert [item.id for item in first.candidates] == [
         item.id for item in second.candidates
@@ -127,14 +140,15 @@ def test_the_same_line_produces_the_same_candidate_every_time() -> None:
     )
     assert first.candidates[0].derivation == DERIVATION_METHOD
 
-    # The two scans happened at different moments and element 8 says so, which
-    # is exactly why the reading time is not part of the content version: a
-    # clock that moved must not invalidate evidence recorded against the same
-    # proposal.
-    assert (
-        first.candidates[0].open_state.read_at
-        != second.candidates[0].open_state.read_at
-    )
+    # The reading moment is moved on purpose rather than left to the wall
+    # clock. Two derivations a microsecond apart can land on the same
+    # timestamp on a fast machine, so asserting that two `now()` calls differ
+    # tests the runner, not the product. Forcing the clock forward proves the
+    # claim outright: element 8 records a different reading moment while the
+    # identity and the content stay put, which is exactly why a clock that
+    # moved must not invalidate evidence recorded against the same proposal.
+    assert first.candidates[0].open_state.read_at != _LATER
+    assert second.candidates[0].open_state.read_at == _LATER
 
 
 def test_every_string_on_a_candidate_comes_from_the_line_or_from_the_table() -> None:
