@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-09-04T21:50:00Z",
+  "updated_utc": "2026-09-05T01:15:00Z",
   "base_sha": "5411171dd2302c6fea5a2af22695503859317c27",
   "note": "Kayit ile gercek Git/GitHub durumu celisirse Git/GitHub kaniti esastir.",
   "stages": [
@@ -143,28 +143,36 @@
     {
       "id": "H1",
       "name": "Work Scan",
-      "status": "implementing",
+      "status": "merged",
       "branch": "stage-h1-work-scan",
-      "pr": null,
-      "reviewed_sha": null,
-      "tested_sha": null,
-      "merge_sha": null,
-      "findings": [],
+      "pr": 17,
+      "reviewed_sha": "6343c0fba32910c58ea9577d4ac6a01d5f660ff2",
+      "tested_sha": "6343c0fba32910c58ea9577d4ac6a01d5f660ff2",
+      "merge_sha": "5876883fe549df3f457435a345ae55fd56fccd1c",
+      "findings": [
+        "ADR-0007: Kibble'a HICBIR istek atilmadi, istemci yazilmadi (job semasi/sayfalama/rate limit/kosullar dogrulanamadi; /api/board 60 sn'de timeout)",
+        "Aday uretimi deterministik; model cagrisi H2'ye ertelendi - uydurmaya karsi tek gercek koruma bu",
+        "Sekiz oge yapisal olarak zorunlu; sekizinci ogede hicbir boolean yok; 'acik' demek yasak",
+        "Kesif sirasinda bir alt-agent technocore.chat'e canli GET atti (kisit ihlali, bildirildi; yazma/kimlik/ucret yok)",
+        "Bagimsiz inceleme P1: aday uzerindeki oda SUNUCUNUN yanitindan geliyordu - uzak belge urune 'lobby'yi okudugu kaynak diye soyletebiliyordu ve iki farkli oda tek adaya cokebiliyordu. Yeniden etiketleme yerine RED secildi; ret mesaji iddia edilen adi yankilamiyor",
+        "Yasak bicimler 'yapisal' degil kaba isaretmis: 27 kacistan 19'u geciyordu. fold() sertlestirildi + ayri tighten() yalniz yasak kapisinda; iddia gerceğe indirildi",
+        "13 mutasyonun 13'u olduruldu; 1769 pytest + 256 Vitest + 58 Playwright"
+      ],
       "failed_attempts": 0,
-      "next_safe_step": "Work Scan: kaynaklari secme, gorev onerileri, yapilabilirlik degerlendirmesi. sections.ts'te 'Is Tara' ready:false -> acilacak. GERCEK YAZMA/HARCAMA YOK."
+      "next_safe_step": null
     },
     {
       "id": "H2",
       "name": "Agent calisma ortami + Activity Desk",
-      "status": "planned",
-      "branch": null,
+      "status": "implementing",
+      "branch": "stage-h2-agent-runtime",
       "pr": null,
       "reviewed_sha": null,
       "tested_sha": null,
       "merge_sha": null,
       "findings": [],
       "failed_attempts": 0,
-      "next_safe_step": null
+      "next_safe_step": "Agent calisma ortami + Activity Desk: tipli state machine, semali araclar, butce/izin siniri, gercek arac calismalari kaydi. GERCEK HARCAMA YOK."
     },
     {
       "id": "H3",
