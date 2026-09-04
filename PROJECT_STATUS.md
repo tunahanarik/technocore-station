@@ -2,7 +2,8 @@
 
 > Ana karar kaynağı: [`Technocore-Station-Proje-Kunyesi.md`](Technocore-Station-Proje-Kunyesi.md)
 > Çalışma kuralları: [`AGENTS.md`](AGENTS.md) · [`CLAUDE.md`](CLAUDE.md)
-> Son güncelleme: **1 Eylül 2026** (Aşama 3.1)
+> Son güncelleme: **4 Eylül 2026** (Aşama 5 / Paket E — bağımsız inceleme
+> düzeltmeleri)
 
 ## Aşama checklist
 
@@ -1066,13 +1067,71 @@ Kapsam kararları:
       `docs/evidence-model.md` onu Aşama 5'e koyar ve ADR-0002 §4.3 bu
       çelişkiyi Aşama 5 lehine kapatır.
 
-## Sonraki aşama: Aşama 5 — Evidence & Audit
+### Paket E — Evidence & Audit (Aşama 5)
 
-Kapsam: exact yakalama, dört güven seviyesi, ayrı DPAPI zarfında HMAC
-zinciri, deterministik export. Kabul kriteri: **AC-14**.
+Kapsam kararları:
+[`ADR-0003`](docs/decisions/0003-paket-e-kapsam-kararlari-2026-09-04.md).
 
-Aşama 4 ile giden yazma yolu açıldı; fakat **gerçek servise hiçbir yazma
-yapılmadı** — bütün sonuçlar mock taşıyıcıya karşı üretildi.
+- [x] **Üçüncü kapalı registry.** Pinli `openapi.json` bir export yüzeyi
+      yayımlıyor (`GET /r/{room}/export`, bayt-exact NDJSON,
+      `X-Room-Generation`), ama açıklaması **"No query parameters"** diyor —
+      `Range`/`since`/`limit` yok. Bu yol `SOURCES`'a **eklenmedi**;
+      `evidence_targets.py` açıldı, böylece altı belgelik registry'nin küme
+      eşitliği ve `/r/` yasağı aynen geçiyor. `OUTBOUND_CLIENT_MODULES`
+      iki'den üçe yazılı gerekçeyle genişledi.
+- [x] **Akış tarayıcı**, 12 MiB cap: kendi satırımızın **ham baytları** +
+      offset, satır ve bayt olarak sınırlı çevre penceresi, akışın yürüyen
+      SHA-256'sı. Satır alındıktan sonra tamponlama durur — tepe bellek
+      gövde boyutundan **bağımsız** (testle). Nonce keyfi hassasiyetli
+      `int` (19 hane 2^53'ü aşar; float'a yuvarlanmış nonce iyi imzaları
+      düşürür).
+- [x] **Altı kanıt durumu**, hiçbiri tek yeşil rozete indirgenmedi:
+      `line_captured` (yalnızca Seviye 2 gözlemi) / `line_not_found`
+      (**hiçbir şey kanıtlamaz**) / `generation_changed` (karşılaştırılamaz)
+      / `stream_truncated` / `parse_problem` / `fetch_failed`.
+      `may_retry_write` her durumda `False`; `line_not_found` bir
+      `outcome_unknown`'ı asla `not_sent`'e çevirmez.
+- [x] **HMAC zinciri** ayrı DPAPI zarfındaki başıyla; yalnız-ekleme, asla
+      budanmaz. Truncation **garanti diye sunulmuyor**: aynı-kullanıcı
+      saldırısı testte fiilen uygulanıp zincirin `intact` döndüğü
+      gösteriliyor. Uygulama sırasında gerçek bir hata yakalandı — SQLite
+      naive datetime döndürdüğü için ham `isoformat()` MAC'e girseydi her
+      zincir ilk doğrulamada bozuk okunacaktı (IMP-314).
+- [x] **Secret taraması** allow-list önce, sonra red; SHA-256 digest'leri
+      bilinçli olarak muaf tutulmadı. Eşleşme kanıt yazmasını **reddeder**,
+      redakte etmez. Bağımsız inceleme sonrası allow-list bir *şekil* listesi
+      olmaktan çıkıp **çağıranın bildirdiği tam değerler** oldu; red kuralları
+      "en az" uzunluğa geçti (IMP-330, IMP-331).
+- [x] **Export** JSON + Markdown, **koşulsuz** bayt bayt deterministik
+      (`exported_at` gövdeden `X-Station-Exported-At` header'ına taşındı),
+      onay yapısal (`acknowledged` varsayılansız → 422). Sunucu **hiçbir yola
+      dosya yazmaz**; `downloads.py` dosya adlarını allow-list'ten kurar ve
+      recovery indirmesindeki ham f-string boşluğunu da kapatır.
+- [x] **Bağımsız incelemenin 18 bulgusu kapatıldı** (F1…F18). En ağırı:
+      yasak-ifade denetimi bitmiş dışa aktarım belgesine uygulanıyordu, yani
+      bir uzak hata gövdesi ya da kullanıcının kendi mesajı bir kaydı **her
+      iki biçimden kalıcı olarak** çıkarabiliyordu — üstelik 500 olarak.
+      Denetim artık yalnız **ürünün kendi cümlelerine** uygulanır; içe alınan
+      metin veri sayılır ve nötrlenir (IMP-327…IMP-340).
+- [x] **1229 pytest** (1049 → 1179 → 1229) + **206 Vitest** (155 → 206). Yeni
+      HeroUI bileşeni yok (küme 11'de kaldı, A1-R1 yeniden açılmadı).
+      Rapor: [`docs/verification/paket-e.md`](docs/verification/paket-e.md).
+- [x] SI-171…SI-209, IMP-298…IMP-340.
+- [ ] **ADR-0003 §7'nin silme yarısı ertelendi.** Kanıt kaydını silen bir
+      route yoktur ve ölü `EVIDENCE_DELETED` enum girdisi kaldırıldı; erteleme
+      IMP-329 ve `docs/evidence-model.md` §4'te görünür şekilde kayıtlıdır.
+- [x] **AC-14** karşılandı.
+- [x] Aşama numarası tutarsızlığı kapatıldı: API `stage=4`, launcher
+      `stage=3` diyordu; ikisi de **5** oldu.
+      `write_available_from_stage` bilinçli olarak **4** kaldı.
+
+## Sonraki aşama: Aşama 6 — proje/görev modülü temeli (Paket F)
+
+Kapsam: derleme zamanı proje/görev modül registry'si.
+
+Aşama 4 ile giden yazma yolu, Aşama 5 ile kanıt defteri açıldı; fakat
+**gerçek servise hiçbir istek gönderilmedi** — export okuması dahil her şey
+mock taşıyıcıya karşı, autouse ağ kesici altında koştu.
 
 Ön koşul: kullanıcı açıkça "başlayalım" demeden gerçek gönderim yapılmaz.
 

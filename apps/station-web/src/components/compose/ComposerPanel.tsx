@@ -15,6 +15,7 @@ import type {
   ComposeSendResult,
   ComposeSignature,
 } from "../../api/types";
+import { shortDigest } from "../../lib/digest";
 import { gateReasonLabel } from "../../lib/identityGuidance";
 import { ErrorRegion } from "../ErrorRegion";
 import { PassphraseField } from "../identity/IdentityDialogs";
@@ -67,12 +68,6 @@ const ERROR_TITLE: Record<ErrorStep, string> = {
   sign: "Imzalanamadi",
   send: "Gonderim tamamlanamadi",
 };
-
-/** Digests are 64 hex characters - the same shape as a seed - so only a
- *  recognisable prefix is ever rendered. */
-function shortDigest(value: string): string {
-  return value.slice(0, 12);
-}
 
 export function ComposerPanel({
   needsVaultPassphrase,

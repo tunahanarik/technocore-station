@@ -31,6 +31,7 @@ import httpx
 from sqlalchemy import Engine
 from station_api.compose.nonce import NonceReserver
 from station_api.compose.service import ComposeService
+from station_api.evidence.service import EvidenceService
 from station_api.identity.service import SigningIdentity
 from station_api.identity.write_gate import WriteGateInput, WriteGateStatus, evaluate
 from station_api.technocore.service import TechnocoreService
@@ -196,6 +197,10 @@ class ComposeHarness:
     writes: CountingWriteClient
     technocore: TechnocoreService
     reserver: NonceReserver
+    #: The evidence archive, when the test wired one. ``None`` is a real
+    #: production state too: a machine without DPAPI composes and sends and
+    #: reports that nothing was archived.
+    evidence: EvidenceService | None = None
     session_id: str = "TEST-ONLY-session"
 
 
@@ -206,6 +211,7 @@ def build_harness(
     identity: StubIdentity | None = None,
     technocore: TechnocoreService | None = None,
     reserver: NonceReserver | None = None,
+    evidence: EvidenceService | None = None,
 ) -> ComposeHarness:
     stub = identity if identity is not None else StubIdentity()
     live = technocore if technocore is not None else checked_technocore(engine)
@@ -220,12 +226,14 @@ def build_harness(
             reserver=counter,
             signer=signer,
             write_client=writes.client,
+            evidence=evidence,
         ),
         identity=stub,
         signer=signer,
         writes=writes,
         technocore=live,
         reserver=counter,
+        evidence=evidence,
     )
 
 

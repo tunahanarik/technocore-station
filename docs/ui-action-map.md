@@ -1,6 +1,7 @@
 # UI eylem haritası
 
-> Paket C çıktısı; Paket D ile "Oluştur ve Doğrula" bölümü (§5) dolduruldu.
+> Paket C çıktısı; Paket D ile "Oluştur ve Doğrula" bölümü (§5), Paket E ile
+> "Kanıtlar" bölümü (§7) dolduruldu.
 > Sol menülü dashboard kabuğundaki **her** etkileşimin sözleşmesi: önkoşul,
 > çağrılan işlev, loading/success/error/timeout/iptal davranışı ve otomatik
 > test kimliği.
@@ -30,6 +31,8 @@ Her istek `AbortSignal.timeout(ms)` ile sınırlıdır:
 | `exportRecovery` (elle `fetch`) | 15 000 ms | Aynı varsayılan; bu yol da kapsanır |
 | `signComposeDraft` (`POST /api/compose/sign`) | 30 000 ms | İmzalamadan önce kasa açılır; parolalı kasa bir Argon2id türetmesi demektir ve yerel okuma süresi buna göre ölçülmemiştir |
 | `sendComposeMessage` (`POST /api/compose/send`) | 45 000 ms | Backend'in kendi yazma bütçesi connect 5 sn + write 10 sn + read 15 sn'dir; **daha kısa bir istemci süresi, sunucu hâlâ yazarken isteği bırakıp sonucu `timeout` (yerel servis hakkında bir iddia) diye gösterirdi.** Fazladan pay, cevabın sunucunun üç değerli verdict'i olarak kalmasını sağlar |
+| `captureEvidenceLine` (`POST /api/evidence/capture`) | 90 000 ms | Yakalama yerel bir okuma değildir: backend odanın resmî export'unu açar ve **12 MiB tavanına kadar** satır satır tarar. Backend'in kendi bütçesi connect 5 sn + read 30 sn'dir, ama o read süresi **chunk başınadır**, tarama tamamına değil — yavaş bir bağlantı otuz saniyede bir kez bile takılmadan route'u dakikalarca meşgul edebilir. Daha kısa bir istemci süresi, ilerleyen bir taramayı bırakıp sonucu `timeout` diye gösterir ve backend'in **altı yakalama durumundan hangisine** vardığını hiç öğrenemezdik; oysa "okuyamadım" ile "satır orada değil" ayrı bulgulardır ve bir istemci kronometresi ikisini birleştiremez |
+| `exportEvidence` (`POST /api/evidence/export`, elle `fetch`) | 15 000 ms | Varsayılan; dışa aktarım yerel veritabanından üretilir, dışarı çıkmaz |
 
 ### 1.2 `ApiError` sınıflandırması (`kind`)
 
@@ -117,8 +120,8 @@ gösterilir.
 Async eylem taşıyan her buton, istek uçuştayken `isDisabled` + pending
 etiketi alır ("Denetleniyor...", "Olusturuluyor...", "Hazirlaniyor...",
 "Dogrulaniyor...", "Aciliyor...", "Kuruluyor...", "Siliniyor...",
-"Imzalaniyor...", "Gonderiliyor...", **"Yeniden deneniyor..."**). İkinci
-aktivasyon istek başlatmaz.
+"Imzalaniyor...", "Gonderiliyor...", **"Yakalaniyor..."**,
+**"Yeniden deneniyor..."**). İkinci aktivasyon istek başlatmaz.
 
 Bu kural `ErrorRegion`'ın "Yeniden dene" butonunu da kapsar; her çağıran
 kendi loading durumunu `retryPending` ile geçirir:
@@ -133,13 +136,21 @@ kendi loading durumunu `retryPending` ile geçirir:
 | `ComposerPanel` (yetki okuma hatası) | `capabilityLoading` — yalnız okuma tekrarlanır; taslak/imza/gönderim hatalarında `onRetry` **verilmez** |
 | `SettingsHelpPage` | `gateLoading` (bu pakette eklendi; daha önce hiç loading durumu yoktu) |
 | `TechnocoreSourcesPanel` | hata "check"ten geldiyse `busy`, "load"tan geldiyse `loadBusy` |
+| `EvidenceLedgerPanel` / kayıt listesi | `ledgerLoading` |
+| `EvidenceLedgerPanel` / audit zinciri | `auditLoading` (ayrı: zincir okunamazsa kayıtlar yine görünür) |
+| `EvidenceLedgerPanel` / yakalama ve dışa aktarım hataları | `onRetry` **verilmez** — kullanıcı aynı açık eylemi kendi kontrolünden tekrarlar |
+
+Yakalama butonu kendi kuralını taşır: uçuşta **"Yakalaniyor..."** yazar ve
+`capturingId !== null` olduğu sürece **listedeki bütün** yakalama butonları
+disabled olur. Aynı anda tek yakalama; ikinci aktivasyon istek başlatmaz.
 
 Testler: `pages.test.tsx::disables the check button while a check is in
 flight`, `pages.test.tsx::disables the gate retry while the retry is in
 flight`, `App.test.tsx::disables the shell retry while the retry is in
 flight`, `ErrorRegion.test.tsx::starts no second request when the retry is
 clicked repeatedly`, `ComposerPanel.test.tsx::starts no second send when the
-send button is clicked twice`.
+send button is clicked twice`, `EvidenceLedgerPanel.test.tsx::starts no second
+capture while one is in flight`.
 
 ### 1.5 İptal
 
@@ -321,11 +332,138 @@ buton olarak bırakmaz.
 
 ## 7. Kanıtlar
 
-Etkileşimli kontrol yoktur. Boş durum, kayıt görünümünün Paket E ile
-geleceğini açıkça söyler; dört güven seviyesi sınırlarıyla listelenir.
-Testler: `pages.test.tsx::shows an empty state that names the package that
-will fill it`, `::declares level 4 as absent rather than implying it
-exists`, `::carries the trust levels but not the official-source panel`.
+Paket E ile bu bölüm kanıt defterine dönüştü. Bileşenler:
+`pages/EvidencePage.tsx` (kabuk + güven seviyesi **tanım** listesi + kaynak
+sınıflandırma uyarısı) ve `components/evidence/EvidenceLedgerPanel.tsx`
+(zincir, kayıtlar, yakalama ve dışa aktarım).
+
+Bölümün taşıdığı beş kural: **(1)** dört güven seviyesi kayıt başına ayrı ayrı
+raporlanır, hiçbir zaman toplanmaz; **(2)** yakalama yalnız kullanıcı isteğiyle
+çalışır — mount'ta, zamanlayıcıda veya bir gönderimin adımı olarak değil;
+**(3)** altı yakalama durumu altı ayrı bulgudur ve beşi "doğrulandı" değildir;
+**(4)** hiçbir yerde yazma tekrarı sunulmaz; **(5)** hiçbir uzak değer aktif
+içerik olmaz (SI-54).
+
+| Kontrol | Önkoşul | API / işlev | Loading | Success | Error | Timeout | İptal | Test |
+|---|---|---|---|---|---|---|---|---|
+| otomatik kayıt okuma | bölüm seçili | `GET /api/evidence/records` (`fetchEvidenceRecords`, 15 sn) | "Kanit kayitlari okunuyor..." | kayıt listesi + `N kayit` rozeti; kayıt yoksa dürüst boş durum ("Henuz kanit kaydi yok") | `ErrorRegion` "Kanit kayitlari okunamadi" + "Yeniden dene" (yalnız okumayı tekrarlar) | `kind=timeout` aynı bölge | bölüm değişince unmount | `EvidenceLedgerPanel.test.tsx::lists an archived record with its room, nonce and outcome`, `::shows an honest empty state when nothing has been archived`, `::shows a persistent error with a retry when the ledger cannot be read` |
+| otomatik zincir okuma | bölüm seçili | `GET /api/evidence/audit` (`fetchAuditChain`, 15 sn) | "Zincir durumu okunuyor..." | beş durumdan biri + `claim` **birebir** + sayaçlar | `ErrorRegion` "Audit zinciri okunamadi" + "Yeniden dene"; **kayıt listesi etkilenmez** | `kind=timeout` aynı bölge | bölüm değişince unmount | `EvidenceLedgerPanel.test.tsx::names the %s verdict distinctly` (5), `::keeps the ledger readable when only the chain read fails` |
+| kayıt başına dört güven seviyesi | kayıt listelendi | yok (`record.levels`) | — | `Seviye 1..4` ayrı satırlar, her biri `Var`/`Yok` rozeti + kendi cümlesi; Seviye 4 `external_anchor === null` iken açıkça "yoktur, null olarak tutulur" der | — | — | — | `EvidenceLedgerPanel.test.tsx::reports all four levels separately instead of summing them`, `::states that level 4 is absent rather than leaving it blank` |
+| "Kanit satirini yakala (yalniz okur)" / yakalanmışsa "Yakalamayi yeniden dene (yalniz okur)" | kayıt var, oturum + CSRF, başka yakalama uçuşta değil | `POST /api/evidence/capture` (`captureEvidenceLine`, **90 sn**) | buton "Yakalaniyor..." + **listedeki bütün** yakalama butonları disabled | altı durumdan biri ayrı ayrı sunulur (§7.1); ardından kayıt listesi yeniden okunur ki satır ile sonuç bölgesi çelişmesin | `ErrorRegion` "Yakalama tamamlanamadi" (`onRetry` **yok**; kullanıcı butona kendi basar) | `kind=timeout` aynı bölge — "okuyamadım", "satır orada değil" DEĞİLDİR | yok (sonuç beklenir) | `EvidenceLedgerPanel.test.tsx::presents %s as a finding of its own` (6), `::starts no second capture while one is in flight`, `::keeps the redacted diagnostics payload unchanged when a capture fails` |
+| dışa aktarım onay kutusu (`Checkbox`) | — | yalnız React state | — | işaretlenmeden **her iki** dışa aktarım butonu `isDisabled`; ikinci aktivasyon istek başlatmaz | — | — | — | `EvidenceLedgerPanel.test.tsx::sends no request until consent has been given` |
+| "JSON olarak disa aktar" | onay kutusu işaretli, başka dışa aktarım uçuşta değil | `POST /api/evidence/export` `{format:"json", acknowledged:true}` (`exportEvidence`, 15 sn) | buton "Hazirlaniyor..." + ikisi de disabled | blob + geçici object URL + anchor tıklaması; ad **istemci sabiti** `technocore-station-kanit.json`; URL hemen revoke edilir | `ErrorRegion` "Disa aktarim tamamlanamadi" (`onRetry` **yok**); başarı taklidi yapılmaz | `kind=timeout` aynı bölge | yok | `EvidenceLedgerPanel.test.tsx::exports JSON once the consent box is ticked`, `::reports a refused export instead of pretending a file was produced` |
+| "Markdown olarak disa aktar" | aynı | `POST /api/evidence/export` `{format:"markdown", acknowledged:true}` | aynı | ad `technocore-station-kanit.md` | aynı | aynı | yok | `EvidenceLedgerPanel.test.tsx::exports Markdown under the same single consent step` |
+| güven seviyesi tanım listesi | — | yok (statik) | — | dört seviyenin **tanımı**; bir kaydın durumu olmadığı açıkça yazılır | — | — | — | `pages.test.tsx::presents the level list as a definition, not as a verdict` |
+
+### 7.1 Altı yakalama durumu (ADR-0003 §3)
+
+Tek bir yeşil rozete indirgenmez; her durum kendi başlığını, kendi tonunu ve
+kendi paragrafını taşır. Backend'in cümlesi (`capture_detail`) bizimkinin
+**yanında** gösterilir, yerine değil.
+
+| Durum | Başlık | Ton | UI'ın söylediği |
+|---|---|---|---|
+| `line_captured` | "Satir yakalandi" | ok | **Yalnızca Seviye 2 sunucu gözlemidir.** Mesajın yayımlandığının bağımsız bir ispatı değildir; tek bir sunucunun kendi durumu hakkındaki cevabıdır |
+| `line_not_found` | "Satir bulunamadi" | pending | **Hiçbir şey kanıtlamaz.** Oda halkası unutur; unutulmuş bir kayıt ile hiç yazılmamış bir kayıt taramada birebir aynı görünür |
+| `generation_changed` | "Oda donemi degisti" | pending | Kayıtlar **karşılaştırılamaz**: uyuşmazlık değil, farklı bir dönem. Bulunmuş bir satır bile bu durumda karşılaştırmaya girmez |
+| `stream_truncated` | "Tarama tamamlanamadi" | pending | **Okunamama durumu.** Eksik taramada satırın görünmemesi, yokluğun kanıtı değildir |
+| `parse_problem` | "Satirlar okunamadi" | pending | **Okunamama durumu.** Okunamayan bir satır değiştirilmiş bir satır demek değildir (IMP-238 emsali) |
+| `fetch_failed` | "Okuma tamamlanamadi" | problem | **Okunamama durumu.** Gönderimin akıbeti hakkında hiçbir şey söylemez |
+
+Her durumun altında istisnasız aynı cümle çıkar: *"Yakalama yalniz okur. Okuma
+dilediginiz kadar yeniden denenebilir; gonderim hicbir durumda ve hicbir yolla
+yeniden denenmez."* Buton etiketi de bunu taşır — "(yalniz okur)" — çünkü
+burada sadece "Yeniden dene" yazan bir buton "tekrar gönder" diye okunurdu.
+Test: `EvidenceLedgerPanel.test.tsx::offers no write retry after %s` (altı
+durum için de bütün buton etiketlerini tarar).
+
+**`line_not_found` neden retry taşımaz?** Taşır — ama yalnız **okuma**
+retry'ı. Ayrım şudur: yakalama bir okumadır ve sunucuda hiçbir şeyi
+değiştirmez, bu yüzden istenildiği kadar tekrarlanabilir. Değiştirilemeyen şey
+gönderimdir: nonce harcanmıştır (SI-149/150) ve bulunamayan bir satır bunu
+telafi etmez. Bu yüzden bu yüzeyde bir *gönderim* retry'ı ne vardır ne de
+eklenebilir — `client.ts`'deki yakalama işlevi bir kayıt kimliğinden başka bir
+şey almaz, route da odayı satırdan okur.
+
+**`outcome_unknown` + `line_not_found`:** `write_outcome === "outcome_unknown"`
+olan her kayıt "Bu gonderimin sonucu hala bilinmiyor" uyarısı taşır; yakalama
+`line_not_found` döndüyse uyarıya ikinci bir cümle eklenir ve bu birleşimin
+**"gönderim yapılmadı" anlamına gelmediği** yazılır. Test:
+`::never turns an unknown outcome plus a missing line into a send that did not
+happen` (DOM metninde "gonderilmedi"/"gonderilmemis" aranır).
+
+### 7.2 Audit zinciri: beş durum ve dürüst sunum
+
+| Durum | Başlık | Ton |
+|---|---|---|
+| `intact` | "Zincir tutarli" | ok |
+| `empty` | "Zincir bos" | inactive |
+| `broken_link` | "Zincir halkasi kirilmis" | problem |
+| `head_mismatch` | "Zincir basi uyusmuyor" | problem |
+| `unavailable` | "Zincir dogrulanamadi" | pending — asla "geçti" değil |
+
+`claim` alanı **backend'in ürettiği hâliyle** basılır; UI kendi iddiasını
+kurmaz, çünkü aynı cümleyi iki yüzeyin bağımsız yazması tam olarak ikisinin
+zamanla ayrışma biçimidir. Yanına üç sınır cümlesi konur:
+
+1. Zincirin içinde kendi uzunluğunu söyleyen bir şey yoktur; **sonun kesilmesi,
+   ayrı bir zarfta tutulan zincir başı olmadan tespit edilemez.**
+2. Bu bir garanti değildir: **aynı Windows kullanıcısı olarak çalışan** bir
+   saldırgan zarfı açar, bütün MAC'leri yeniden hesaplar ve başı yeniden yazar.
+3. Yarım kalan bir yazma bir saldırı değildir; dosya ile veritabanı işlemi
+   atomik olarak birlikte işlenemez.
+
+İzin verilen tek ifade **"çevrimdışı değişikliğe karşı tespit edici"**dir.
+"Değişmez kayıt", "sunucu kanıtı", "güvenilir zaman kanıtı", "airdrop uygunluk
+kanıtı", "değiştirilemez kayıt" ve "kurcalanamaz kayıt" yasaktır
+(`docs/evidence-model.md` §2). Frontend testi bu altı ifadeyi **katlanmış**
+karşılaştırmayla arar (küçük harf, aksan ayrıştırma, `ı` → `i`), yani ASCII'ye
+düşürülmüş yazımlar da yakalanır. Testler:
+`pages.test.tsx::uses no forbidden over-claiming evidence language`,
+`EvidenceLedgerPanel.test.tsx::uses none of the forbidden claims after %s`
+(altı yakalama durumunun her biri için ayrı ayrı).
+
+### 7.3 Dışa aktarım: onay, kimlik bağlantısı ve tanı raporundan ayrılığı
+
+- **Açık onay olmadan istek gönderilmez.** Onay kutusu işaretlenmeden her iki
+  buton `isDisabled`'dır ve bir aktivasyon `fetch`'e hiç ulaşmaz. Bu tek engel
+  değildir, **ilk** engeldir: `EvidenceExportRequest.acknowledged`'ın
+  varsayılanı yoktur (eksikse 422), route ayrıca yeniden kontrol eder ve servis
+  yalnız `Literal[True]` ile kurulabilen bir `ExportConsent` alır. UI'daki kutu
+  göstermelik olsaydı, kullanıcıya onay adımının da göstermelik olduğu
+  öğretilirdi.
+- **Kimlik bağlantısı uyarısı.** Dosya public DID'i, imzaları ve gönderim
+  kayıtlarını taşır. Bunlar gizli değerler değildir; ama paylaşıldıklarında bu
+  makinedeki kimlik ile paylaşılan yer arasında **kalıcı bir kimlik bağlantısı**
+  kurulur. Uyarı bunu açıkça söyler (test: `::warns that sharing the file
+  creates an identity link`).
+- **Redakte tanı raporundan ayrı bir yüzeydir.** `ErrorRegion`'ın "Tani
+  bilgisini kopyala" çıktısı yalnız
+  `{code, status, kind, request_id, section, timestamp}` taşır ve **hiçbir
+  kanıt alanı oraya girmez** — Paket E bu yükü değiştirmedi (test:
+  `EvidenceLedgerPanel.test.tsx::keeps the redacted diagnostics payload
+  unchanged when a capture fails`, anahtar listesini sıralı olarak pinler ve
+  oda/nonce/DID/digest'in yükte olmadığını ayrıca doğrular). Dışa aktarım ise
+  kayıtların kendisidir; biri diğerinin yerine kullanılmaz ve UI bunu yazar.
+- **Teslim yolu recovery ile aynıdır** (ADR-0003 §9): HTTP yanıtı +
+  `Content-Disposition` + blob → geçici object URL → anchor tıklaması → hemen
+  `revokeObjectURL`. Sunucu hiçbir yola dosya yazmaz.
+- **İndirme adı istemci sabitidir** (`technocore-station-kanit.json` /
+  `.md`). Sunucunun `Content-Disposition` adı bilinçli olarak **okunmaz**:
+  sunucu zaten adı bir allow-list'ten yeniden kuruyor, ad bir istemci
+  meselesidir ve kendimizin söyleyebildiği bir değeri geri kazanmak için bir
+  başlık parser'ı eklemek yalnızca yanılabilecek bir parser daha demektir.
+
+### 7.4 Ham bayt yoktur
+
+`GET /api/evidence/records` istek/yanıt **baytlarını döndürmez**; yalnız
+hash'ler döner ve UI onları da tam basmaz — `shortDigest` ile ilk 12 karakteri
+gösterilir (`src/lib/digest.ts`). Gerekçe: SHA-256 de bir seed de 64 hex
+karakterdir ve uygulamanın "DOM'a hiçbir 64-hex koşusu çıkmaz" kuralı ancak tek
+bir ortak yardımcı varken zorlanabilir. Kanıt test fixture'ı **tam boy**
+digest'ler taşır, böylece iddia fixture'ı değil bileşeni sınar (test:
+`EvidenceLedgerPanel.test.tsx::never renders a 64-hex run, the same shape as a
+seed`).
 
 ## 8. Ayarlar ve Yardım
 
@@ -350,7 +488,7 @@ görünmez:
 | Kimlik ve Guvenlik | evet | — |
 | Olustur ve Dogrula | evet | — |
 | Kaynaklar | evet | — |
-| Kanitlar | evet | — (kayıt görünümü E ile dolar) |
+| Kanitlar | evet | — (kayıt defteri E ile doldu) |
 | Ayarlar ve Yardim | evet | — |
 
 Test: `App.test.tsx::never shows a section that is not ready`.
@@ -378,12 +516,17 @@ Bu sözleşmenin kapsamadığı, bilinen ve bilinçli boşluklar:
    durdurulamaz.
 4. **Tarayıcı QA yok** (ADR-0001 m.4) — bu haritadaki davranışlar Vitest +
    jsdom ile kanıtlıdır; gerçek tarayıcı doğrulaması Paket J'dedir.
-5. **`outcome_unknown` için uzlaştırma yok** (ADR-0002 §3) — çıkış yolu odayı
-   okumayı gerektirir ve oda okuma yolu bu pakette açılmadı. Durum kullanıcıya
-   olduğu gibi gösterilir; UI tahmin yürütmez ve "Yeniden dene" sunmaz.
-6. **Gönderilmiş bir mesajın kaydı yoktur.** Sonuç bölgesi sayfa yenilenince
-   kaybolur; kalıcı kanıt defteri (AC-14 dâhil) Paket E'dedir. Tarayıcı
-   depolaması yasak olduğu için (SI-24) ara bir çözüm de eklenmedi.
+5. **`outcome_unknown` uzlaştırması dar anlamlıdır** (ADR-0003 §4). Paket E
+   kanıt okumasını açtı, ama `reconciliation_required` "kanıt yakalama
+   denenebilir" demektir, "yeniden gönder" değil. `ComposerPanel`'in gönderim
+   sonucu bölgesinde hâlâ retry yoktur ve orada gösterilen cümle
+   değişmemiştir; Kanıtlar bölümü aynı kayda **salt okunur** bir yakalama
+   eylemi ekler ve altı sonucun beşi hiçbir şeyi çözmez (§7.1).
+6. **`ComposerPanel`'in sonuç bölgesi hâlâ kalıcı değildir.** Sayfa
+   yenilendiğinde o bölge kaybolur; kalıcı kayıt artık Kanıtlar bölümündedir
+   (AC-14). İki yüzey aynı gönderimi farklı ömürlerle gösterir ve bu bilinçli
+   bir ayrımdır: biri az önce ne olduğunu, diğeri ne arşivlendiğini söyler.
+   Tarayıcı depolaması yasak olduğu için (SI-24) arada bir önbellek yoktur.
 7. **Üst karakter sınırı aşımı butonu kilitlemez.** Süpürme metni kısaltabilir
    ve etkin sınır sunucuda **süpürülmüş** metne uygulanır; UI uyarır ve alanı
    `aria-invalid` yapar ama son kararı sunucuya bırakır. Alt sınırın altı ise
@@ -404,6 +547,14 @@ kaybeder; `Input` bir mesajı taşıyamaz). Bileşen koda dokunulmadan önce
 standart `<textarea>` attribute'ları, `rows` prop'u ve `TextField` içinde
 çocuk olarak kullanılan belgelenmiş kompozisyon (etiket ve doğrulama durumu
 alanla birlikte kalsın diye). Yanında başka hiçbir bileşen eklenmedi.
+
+**Paket E hiçbir bileşen eklemedi; küme 11'de kaldı.** Kanıt defteri
+`Card` + `Alert` + `Separator` + `Button` + `Checkbox` ve `StatusPill`
+üzerinden `Chip` ile kuruldu; kayıt listesi bir `Table` istemedi, çünkü her
+kaydın altında dört güven seviyesi, bir yakalama sonucu paragrafı ve koşullu
+bir uyarı vardır — bunlar bir hücreye sığmaz ve satır başına kart kalıbı hem
+mevcut kümeyle çözülür hem dar ekranda okunur kalır. Böylece CSP inline-style
+hash riski (A1-R1) yeniden değerlendirilmedi ve tarayıcı QA borcu artmadı.
 
 Küme bir
 allowlist testiyle sabitlenir: kaynak ağacındaki bütün `@heroui/react`

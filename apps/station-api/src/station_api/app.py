@@ -19,10 +19,14 @@ from station_api.compose.service import ComposeService
 from station_api.compose.signer import MessageSigner, VaultMessageSigner
 from station_api.config import LOOPBACK_HOST, Settings
 from station_api.conformance import ConformanceService, default_conformance_service
+from station_api.evidence.audit import AuditChain
+from station_api.evidence.audit_envelope import AuditEnvelope, AuditEnvelopeError
+from station_api.evidence.service import EvidenceService
 from station_api.identity.service import IdentityService
 from station_api.routes import api as api_routes
 from station_api.routes import compose as compose_routes
 from station_api.routes import conformance as conformance_routes
+from station_api.routes import evidence as evidence_routes
 from station_api.routes import identity as identity_routes
 from station_api.routes import session as session_routes
 from station_api.routes import technocore as technocore_routes
@@ -40,6 +44,7 @@ from station_api.security.tokens import BootstrapTokenStore
 from station_api.technocore.service import TechnocoreService
 from station_api.technocore.write_client import SignedWriteClient
 from station_api.vault import DpapiVault
+from station_api.vault.errors import VaultError
 
 #: apps/station-api/src/station_api/app.py -> repo root
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -105,6 +110,30 @@ def _mount_spa(app: FastAPI, web_dist: Path) -> None:
         return FileResponse(index_html)
 
 
+def _build_evidence(
+    *, engine: Engine, settings: Settings, evidence: EvidenceService | None
+) -> EvidenceService | None:
+    """Wire the evidence archive, or report that it could not be wired.
+
+    The chain's MAC material lives in a DPAPI envelope, and DPAPI is a
+    Windows facility that a self-test can find missing. Failing to build the
+    archive must not fail the application: the composer treats a missing
+    evidence layer as "not archived" and keeps working, which is the honest
+    degradation. Swallowing the error silently would not be - so the shape of
+    the failure is one narrow exception type, not a bare ``except``.
+    """
+    if evidence is not None:
+        return evidence
+    service = EvidenceService(
+        engine=engine, chain=AuditChain(engine, AuditEnvelope(settings.data_dir))
+    )
+    try:
+        service.start()
+    except (AuditEnvelopeError, VaultError, OSError):
+        return None
+    return service
+
+
 def create_app(
     *,
     settings: Settings,
@@ -116,6 +145,7 @@ def create_app(
     technocore: TechnocoreService | None = None,
     write_client: SignedWriteClient | None = None,
     signer: MessageSigner | None = None,
+    evidence: EvidenceService | None = None,
 ) -> FastAPI:
     """Build the application.
 
@@ -163,6 +193,18 @@ def create_app(
         else None
     )
 
+    # The evidence archive and its audit chain. Both need a database, and the
+    # chain additionally needs DPAPI for the envelope that holds its MAC
+    # material. Neither is a precondition for sending: a machine where the
+    # chain cannot be created still composes and sends, and reports that a
+    # send was not archived rather than refusing to send. Refusing would trade
+    # a missing record for a missing message, which is the worse of the two.
+    app.state.evidence = (
+        _build_evidence(engine=engine, settings=settings, evidence=evidence)
+        if engine is not None
+        else None
+    )
+
     # The composer. It needs a database (for the nonce counter) and an
     # identity service (for the gate and the vault handle); without either it
     # is absent and its routes answer 503 rather than pretending.
@@ -185,6 +227,7 @@ def create_app(
             write_client=(
                 write_client if write_client is not None else SignedWriteClient()
             ),
+            evidence=app.state.evidence,
         )
         if engine is not None and app.state.identity_service is not None
         else None
@@ -197,6 +240,7 @@ def create_app(
     app.include_router(conformance_routes.router)
     app.include_router(technocore_routes.router)
     app.include_router(compose_routes.router)
+    app.include_router(evidence_routes.router)
 
     # Registered last so it cannot shadow /api or /session.
     if web_dist is not None:

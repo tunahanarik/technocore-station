@@ -5,8 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { bootstrapSession, resetSessionState } from "../api/client";
 import type {
   AppStatus,
+  AuditChainStatus,
   ComposeCapability,
   ConformanceStatus,
+  EvidenceList,
   IdentityStatus,
   TechnocoreStatus,
 } from "../api/types";
@@ -319,10 +321,33 @@ function capabilityFor(status: IdentityStatus): ComposeCapability {
   };
 }
 
+//: TEST-ONLY evidence ledger fixture: the honest first-use state. The record
+//: view has its own suite (`EvidenceLedgerPanel.test.tsx`); these page-level
+//: tests only need the section to render without inventing anything.
+const EMPTY_LEDGER: EvidenceList = {
+  records: [],
+  record_count: 0,
+  chain_state: "empty",
+  chain_detail: "Henuz audit satiri yok.",
+  chain_link_count: 0,
+};
+
+//: TEST-ONLY audit verdict. `claim` is the backend's own sentence and is the
+//: only description of the chain the UI is allowed to show.
+const AUDIT_EMPTY: AuditChainStatus = {
+  state: "empty",
+  detail: "Henuz audit satiri yok.",
+  link_count: 0,
+  head_count: 0,
+  first_bad_seq: null,
+  claim:
+    "Audit zinciri cevrimdisi degisiklige karsi tespit edicidir. Ayni Windows kullanicisi olarak calisan bir saldirgana, guvenilir bir zamana veya ucuncu bir tarafa ispata karsilik gelmez.",
+};
+
 /**
  * Route the stub by URL.
  *
- * The pages read five endpoints between them. A stub that answered every
+ * The pages read seven endpoints between them. A stub that answered every
  * request with the identity payload would make the other panels render from
  * the wrong shape and quietly pass.
  */
@@ -338,6 +363,24 @@ function stubIdentity(
       // yield "[object Object]" and route every call to the identity branch.
       const url =
         typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+
+      if (url.includes("/api/evidence/records")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(EMPTY_LEDGER), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+
+      if (url.includes("/api/evidence/audit")) {
+        return Promise.resolve(
+          new Response(JSON.stringify(AUDIT_EMPTY), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
 
       if (url.includes("/api/compose/capability")) {
         return Promise.resolve(
@@ -856,34 +899,91 @@ describe("Compose and Verify surface", () => {
   });
 });
 
+/**
+ * The six phrases `station_api.evidence.language` refuses to let out of the
+ * backend, folded the way that module folds them.
+ *
+ * Folding matters: the charter spells these with Turkish letters and the UI
+ * writes diacritic-free Turkish, so "Sunucu Kanıtı" and "sunucu kaniti" are
+ * the same claim in two spellings. A test that checked only one of them would
+ * be a test anybody could pass by accident.
+ */
+const FORBIDDEN_CLAIMS = [
+  "sunucu kaniti",
+  "degismez kayit",
+  "guvenilir zaman kaniti",
+  "airdrop uygunluk kaniti",
+  // Package E added these two: the same over-claim, about truncation.
+  "degistirilemez kayit",
+  "kurcalanamaz kayit",
+] as const;
+
+/** Case-fold, strip diacritics and map the dotless i, like the backend. */
+function fold(text: string): string {
+  return text
+    .toLocaleLowerCase("tr")
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .replace(/ı/g, "i")
+    .replace(/\s+/g, " ");
+}
+
 describe("Kanitlar surface", () => {
-  it("shows an empty state that names the package that will fill it", () => {
-    render(<EvidencePage />);
-    expect(screen.getByText("Henuz kanit kaydi yok")).toBeInTheDocument();
-    expect(screen.getByText(/Paket E/)).toBeInTheDocument();
+  it("shows an honest empty state instead of naming a future package", async () => {
+    // Package E is this package. The old copy promised the ledger would
+    // "arrive with Paket E", and updating it is the fix, not a loosening
+    // (ADR-0003 10.5).
+    stubIdentity(NO_IDENTITY);
+    const { container } = render(<EvidencePage />);
+
+    expect(await screen.findByText("Henuz kanit kaydi yok")).toBeInTheDocument();
+    expect(container.textContent).not.toContain("Paket E");
+    expect(container.textContent).toContain("kullanici onayli bir gonderim");
   });
 
-  it("declares level 4 as absent rather than implying it exists", () => {
+  it("declares level 4 as absent rather than implying it exists", async () => {
+    stubIdentity(NO_IDENTITY);
     const { container } = render(<EvidencePage />);
+    await screen.findByText("Henuz kanit kaydi yok");
+
     expect(container.textContent).toContain("Harici anchor");
     expect(container.textContent).toContain("MVP kapsaminda yoktur");
   });
 
-  it("uses no forbidden over-claiming evidence language", () => {
+  it("uses no forbidden over-claiming evidence language", async () => {
+    stubIdentity(NO_IDENTITY);
     const { container } = render(<EvidencePage />);
-    const text = container.textContent ?? "";
-    expect(text).not.toContain("sunucu kaniti");
-    expect(text).not.toContain("degismez kayit");
-    expect(text).not.toContain("guvenilir zaman kaniti");
-    expect(text).not.toContain("airdrop uygunluk");
+    await screen.findByText("Henuz kanit kaydi yok");
+
+    const text = fold(container.textContent ?? "");
+    for (const claim of FORBIDDEN_CLAIMS) {
+      expect(text).not.toContain(claim);
+    }
+    // And the one sentence that *is* permitted about the chain is present.
+    expect(text).toContain("cevrimdisi degisiklige karsi tespit edici");
   });
 
-  it("carries the trust levels but not the official-source panel", () => {
+  it("carries the trust levels but not the official-source panel", async () => {
+    stubIdentity(NO_IDENTITY);
     const { container } = render(<EvidencePage />);
+    await screen.findByText("Henuz kanit kaydi yok");
+
     expect(screen.getByText("Guven seviyeleri")).toBeInTheDocument();
     // Document access and drift moved to the Kaynaklar section.
     expect(container.textContent).not.toContain("Salt okunur baglanti durumu");
     expect(container.textContent).not.toContain("Belge erisimi");
+  });
+
+  it("presents the level list as a definition, not as a verdict", async () => {
+    // The static list used to be the only thing on the page, so it read as a
+    // status. Now that records carry their own levels, it has to say which of
+    // the two it is.
+    stubIdentity(NO_IDENTITY);
+    const { container } = render(<EvidencePage />);
+    await screen.findByText("Henuz kanit kaydi yok");
+
+    expect(container.textContent).toContain("bir kaydin durumu degildir");
+    expect(container.textContent).toContain("tek bir rozete toplanmaz");
   });
 });
 

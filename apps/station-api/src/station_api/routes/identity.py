@@ -26,6 +26,7 @@ from technocore_conform import fingerprint_from_public_key, public_key_from_did_
 from technocore_conform import short_fingerprint as make_short_fingerprint
 
 from station_api.dependencies import require_session
+from station_api.downloads import content_disposition, safe_download_filename
 from station_api.identity.service import (
     IdentityService,
     IdentityServiceError,
@@ -291,11 +292,17 @@ async def export_recovery(
     except IdentityServiceError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
-    filename = f"technocore-station-{did[-12:]}{RECOVERY_SUFFIX}"
+    # Sanitised rather than interpolated. The variable part is a base58 DID
+    # tail today, which is why the raw f-string was safe for two stages; the
+    # helper is what stops that from being a fact nobody re-checks when the
+    # name gains a label (ADR-0003 9).
+    filename = safe_download_filename(
+        f"technocore-station-{did[-12:]}", suffix=RECOVERY_SUFFIX
+    )
     return Response(
         content=payload,
         media_type="application/octet-stream",
-        headers={**_NO_STORE, "Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={**_NO_STORE, "Content-Disposition": content_disposition(filename)},
     )
 
 

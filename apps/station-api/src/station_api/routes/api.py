@@ -112,7 +112,7 @@ async def app_status(request: Request, session: CurrentSession) -> AppStatusResp
     settings = request.app.state.settings
     return AppStatusResponse(
         service=ServiceStatus(
-            stage=4,
+            stage=5,
             mode="development" if settings.dev_mode else "production",
         ),
         database=_read_database_status(request.app.state.engine),
