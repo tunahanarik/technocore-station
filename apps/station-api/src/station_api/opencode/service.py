@@ -8,7 +8,7 @@ memory.** :func:`station_api.logging_setup.register_secret` on the way out of
 the envelope, :func:`~station_api.logging_setup.forget_secret` in a
 ``finally``. The trap ADR-0005 8 names is that ``register_secret`` silently
 ignores anything shorter than sixteen characters, so a short key would be
-held and never scrubbed; :func:`~station_api.opencode.credentials.
+held and never scrubbed; :func:`~station_api.opencode.credential_store.
 assert_storable` refuses one before it can be stored, and
 :meth:`OpenCodeService._registered` asserts the length again at use time
 rather than trusting that the store was the only way in.
@@ -56,7 +56,7 @@ from station_api.opencode.catalog import (
     parse_catalog,
 )
 from station_api.opencode.client import AUTH_HEADER_CAVEAT, OpenCodeClient
-from station_api.opencode.credentials import (
+from station_api.opencode.credential_store import (
     CREDENTIAL_ID,
     MIN_KEY_LENGTH,
     ApiKeyEnvelope,

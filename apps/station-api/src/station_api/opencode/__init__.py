@@ -14,7 +14,7 @@ they live:
                                           httpx, and the only place in the
                                           repository that writes an
                                           ``Authorization`` header
-:mod:`~station_api.opencode.credentials`  the DPAPI envelope, with the one
+:mod:`~station_api.opencode.credential_store`  the DPAPI envelope, with the one
                                           deliberate inversion of the audit
                                           envelope's never-overwrite rule
 :mod:`~station_api.opencode.adapters`     three protocol families, one event

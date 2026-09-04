@@ -25,7 +25,7 @@ from sqlalchemy import Engine, inspect
 from station_api.config import Settings
 from station_api.evidence.audit_envelope import AuditEnvelope, AuditEnvelopeError
 from station_api.logging_setup import _MIN_REGISTERABLE_LENGTH
-from station_api.opencode.credentials import (
+from station_api.opencode.credential_store import (
     CREDENTIAL_ID,
     DOMAIN_SEPARATION_LABEL,
     ENVELOPE_FORMAT,

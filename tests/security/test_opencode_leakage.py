@@ -39,7 +39,7 @@ from station_api.logging_setup import (
 )
 from station_api.opencode.adapters import parse_response
 from station_api.opencode.client import OpenCodeClient
-from station_api.opencode.credentials import credential_path
+from station_api.opencode.credential_store import credential_path
 from station_api.opencode.registry import Protocol
 from station_api.opencode.service import OpenCodeService
 
