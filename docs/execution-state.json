@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-09-04T00:40:00Z",
+  "updated_utc": "2026-09-04T04:20:00Z",
   "base_sha": "5411171dd2302c6fea5a2af22695503859317c27",
   "note": "Kayit ile gercek Git/GitHub durumu celisirse Git/GitHub kaniti esastir.",
   "stages": [
@@ -102,15 +102,26 @@
     {
       "id": "F",
       "name": "Proje/gorev modulu temeli",
-      "status": "implementing",
+      "status": "testing",
       "branch": "stage-f-modules",
       "pr": null,
       "reviewed_sha": null,
       "tested_sha": null,
       "merge_sha": null,
-      "findings": [],
+      "findings": [
+        "ADR-0004: modul = derleme zamani registry kaydi; Proje 0 TASINMADI, kayit owners ile sahibi olan modullere isaret ediyor ve her adin bir dosyaya cozuldugu testle dogrulaniyor",
+        "Kunye ADR-017 ilk kez gercekten uygulandi: modules/ ve tasks/ agaclarinda importlib/pkgutil/__import__/exec/eval/import_module/iter_modules/entry_points yok (AST taramasi)",
+        "Dokuz durum + acik ALLOWED_TRANSITIONS; suggested/running/paused tanimli ama uretilemez. Davranis testi gercek servisi gercek DB uzerinde surup ULASILABILIR KUMEYI hesapliyor ve PRODUCIBLE_STATES ile karsilastiriyor - running'i acan paket sabiti duzenlemek ZORUNDA",
+        "Dort alan dort ayri sutun grubu; public_share TEMSIL EDILEMEZ (EvidenceRef kurulamaz) ve yayimi engellemez; EvidenceRef.verified varsayilansiz - 'bir kaydin varligi tek basina basari degildir' testle kanitli",
+        "Dedup: domain_digest(task-source/v1, source_id, content_sha256); kaynak kimligi registry enum'undan (StrEnum her isinstance(str) kontrolunden gectigi icin calisma zamani enum kontrolu sart); icerik degisince eski kanit gerekceyle REDDEDILIYOR",
+        "Kesif dogrulandi: WriteOutcomeValue.IN_FLIGHT Paket D'den beri yaziliyor ve hicbir startup hook'u okumuyordu. Salt-okuma tarama eklendi; SIFIR iddiasi httpx tasiyicisi + socket.connect sarilip DENEMELER SAYILARAK olculdu (taramada da create_app'te de 0)",
+        "Butce alani ACILMADI; erteleme budget_available: Literal[False] + budget_detail + docs/task-modules.md 6 ile gorunur kilindi ve testle denetleniyor (ADR-0004 7)",
+        "docs/architecture.md gercekle uzlastirildi (ADR-0004 10): belge hala 'Conformance, Technocore istemcisi ve Evidence katmanlari henuz yoktur' diyordu; ucu de merge edilmisti",
+        "1302 pytest (1229 -> 1302; 73 yeni test) + 206 Vitest degismedi; yeni bagimlilik yok, yeni marker yok, yeni HeroUI bileseni yok, apps/station-web kaynagina dokunulmadi",
+        "SI-210...SI-225, IMP-341...IMP-355; migration 0007 yalniz ekleme, tek head"
+      ],
       "failed_attempts": 0,
-      "next_safe_step": "Derleme zamani proje/gorev modul registry'si. Mevcut sections.ts ve backend yuzeyini kesfet; runtime plugin/dinamik yukleme YOK."
+      "next_safe_step": "Bagimsiz inceleme (insan DEGIL) ve PR. Gate'ler yesil: ruff x2, mypy strict, 1302 pytest, npm lint/test/build."
     },
     {
       "id": "G",

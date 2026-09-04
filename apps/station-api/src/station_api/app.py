@@ -7,12 +7,15 @@ for a browser to be confused about, and therefore no CORS anywhere (ADR-013).
 
 from __future__ import annotations
 
+import logging
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import Engine
+from sqlalchemy.exc import SQLAlchemyError
 
 from station_api.compose.nonce import NonceReserver
 from station_api.compose.service import ComposeService
@@ -41,10 +44,17 @@ from station_api.security.middleware import (
 )
 from station_api.security.sessions import SessionStore
 from station_api.security.tokens import BootstrapTokenStore
+from station_api.tasks.reconciliation import (
+    ReconciliationReport,
+    scan_unfinished_writes,
+)
+from station_api.tasks.service import TaskService
 from station_api.technocore.service import TechnocoreService
 from station_api.technocore.write_client import SignedWriteClient
 from station_api.vault import DpapiVault
 from station_api.vault.errors import VaultError
+
+_log = logging.getLogger(__name__)
 
 #: apps/station-api/src/station_api/app.py -> repo root
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -132,6 +142,32 @@ def _build_evidence(
     except (AuditEnvelopeError, VaultError, OSError):
         return None
     return service
+
+
+def _scan_unfinished(engine: Engine | None) -> ReconciliationReport:
+    """Run the startup scan and say what it found, once, in the log.
+
+    Wrapped so a database that cannot be read does not stop the application
+    from starting. The scan is a report about the ledger; failing to produce
+    it is worth a log line, not a refusal to launch - and swallowing the
+    failure silently is not the alternative, which is why the shape of the
+    exception is narrow rather than a bare ``except``.
+    """
+    try:
+        report = scan_unfinished_writes(engine)
+    except SQLAlchemyError as exc:  # pragma: no cover - storage-dependent
+        _log.warning("task reconciliation scan failed: %s", type(exc).__name__)
+        return ReconciliationReport(
+            scanned_at=datetime.now(UTC),
+            unfinished=(),
+            detail="Yarim kalmis gonderim taramasi yapilamadi.",
+        )
+    if report.unfinished:
+        _log.info(
+            "task reconciliation: %d unfinished send(s) listed; nothing resumed",
+            report.unfinished_count,
+        )
+    return report
 
 
 def create_app(
@@ -232,6 +268,19 @@ def create_app(
         if engine is not None and app.state.identity_service is not None
         else None
     )
+
+    # The task layer. It needs a database and nothing else: no client, no
+    # signer, no vault (ADR-0004 2). It has no routes in this release - the
+    # tasks section stays closed (ADR-0004 9) - so it is reachable only from
+    # here and from tests, which is what a foundation package should look
+    # like.
+    app.state.tasks = TaskService(engine=engine) if engine is not None else None
+
+    # The read-only reconciliation scan (ADR-0004 6). ``in_flight`` has been
+    # written since Package D and never read back; this reads it. One SELECT,
+    # no outbound request, no row changed and no send continued. Whether to
+    # continue is the user's decision, and continuing re-runs every check.
+    app.state.task_reconciliation = _scan_unfinished(engine)
 
     app.include_router(session_routes.router)
     app.include_router(api_routes.router)
