@@ -26,11 +26,13 @@ from station_api.evidence.audit import AuditChain
 from station_api.evidence.audit_envelope import AuditEnvelope, AuditEnvelopeError
 from station_api.evidence.service import EvidenceService
 from station_api.identity.service import IdentityService
+from station_api.opencode.service import OpenCodeService
 from station_api.routes import api as api_routes
 from station_api.routes import compose as compose_routes
 from station_api.routes import conformance as conformance_routes
 from station_api.routes import evidence as evidence_routes
 from station_api.routes import identity as identity_routes
+from station_api.routes import opencode as opencode_routes
 from station_api.routes import session as session_routes
 from station_api.routes import technocore as technocore_routes
 from station_api.security.middleware import (
@@ -182,6 +184,7 @@ def create_app(
     write_client: SignedWriteClient | None = None,
     signer: MessageSigner | None = None,
     evidence: EvidenceService | None = None,
+    opencode: OpenCodeService | None = None,
 ) -> FastAPI:
     """Build the application.
 
@@ -282,6 +285,17 @@ def create_app(
     # continue is the user's decision, and continuing re-runs every check.
     app.state.task_reconciliation = _scan_unfinished(engine)
 
+    # The OpenCode connection. Built unconditionally, because building it
+    # contacts nobody: it reads the database when there is one and reports
+    # "not configured" when there is not. Nothing here fetches the catalog,
+    # verifies a credential or sends a metered request at startup - a launch
+    # that could cost the user money would be the worst possible default, and
+    # a test counts the outbound attempts rather than taking this comment's
+    # word for it.
+    app.state.opencode = opencode or OpenCodeService(
+        engine=engine, data_dir=settings.data_dir
+    )
+
     app.include_router(session_routes.router)
     app.include_router(api_routes.router)
     app.include_router(identity_routes.router)
@@ -290,6 +304,7 @@ def create_app(
     app.include_router(technocore_routes.router)
     app.include_router(compose_routes.router)
     app.include_router(evidence_routes.router)
+    app.include_router(opencode_routes.router)
 
     # Registered last so it cannot shadow /api or /session.
     if web_dist is not None:

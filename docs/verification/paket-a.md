@@ -52,6 +52,11 @@ kurar ve build eder.
    | actions/checkout | v7.0.1 | `3d3c42e5aac5ba805825da76410c181273ba90b1` |
    | astral-sh/setup-uv | v10.0.1 | `20cfd1bf945f4377ade1205e4dbc17946fc9a30d` |
    | actions/setup-node | v7.0.0 | `820762786026740c76f36085b0efc47a31fe5020` |
+   | actions/upload-artifact | v5.0.0 | `330a01c490aca151604b8cf639adc76d48f6c5d4` |
+
+   Son satır 2026-09-04'te, tarayıcı QA işi (`browser`) eklenirken aynı
+   yöntemle doğrulandı; yalnız o işin başarısızlık artefaktları için
+   kullanılır (ADR-0006, [`../browser-qa.md`](../browser-qa.md)).
 
    setup-uv tercih gerekçesi: uv CPython 3.12'yi kendisi kurar; curl-pipe uv
    kurulumu pinleme politikasını delerdi. uv sürümü de pinli (0.11.26).

@@ -196,8 +196,12 @@ Künye §11.2 gereği başka kripto kütüphanesi gerekçesiz eklenmez.
 | `vite`, `@vitejs/plugin-react` | Build ve dev proxy |
 | `typescript`, `typescript-eslint`, `eslint`, `eslint-plugin-react-hooks` | Strict tipler; ESLint tarayıcı depolamasını **kural düzeyinde** yasaklar |
 | `vitest`, `jsdom`, `@testing-library/*` | Unit ve smoke testleri |
+| `@playwright/test` **1.62.1** (Apache-2.0) | **Yalnız test.** Tarayıcı QA'sı (ADR-0006). jsdom'da **kanıtlanamayan** şeyleri kanıtlar: gerçek odak sırası ve focus trap, gerçek klavye gezinmesi, `URL.createObjectURL` ile indirme yolu ve gerçek `Content-Disposition` gidiş-dönüşü, ve en önemlisi **gerçek CSP başlıkları altında React Aria inline-style hash'i** (risk A1-R1) — jsdom CSP uygulamaz, bu yüzden o riski hiçbir Vitest testi göremezdi. Sürüm `^` olmadan tam pinlidir; indirilen tarayıcı da bu pinden gelir (Chromium **151.0.7922.34**, Playwright revizyon **1234**). Yalnız Chromium kurulur: ürün Windows-only bir yerel uygulamadır (ADR-008, risk A1-R6) ve Firefox + WebKit indirmek hedeflenmeyen iki motor için ~300 MB ve iki motor kadar kararsızlık eklerdi. Production bundle'ına girmez. |
 
 Uzak font, CDN veya harici UI varlığı **yoktur**.
+
+Tarayıcı testleri nasıl çalışır, ne test edilir ve ne **edilmez**:
+[`docs/browser-qa.md`](docs/browser-qa.md).
 
 ---
 

@@ -452,3 +452,115 @@ export interface TechnocoreStatus {
   readonly warning_count: number;
   readonly origin: string;
 }
+
+// --- OpenCode Go connection (Paket G) --------------------------------------
+//
+// Hand-written mirrors of the `OpenCode*` models in `station_api/schemas.py`.
+// They copy the backend's shape including the holes in it, because the holes
+// are the contract:
+//
+// * there is no `api_key`, `key`, `token` or `secret` field anywhere below,
+//   in either direction after the one write, because the API has no route
+//   that returns the stored key (ADR-0005 7);
+// * a connection verdict has no `verified` value and no boolean badge - it is
+//   a state plus every reason it is not stronger (ADR-0005 4);
+// * `selectable` travels with the `reason` it is false, because listing a
+//   model is not the same claim as being able to call it (ADR-0005 5);
+// * `budget_available` is `false` as a *type*, so no future edit can open a
+//   budget here by assigning to it (ADR-0005 9).
+
+/**
+ * What can honestly be said about the stored credential.
+ *
+ * Note the absent value: there is no `verified`. The provider's catalog
+ * answers without a key, a GET on a protocol path answers 404, and this
+ * build makes no metered call on its own - so nothing here can earn a
+ * verified verdict, and the type refuses to hold one.
+ */
+export interface OpenCodeConnectionCheck {
+  readonly state: "not_configured" | "never_checked" | "key_saved_unverified";
+  /** Plural on purpose. One reason reads like a fixable problem; the list is
+   * the actual epistemic position. */
+  readonly reasons: readonly string[];
+  readonly detail: string;
+}
+
+/** One catalog row, joined to what this build knows about it. */
+export interface OpenCodeModel {
+  readonly model_id: string;
+  readonly owned_by: string;
+  /** False whenever the protocol family was not published for this model. */
+  readonly selectable: boolean;
+  /** Empty when there is no table entry. An absent protocol is not a default. */
+  readonly protocol: string;
+  readonly protocol_verification: "documented" | "unverified";
+  /** Why it cannot be selected, in the user's language. Empty when it can. */
+  readonly reason: string;
+  /** The provider's published retention term, or `unknown`. Rendered as it
+   * arrives and never rewritten into a reassurance. */
+  readonly retention: string;
+  readonly training_use: "yes" | "no" | "unknown";
+  /** `unknown` asks for acknowledgement exactly as `yes` does. */
+  readonly requires_training_acknowledgement: boolean;
+  readonly privacy_source: string;
+  readonly privacy_read_on: string;
+}
+
+export interface OpenCodeCatalog {
+  readonly state: "never_fetched" | "ok" | "fetch_error" | "parse_error";
+  /** The last **attempt**. A failed refresh moves this and nothing else. */
+  readonly fetched_at: string | null;
+  /** When the listed models were actually read. Separate on purpose: a failed
+   * refresh must not lend the cache a date it did not earn. */
+  readonly models_fetched_at: string | null;
+  readonly detail: string;
+  readonly http_status: number;
+  readonly models: readonly OpenCodeModel[];
+  readonly model_count: number;
+  readonly selectable_count: number;
+  readonly listing_caveat: string;
+}
+
+export interface OpenCodePublishedLimit {
+  readonly window: string;
+  readonly amount_usd: number;
+  readonly note: string;
+}
+
+/** Read-only spending context. No budget opens here. */
+export interface OpenCodeSpendingContext {
+  readonly budget_available: false;
+  readonly limits: readonly OpenCodePublishedLimit[];
+  readonly limit_behaviour: string;
+  /** Where the preference lives. Station does not change it. */
+  readonly use_balance: string;
+  readonly local_counter_caveat: string;
+  readonly unknown_cost_sentence: string;
+}
+
+/** The three families, and the two formats deliberately not built. */
+export interface OpenCodeProtocolContext {
+  readonly protocols: readonly string[];
+  readonly streaming_supported: false;
+  readonly tool_calls_supported: false;
+  readonly deferral: string;
+  readonly shape_provenance: string;
+}
+
+/** The whole connection, read-only. Reading it sends nothing outward. */
+export interface OpenCodeStatus {
+  readonly configured: boolean;
+  /** Twelve characters of an HMAC over a fixed public label. It names which
+   * credential is installed without revealing any part of it. */
+  readonly fingerprint_short: string;
+  readonly configured_at: string | null;
+  readonly updated_at: string | null;
+  readonly check: OpenCodeConnectionCheck;
+  readonly selected_model: string;
+  /** The header assumption, stated to the user rather than buried in a source
+   * comment (ADR-0005 3). Rendered verbatim. */
+  readonly auth_header_caveat: string;
+  readonly catalog: OpenCodeCatalog;
+  readonly spending: OpenCodeSpendingContext;
+  readonly protocol_context: OpenCodeProtocolContext;
+}

@@ -246,6 +246,20 @@ TEST_ONLY_VAULT_PASSPHRASE = "TEST-ONLY-vault-passphrase-0001"
 TEST_ONLY_RECOVERY_PASSPHRASE = "TEST-ONLY-recovery-passphrase-01"
 TEST_ONLY_WRONG_PASSPHRASE = "TEST-ONLY-wrong-passphrase-9999"
 
+#: TEST-ONLY. **NOT A REAL PROVIDER KEY**, and not a key for any service.
+#:
+#: The second canary in this file, and it exists for the same reason the seed
+#: canary does: a plain substring search does not care *how* a value escaped,
+#: so a distinctive marker installed on purpose is the only check that
+#: catches a leak nobody predicted (ADR-0005 8).
+#:
+#: Two properties are load-bearing and both are asserted rather than assumed:
+#: it is long enough that ``logging_setup.register_secret`` will actually
+#: hold it - that function silently ignores anything under sixteen
+#: characters - and it appears nowhere else in this repository, so a search
+#: for it means something.
+TEST_ONLY_OPENCODE_CREDENTIAL = "TEST-ONLY-oc-9f2b7d41c6e85a03-NOT-A-REAL-CREDENTIAL"
+
 
 @pytest.fixture(scope="session")
 def test_only_seed() -> bytes:
@@ -278,7 +292,7 @@ def engine(settings: Settings) -> Engine:
     # The same stage the launcher stamps. A test database that describes
     # itself as an older build than the one under test is a small lie, and
     # the kind that goes unnoticed precisely because nothing reads it back.
-    return initialise_database(settings.database_path, stage=6)
+    return initialise_database(settings.database_path, stage=7)
 
 
 @pytest.fixture

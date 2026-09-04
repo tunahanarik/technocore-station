@@ -1240,20 +1240,78 @@ düzeltme **mutasyonla** doğrulandı (bozulan kod, kırılan test):
 **Bu pakette bilinçli olarak yapılmayanlar:** görev HTTP route'u ve görünür
 yüzey (H1/H2), öneri üreticisi ve yürütücü, dış paylaşım (H3), bütçe (G/H2),
 kanıt silme route'u (ADR-0003 §7'nin ertelenmiş yarısı, IMP-329).
-## Sonraki aşama: Paket G — OpenCode Go bağlantısı
+### Paket G — OpenCode Go baglantisi (Asama 7)
 
-Kapsam: DPAPI'de credential, katalogdan model listesi, üç protokol adapter'ı,
-redaction. **Gerçek harcama yok.** Harcama bağlamı G'ye, bütçe/izin sınırı
-H2'ye ertelenmiş yarım gereksinim olarak kayıtlıdır (ADR-0004 §7,
-[`docs/task-modules.md`](docs/task-modules.md) §6).
+Kapsam kararlari:
+[`ADR-0005`](docs/decisions/0005-paket-g-kapsam-kararlari-2026-09-04.md).
+Tarayici QA: [`ADR-0006`](docs/decisions/0006-tarayici-qa-kapsama-alindi-2026-09-04.md).
 
-Aşama 4 ile giden yazma yolu, Aşama 5 ile kanıt defteri, Aşama 6 ile modül
-registry'si ve görev durum makinesi açıldı; fakat **gerçek servise hiçbir
-istek gönderilmedi** — export okuması dahil her şey mock taşıyıcıya karşı,
-autouse ağ kesici altında koştu. Paket F'in başlangıç taraması da yalnızca
-yerel veritabanını okur ve bunu bir test sayarak doğrular.
+- [x] **Sozlesme resmi belgeden dogrulandi** (prompt 11.1 sart kosuyor).
+      Dogrulanan: uc protokol yolu, base URL, katalog endpoint'i, kullanim
+      limitleri, "Use balance"in konsolda oldugu, veri saklama/egitim
+      tablosu, `x-opencode-session` zorunlulugu, `opencode-go/` on ekinin
+      provider on eki oldugu. **Dogrulanamayan ve uydurulmayan:** auth
+      header'i, uc ailenin govde sekilleri, streaming/tool-call formati,
+      hata govdeleri.
+- [x] **Streaming ve tool-call YOK** (ADR-0005 §2) - sozlesmesi
+      yayimlanmamis; yazmak tahmin olurdu. Tipleri `false` oldugu icin
+      sonraki bir duzenleme `true` atayamaz.
+- [x] **Auth header'i beyan edilmis, dogrulanmamis varsayim** - tek yerde,
+      etiketli ve kullaniciya gorunur.
+- [x] **"Baglantiyi denetle" yesil rozet uretemez**: durum kumesinde
+      `verified` yok, UI ton haritasinda `ok` girdisi yok. Katalog
+      anahtarsiz cevap verdigi icin listeyi cekmek anahtari dogrulamaz.
+- [x] **Kendi kendini kapatan hata yakalandi ve duzeltildi:** ilk uygulama
+      belgenin protokol ailesini soylemedigini varsayip 34 modelin hepsini
+      `unverified` isaretledi ve **hicbir model secilemez** hale geldi -
+      yani ozellik promptun yasakladigi "gostermelik API kutusu" durumuna
+      dustu. Belge model basina endpoint yayimliyor (27 satir) ve kod
+      `grok-4.6`'yi yanlis aileye koymustu. **Sekiz test yanlis iddiayi
+      sabitliyordu**; yeniden yazildi ve 27 satir testte bagimsiz olarak
+      yeniden bildirildi. SI-256 bu gerilemeyi sabitler.
+- [x] **Dorduncu giden istemci** gerekcesiyle acildi; allow-list duz
+      kumeden `{dizin: {modul}}` haritasina donustu. SI-71 Technocore
+      istemcilerine, SI-48 seed/private key/recovery'ye **daraltildi** -
+      ikisi de gevsetilmedi.
+- [x] **Credential ayri DPAPI zarfinda**, audit zarfinin sekliyle ve tek
+      bilincli farkla: **anahtar uzerine yazilabilir** (kullanici
+      degistirebilmeli). Saklanan anahtari geri gosteren endpoint YOK.
+      TEST-ONLY canary ile yedi yuzey taraniyor.
+- [x] **Butce acilmadi** (ADR-0005 §9): `budget_available: Literal[False]`
+      degismedi. "Sinirsiz" denmiyor, bilinmeyen maliyet `unknown`,
+      "Use balance" saglayici konsoluna havale ediliyor.
+- [x] **Verilen soz bilincli revize edildi**: ekranda tam olarak **bir**
+      maskeli alan olabilir ve o provider anahtaridir; seed/private
+      key/recovery icin hicbir frontend istisnasi yok. Test daraltilarak
+      guclendirildi.
+- [x] **Tarayici QA kapsama alindi** (ADR-0006, kullanici talimatiyla
+      ADR-0001 §4 tersine cevrildi): Playwright 1.62.1 tam pin, yalniz
+      Chromium, `npm audit` 0 acik. **51 e2e testi**, bes ardisik kosuda
+      51/51, kararsizlik yok. **A1-R1 sonucu: CSP ihlali YOK** - pinli
+      React Aria hash'i gecerli ve test bosa gecemiyor. Dis aga sifir istek
+      **olculdu** (negatif kontrol testiyle). CI'a ayri `browser` isi eklendi.
+- [x] **1514 pytest** (1331 -> 1514) + **230 Vitest** (206 -> 230) +
+      **51 Playwright**. Rapor:
+      [`docs/verification/paket-g.md`](docs/verification/paket-g.md).
+- [x] SI-233...SI-256, IMP-366...IMP-378. Asama numarasi dort yerde 6 -> 7.
+- [ ] **Acik bulgu (sabitlendi, duzeltilmedi):** baslik hiyerarsisi
+      h1 -> h3 atliyor (HeroUI `Card.Title` `<h3>` render ediyor).
+      Duzeltmek MCP dogrulamasi gerektiriyor (CLAUDE.md kural 7).
+- [ ] **Bilinen bosluk:** `e2e/**` lint edilmiyor (eslint config bir depo
+      hook'u tarafindan yazmaya kapali); telafi olarak `tsc -b` kapsiyor ve
+      bir suite-discipline testi disiplini zorluyor.
 
-Ön koşul: kullanıcı açıkça "başlayalım" demeden gerçek gönderim yapılmaz.
+## Sonraki asama: Asama 8 - H1 Work Scan (yararli is bulma)
+
+Asama 4 ile giden yazma yolu, 5 ile kanit defteri, 6 ile modul registry'si
+ve gorev durum makinesi, 7 ile saglayici baglantisi acildi; fakat **gercek
+servise hicbir istek gonderilmedi** ve **hicbir ucretli cagri yapilmadi** -
+her sey mock tasiyiciya karsi, autouse ag kesici altinda kostu. Kullanicinin
+gercek API anahtari okunmadi, istenmedi ve kullanilmadi.
+
+Butce/izin siniri H2'ye, public paylasim H3'e ertelenmis kalir.
+
+On kosul: kullanici acikca "baslayalim" demeden gercek gonderim yapilmaz.
 
 ---
 

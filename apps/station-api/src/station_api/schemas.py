@@ -809,3 +809,181 @@ class TaskReconciliationResponse(StrictModel):
     entries: list[UnfinishedWriteStatus]
     resumed_any: Literal[False] = False
     detail: str
+
+
+# --- the OpenCode Go connection (Package G) ---------------------------------
+#
+# Response models here are an explicit allow-list, and the allow-list has a
+# hole in it on purpose: **there is no field carrying the provider key, and no
+# endpoint that returns or copies it.** A stored credential is described by a
+# twelve-character fingerprint prefix, two timestamps and a boolean, which is
+# everything a person needs to recognise which key is installed and nothing
+# anyone needs to use it.
+#
+# The models also refuse to flatten three things into one:
+#
+# * a connection verdict is a state **plus every reason it is not stronger**,
+#   never a single boolean badge (ADR-0005 4);
+# * a listed model is not a callable model, so ``selectable`` and the reason
+#   it is false travel together (ADR-0005 5);
+# * a spending context is published limits and where the controls live, never
+#   a figure Station computed (ADR-0005 9).
+
+
+class OpenCodeConnectionCheckStatus(StrictModel):
+    """What can honestly be said about the stored credential.
+
+    Note the absent value: ``state`` has no ``verified``. The catalog answers
+    without a key, a GET on a protocol path answers 404, and a real metered
+    call is not made automatically - so nothing in this build can produce a
+    verified verdict, and a field that could hold one would be an invitation
+    to write it from somewhere that had not earned it.
+    """
+
+    state: Literal["not_configured", "never_checked", "key_saved_unverified"]
+    #: Plural on purpose. One reason reads like a problem to fix; the list is
+    #: the actual epistemic position.
+    reasons: list[str]
+    detail: str
+
+
+class OpenCodeStrictModel(StrictModel):
+    """``StrictModel`` with room for a field genuinely called ``model_id``.
+
+    Pydantic reserves the ``model_`` prefix for its own API and warns when a
+    field takes it. Renaming the field to dodge the warning would have made
+    the API speak differently from the provider it describes - the catalog's
+    own key is ``id`` and everything about this feature is a *model* id - so
+    the namespace is released here, narrowly, instead of on every model in
+    this module.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, protected_namespaces=())
+
+
+class OpenCodeModelStatus(OpenCodeStrictModel):
+    """One catalog row, joined to what this build knows about it."""
+
+    model_id: str = Field(
+        description="The wire identifier: bare, never carrying the provider prefix."
+    )
+    owned_by: str
+    #: False whenever the protocol family was not published. Listing is not
+    #: entitlement and is not addressability.
+    selectable: bool
+    #: Empty when there is no table entry. An absent protocol is not a
+    #: default protocol.
+    protocol: str
+    protocol_verification: Literal["documented", "unverified"]
+    #: Why it cannot be selected, in the user's language. Empty when it can.
+    reason: str
+    #: The provider's published retention term, or ``unknown``. Never
+    #: rewritten into a reassurance.
+    retention: str
+    training_use: Literal["yes", "no", "unknown"]
+    #: ``unknown`` asks for acknowledgement exactly as ``yes`` does.
+    requires_training_acknowledgement: bool
+    privacy_source: str
+    privacy_read_on: str
+
+
+class OpenCodeCatalogStatus(OpenCodeStrictModel):
+    """The cached public catalog, its age, and any error reaching it.
+
+    The file path the cache lives behind is deliberately absent (SI-36), as
+    is the raw document: what is returned is the list and the metadata about
+    the read.
+    """
+
+    state: Literal["never_fetched", "ok", "fetch_error", "parse_error"]
+    #: The last **attempt**. A failed refresh moves this and nothing else.
+    fetched_at: datetime | None
+    #: When the listed models were actually read. Separate on purpose: a
+    #: failed refresh must neither delete the cache nor lend it a date the
+    #: cache did not earn.
+    models_fetched_at: datetime | None
+    detail: str
+    http_status: int
+    models: list[OpenCodeModelStatus]
+    model_count: int
+    selectable_count: int
+    listing_caveat: str
+
+
+class OpenCodePublishedLimit(StrictModel):
+    """One usage limit exactly as the provider published it."""
+
+    window: str
+    amount_usd: int
+    note: str
+
+
+class OpenCodeSpendingContext(StrictModel):
+    """Read-only spending context. No budget opens here.
+
+    ``budget_available`` is a ``Literal[False]`` for the same reason
+    ``TaskReconciliationResponse.resumed_any`` is: the shape of the model is
+    where the decision is stated, so it cannot drift out of the prose
+    (ADR-0005 9).
+    """
+
+    budget_available: Literal[False] = False
+    limits: list[OpenCodePublishedLimit]
+    limit_behaviour: str
+    use_balance: str = Field(
+        description="Where the preference lives. Station does not change it."
+    )
+    local_counter_caveat: str
+    unknown_cost_sentence: str
+
+
+class OpenCodeProtocolContext(StrictModel):
+    """The three families, and the two formats deliberately not built."""
+
+    protocols: list[str]
+    streaming_supported: Literal[False] = False
+    tool_calls_supported: Literal[False] = False
+    deferral: str
+    shape_provenance: str
+
+
+class OpenCodeStatusResponse(StrictModel):
+    """The whole connection, read-only. Sends nothing."""
+
+    configured: bool
+    #: Twelve characters of an HMAC over a fixed public label. It names which
+    #: credential is installed without revealing any part of it.
+    fingerprint_short: str
+    configured_at: datetime | None
+    updated_at: datetime | None
+    check: OpenCodeConnectionCheckStatus
+    selected_model: str
+    #: The header assumption, restated to the user rather than buried in a
+    #: source comment (ADR-0005 3).
+    auth_header_caveat: str
+    catalog: OpenCodeCatalogStatus
+    spending: OpenCodeSpendingContext
+    protocol_context: OpenCodeProtocolContext
+
+
+class OpenCodeCredentialRequest(StrictModel):
+    """The one place a provider key enters this process.
+
+    ``SecretStr`` for the reason every passphrase input uses it: it prints
+    ``**********`` in a repr, a log line or a traceback, so an accidental
+    exception never spills the value. There is no matching response field -
+    the key goes in and is never handed back.
+    """
+
+    api_key: SecretStr = Field(
+        description="Saglayici anahtari. Kaydedilir, hicbir yanitta geri dondurulmez."
+    )
+
+
+class OpenCodeSelectModelRequest(OpenCodeStrictModel):
+    """Choose a model. Refused, with a reason, when it cannot be addressed."""
+
+    model_id: str
+    #: Fail-closed. A model whose retention term is ``yes`` **or**
+    #: ``unknown`` needs this, and the default is the safe answer.
+    training_acknowledged: bool = False

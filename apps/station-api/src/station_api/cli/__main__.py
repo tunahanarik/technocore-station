@@ -88,7 +88,7 @@ def import_seed_command(seed_path: Path, label: str) -> int:
         return 2
 
     try:
-        engine = initialise_database(settings.database_path, stage=6)
+        engine = initialise_database(settings.database_path, stage=7)
         service = IdentityService(engine=engine, data_dir=settings.data_dir)
 
         current = service.describe()

@@ -25,6 +25,7 @@ import type {
   EvidenceExportFormat,
   EvidenceList,
   IdentityStatus,
+  OpenCodeStatus,
   ProtectionMode,
   RecoveryInspectResult,
   SessionBootstrap,
@@ -82,6 +83,43 @@ export const SEND_TIMEOUT_MS = 45000;
  * there", and a client stopwatch must not collapse the two.
  */
 export const CAPTURE_TIMEOUT_MS = 90000;
+
+/**
+ * Storing the OpenCode provider key. The one request in this app whose body
+ * carries a provider secret, and the only reason it has its own deadline.
+ *
+ * It reaches **nobody**: the route writes a DPAPI envelope to local disk -
+ * mkstemp, fsync, ACL, atomic replace, ACL again - and then reads back local
+ * state. So a network-sized budget is wrong in both directions, and the
+ * default 15s is sized for a local *read*, not for a blocking route that
+ * queues in the server threadpool behind other blocking work and then waits
+ * on two Windows ACL calls and an fsync.
+ *
+ * Twenty seconds is chosen because the failure mode of a short deadline is
+ * uniquely expensive here. Abandoning a write mid-replace reports `timeout` -
+ * a claim about the local service - while the envelope may well have landed,
+ * and the only way for the user to find out is to **type the secret again**.
+ * Every other request in this app can be retried for free; this one cannot.
+ */
+export const CREDENTIAL_TIMEOUT_MS = 20000;
+
+/**
+ * Refreshing the public model catalog, and the longest deadline in the app.
+ *
+ * The server's own budget is two bounded attempts, each connect 5s + read
+ * 30s, with a capped 5s backoff between them: about 75 seconds before it can
+ * honestly say `fetch_error`. A client deadline below that would abandon a
+ * refresh the server was still making progress on and report `timeout`, which
+ * is a claim about the *local* service - and it would throw away the catalog
+ * state the server was about to return, which is the actual answer the user
+ * asked for. Ninety seconds sits above the server budget and still bounds
+ * the UI.
+ *
+ * The catalog request carries **no credential**: the provider's list answers
+ * unauthenticated, which is exactly why fetching it proves nothing about the
+ * stored key (ADR-0005 4).
+ */
+export const CATALOG_TIMEOUT_MS = 90000;
 
 // Memory only. Cleared when the page unloads, exactly like the server session.
 let csrfToken: string | null = null;
@@ -635,6 +673,77 @@ export async function exportEvidence(input: {
   } catch {
     throw new ApiError(response.status, "malformed_response", { kind: "malformed", requestId });
   }
+}
+
+// --- OpenCode Go connection (Paket G) --------------------------------------
+//
+// Five calls, and the shape of the set is the point. There is one way in for
+// the provider key and **no way back out**: no read route, no masked echo, no
+// "show for verification". After `storeOpenCodeCredential` returns, the only
+// thing this app can learn about the key is a twelve-character fingerprint.
+//
+// There is also no completion call here. Sending a metered request belongs to
+// the executor package, and a button for it on this surface would have made
+// "Station never spends money on its own" a claim with a footnote.
+
+/** The whole connection, read-only. Contacts nobody outside this machine. */
+export async function fetchOpenCodeStatus(): Promise<OpenCodeStatus> {
+  return request<OpenCodeStatus>("/api/opencode/status");
+}
+
+/**
+ * Store the provider key. The one request in this app that carries one.
+ *
+ * The value is passed straight through from component state to the body and
+ * is never copied, echoed, logged or held here. The caller wipes its own
+ * state as soon as this resolves; this function keeps nothing, so there is
+ * no second copy to forget about.
+ *
+ * The reply is the same status document every other call in this group
+ * returns - so after storing a key the user is told it was **saved and not
+ * verified**, from the same fields that would have said anything else.
+ */
+export async function storeOpenCodeCredential(apiKey: string): Promise<OpenCodeStatus> {
+  return mutate<OpenCodeStatus>("/api/opencode/credential", { api_key: apiKey }, CREDENTIAL_TIMEOUT_MS);
+}
+
+/** Remove the stored key. Empty body: there is nothing here to steer. */
+export async function forgetOpenCodeCredential(): Promise<OpenCodeStatus> {
+  return mutate<OpenCodeStatus>("/api/opencode/credential/forget", {});
+}
+
+/**
+ * Fetch the public model catalog, on the user's request only.
+ *
+ * Nothing calls this on mount, on a timer or as a step of anything else. The
+ * body is empty because the address comes from the backend's closed endpoint
+ * registry: there is no path from anything typed on this surface to an
+ * outbound host.
+ */
+export async function refreshOpenCodeCatalog(): Promise<OpenCodeStatus> {
+  return mutate<OpenCodeStatus>("/api/opencode/catalog/refresh", {}, CATALOG_TIMEOUT_MS);
+}
+
+/**
+ * Choose a model, or be refused with a reason.
+ *
+ * `trainingAcknowledged` is passed through from the caller rather than
+ * defaulted here: a default in this function would be a way to accept a
+ * data-sharing term the user never saw, and it would type-check. The backend
+ * defaults it to `false` and refuses again on its own side.
+ *
+ * There is no fallback parameter and there must never be one. A model that
+ * cannot be addressed is a refusal naming the reason, never a quiet
+ * substitution of some other model (ADR-0005 11).
+ */
+export async function selectOpenCodeModel(input: {
+  readonly modelId: string;
+  readonly trainingAcknowledged: boolean;
+}): Promise<OpenCodeStatus> {
+  return mutate<OpenCodeStatus>("/api/opencode/model", {
+    model_id: input.modelId,
+    training_acknowledged: input.trainingAcknowledged,
+  });
 }
 
 /**

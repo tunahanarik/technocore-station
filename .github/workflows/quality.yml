@@ -136,3 +136,77 @@ jobs:
 
       - name: production build (tsc -b && vite build)
         run: npm --prefix apps/station-web run build
+
+  browser:
+    name: browser QA (windows, chromium)
+    # A separate job on purpose. It needs *both* toolchains - the Playwright
+    # harness starts the real backend with `uv run` and drives the real
+    # production SPA build - so folding it into either existing job would
+    # have made that job's failures ambiguous. Windows for the same reason
+    # the others are: this is a Windows-only product (ADR-008).
+    #
+    # Why this runs in CI at all (ADR-0006 6 leaves the decision open):
+    # risk A1-R1 is a pinned CSP hash for a stylesheet React Aria injects at
+    # runtime. A HeroUI or React Aria upgrade can invalidate it, the failure
+    # is invisible to every jsdom test in the repository, and the moment it
+    # breaks is exactly the moment - a dependency bump PR - when nobody is
+    # likely to have run the browser suite by hand. That is the case for a
+    # gate rather than a local ritual.
+    #
+    # Why it is affordable: the suite is 51 tests, single-worker, retries
+    # disabled, and takes ~33s. Four consecutive local runs were identical
+    # (51/51, 31.9-34.0s) with no flaky test, which is the bar ADR-0006 6
+    # sets before browser tests may be treated as a gate.
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout (runner-default git config, like a user machine)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.11.26"
+          enable-cache: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22" # README: Node.js 22+
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Sync backend environment from the lockfile only
+        # The browser tests drive the real backend, so they need the same
+        # locked environment the backend job uses.
+        run: uv sync --locked --project apps/station-api
+
+      - name: Install frontend dependencies from the lockfile only
+        run: npm ci --prefix apps/station-web
+
+      - name: Install the pinned Chromium
+        # No version argument and no cache: the browser build is pinned by
+        # @playwright/test, which package-lock.json pins to an exact version
+        # (1.62.1 -> Chromium 151.0.7922.34, revision 1234). Naming a version
+        # here would create a second place for the pin to drift from.
+        # Chromium only - see docs/browser-qa.md for why.
+        run: npm --prefix apps/station-web exec -- playwright install chromium
+
+      - name: Browser QA (Playwright, real backend, real CSP)
+        # `test:e2e` runs `pretest:e2e` -> `npm run build` first, so the suite
+        # can never be pointed at a stale dist/.
+        run: npm --prefix apps/station-web run test:e2e
+
+      - name: Upload failure artifacts
+        if: failure()
+        # Pin verified 2026-09-04 via
+        # `gh api repos/actions/upload-artifact/git/ref/tags/v5.0.0`.
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: browser-qa-artifacts
+          path: apps/station-web/e2e/.artifacts
+          retention-days: 7
+          if-no-files-found: ignore
