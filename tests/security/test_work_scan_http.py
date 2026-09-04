@@ -27,6 +27,7 @@ from station_api.tasks.sources import SCAN_SOURCES, TaskSourceId, source_version
 from station_api.tasks.states import INITIAL_STATE, PRODUCIBLE_STATES, TaskState
 from station_api.workscan.candidates import candidate_id
 from station_api.workscan.client import RoomScanClient
+from station_api.workscan.errors import CandidateError, WorkScanError
 from station_api.workscan.kibble import (
     ADAPTERS,
     SCORE_SELF_DESCRIPTION,
@@ -34,8 +35,17 @@ from station_api.workscan.kibble import (
     TABLE_PROVENANCE,
     AdapterSupport,
     VerificationState,
+    get_adapter,
 )
-from station_api.workscan.service import MAX_ROOMS_PER_SCAN, WorkScanService
+from station_api.workscan.language import (
+    DERIVATION_HONESTY_SENTENCE,
+    PROHIBITION_HONESTY_SENTENCE,
+)
+from station_api.workscan.service import (
+    MAX_ROOMS_PER_SCAN,
+    ScanResult,
+    WorkScanService,
+)
 
 from tests.conftest import TEST_PORT
 from tests.security.conftest import collect_route_paths, establish_session
@@ -629,3 +639,390 @@ def test_a_new_scan_replaces_the_selectable_candidates_rather_than_merging(
     )
 
     assert reply.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# The scope on the wire is ours, and the reply cannot rename it
+# ---------------------------------------------------------------------------
+
+
+def _app_with(
+    settings: Settings, engine: Engine, documents: dict[str, dict[str, object]]
+) -> FastAPI:
+    """An application whose scan answers with exactly these documents."""
+    service, _ = _service(engine, documents)
+    application = create_app(
+        settings=settings,
+        port=TEST_PORT,
+        engine=engine,
+        web_dist=None,
+        workscan=service,
+    )
+    _with_markers(application)
+    return application
+
+
+def test_a_reply_cannot_rename_the_room_it_answers_for(
+    settings: Settings, engine: Engine, base_url: str
+) -> None:
+    """SI-282, at the surface the reviewer's probe used.
+
+    Every room answered ``{"room": "lobby", ...}`` and the product reported
+    ``last_scan.rooms == ["lobby"]``, put that name on each candidate's source
+    reference and into the benefit sentence, and built the candidate identity
+    from it. The URL requested was still ``/r/test-only-room``; the *reported
+    scope* was the reply's. That is SI-273 (the scope is the user's chosen
+    set) and INV-05 (this product does not name that room) at once.
+    """
+    documents = {
+        f"/r/{ROOM}": room_document(room="lobby", messages=[message(7, HELP_LINE)]),
+        f"/r/{SECOND_ROOM}": room_document(
+            room="lobby", messages=[message(7, HELP_LINE)]
+        ),
+    }
+    application = _app_with(settings, engine, documents)
+
+    with TestClient(application, base_url=base_url) as client:
+        csrf = establish_session(client, application)
+        reply = client.post(
+            SCAN_PATH,
+            json={"rooms": [ROOM, SECOND_ROOM]},
+            headers={"X-Station-CSRF": csrf},
+        )
+
+    assert reply.status_code == 200
+    body = reply.json()
+
+    # No room was read, both are named as failures, and nothing collapsed.
+    assert body["last_scan"]["rooms"] == []
+    failures = {item["room"]: item for item in body["last_scan"]["failures"]}
+    assert set(failures) == {ROOM, SECOND_ROOM}
+    assert all(item["reason"] == "room_unreadable" for item in failures.values())
+    assert body["last_scan"]["candidate_count"] == 0
+
+    # And the name the reply chose does not appear in the response at all.
+    assert "lobby" not in reply.text
+
+
+def test_two_rooms_answering_with_the_same_sequence_stay_two_candidates(
+    settings: Settings, engine: Engine, base_url: str
+) -> None:
+    """SI-282's identity half.
+
+    A candidate's identity is a digest over ``(room, seq)``. With the room
+    taken from the reply, two different rooms both claiming one name and one
+    ``seq`` produced one identity, the second overwrote the first in the
+    service's own map, and two genuinely different lines became one row.
+    """
+    documents = {
+        f"/r/{ROOM}": room_document(room=ROOM, messages=[message(7, HELP_LINE)]),
+        f"/r/{SECOND_ROOM}": room_document(
+            room=SECOND_ROOM, messages=[message(7, HELP_LINE)]
+        ),
+    }
+    application = _app_with(settings, engine, documents)
+
+    with TestClient(application, base_url=base_url) as client:
+        csrf = establish_session(client, application)
+        body = client.post(
+            SCAN_PATH,
+            json={"rooms": [ROOM, SECOND_ROOM]},
+            headers={"X-Station-CSRF": csrf},
+        ).json()
+
+    assert body["last_scan"]["rooms"] == [ROOM, SECOND_ROOM]
+    assert body["last_scan"]["candidate_count"] == 2
+
+    identities = {
+        candidate["id"]
+        for result in body["last_scan"]["results"]
+        for candidate in result["candidates"]
+    }
+    assert identities == {candidate_id(ROOM, 7), candidate_id(SECOND_ROOM, 7)}
+
+    references = sorted(
+        candidate["source"]["reference"]
+        for result in body["last_scan"]["results"]
+        for candidate in result["candidates"]
+    )
+    assert references[0].startswith(f"{SECOND_ROOM}#7@")
+    assert references[1].startswith(f"{ROOM}#7@")
+
+
+def test_an_unusable_line_does_not_turn_the_whole_scan_into_a_500(
+    settings: Settings, engine: Engine, base_url: str
+) -> None:
+    """SI-284. One message with no ``ts`` answered HTTP 500 for ten rooms.
+
+    ``derive_from_room`` sat outside the service's per-room ``try`` and the
+    route carried no handler, so ``CandidateError`` reached the ASGI layer and
+    every room already read went with it - the exact opposite of the service's
+    own heading, "failures are per room, and a failed room is never an empty
+    room".
+    """
+    broken = message(1, HELP_LINE)
+    del broken["ts"]
+    documents = {
+        f"/r/{ROOM}": room_document(room=ROOM, messages=[broken]),
+        f"/r/{SECOND_ROOM}": room_document(
+            room=SECOND_ROOM, messages=[message(9, DEFECT_LINE)]
+        ),
+    }
+    application = _app_with(settings, engine, documents)
+
+    with TestClient(application, base_url=base_url) as client:
+        csrf = establish_session(client, application)
+        reply = client.post(
+            SCAN_PATH,
+            json={"rooms": [ROOM, SECOND_ROOM]},
+            headers={"X-Station-CSRF": csrf},
+        )
+
+    assert reply.status_code == 200
+    body = reply.json()
+
+    # The other room survived, and the unusable line is a visible refusal.
+    assert body["last_scan"]["candidate_count"] == 1
+    assert body["last_scan"]["refusal_count"] == 1
+    results = {item["room"]: item for item in body["last_scan"]["results"]}
+    assert results[ROOM]["candidates"] == []
+    assert results[ROOM]["lines_read"] == 1
+    assert results[ROOM]["refusals"][0]["shape"] == "unusable_source"
+    assert results[SECOND_ROOM]["candidates"][0]["source"]["seq"] == 9
+
+
+def test_a_repeated_sequence_number_is_visible_on_the_wire(
+    settings: Settings, engine: Engine, base_url: str
+) -> None:
+    """SI-284. ``lines_read: 2, candidates: 1, refusals: 0`` explained nothing."""
+    documents = {
+        f"/r/{ROOM}": room_document(
+            room=ROOM, messages=[message(5, HELP_LINE), message(5, DEFECT_LINE)]
+        ),
+    }
+    application = _app_with(settings, engine, documents)
+
+    with TestClient(application, base_url=base_url) as client:
+        csrf = establish_session(client, application)
+        body = client.post(
+            SCAN_PATH, json={"rooms": [ROOM]}, headers={"X-Station-CSRF": csrf}
+        ).json()
+
+    result = body["last_scan"]["results"][0]
+    assert result["lines_read"] == 2
+    assert len(result["candidates"]) == 1
+    assert len(result["refusals"]) == 1
+    assert result["refusals"][0]["shape"] == "duplicate_sequence"
+    assert result["refusals"][0]["detail"].strip()
+
+
+# ---------------------------------------------------------------------------
+# The two Kibble flags, read off the record rather than off a schema default
+# ---------------------------------------------------------------------------
+
+
+def test_the_kibble_record_itself_says_it_was_never_written_or_contacted() -> None:
+    """SI-281's derivation half, which two mutations proved untested.
+
+    Flipping ``AdapterRecord.adapter_written`` or ``.contacted`` to ``True``
+    turned **no** test red: the response's two ``False`` values came from the
+    ``Literal[False]`` defaults in ``schemas.py``, so the assertion beside
+    them was a restatement of a schema constant. This asserts the property.
+    """
+    record = get_adapter("kibble")
+
+    assert record.adapter_written is False
+    assert record.contacted is False
+    assert all(item.adapter_written is False for item in ADAPTERS)
+    assert all(item.contacted is False for item in ADAPTERS)
+
+
+def test_the_response_carries_the_records_own_two_flags(
+    mocked_client: TestClient, mocked_app: FastAPI
+) -> None:
+    """The route reads them now, so the wire and the record cannot disagree."""
+    establish_session(mocked_client, mocked_app)
+    record = mocked_client.get(STATUS_PATH).json()["adapters"][0]
+
+    assert record["adapter_written"] is get_adapter("kibble").adapter_written
+    assert record["contacted"] is get_adapter("kibble").contacted
+
+
+def test_the_services_own_words_reach_the_screen_over_the_wire(
+    mocked_client: TestClient, mocked_app: FastAPI
+) -> None:
+    """SI-281 says the service's own sentence is carried verbatim.
+
+    It was carried verbatim into a *frontend constant*, transcribed by hand
+    from the ADR; the wire carried only the Turkish rendering, and the test
+    that claimed to check it asserted two module constants. A quotation kept
+    in two places drifts in the copy nobody diffs, so it is on the record and
+    therefore in the response.
+    """
+    establish_session(mocked_client, mocked_app)
+    record = mocked_client.get(STATUS_PATH).json()["adapters"][0]
+
+    assert record["self_description_source"] == SELF_DESCRIPTION
+    assert record["score_self_description"] == SCORE_SELF_DESCRIPTION
+    assert record["self_description"].strip()
+
+
+def test_a_reply_borrowing_another_rooms_name_cannot_collapse_two_candidates(
+    settings: Settings, engine: Engine, base_url: str
+) -> None:
+    """SI-282's identity half, in the shape the reviewer's probe produced.
+
+    ``alpha`` and ``beta`` were both scanned; ``beta``'s reply claimed to be
+    ``alpha`` and reused ``alpha``'s ``seq``. With the room read off the
+    reply, both lines hashed to one ``candidate_id``, the second overwrote the
+    first in the service's own map, and two rooms' worth of reading came back
+    as one selectable row - while ``results`` still listed two rooms with the
+    same name.
+
+    Now the borrowed name refuses the document, so the second room is a named
+    failure and the first is untouched. The invariant the assertions state is
+    the one that has to hold either way: one identity per reported candidate,
+    and no room reported twice.
+    """
+    documents = {
+        f"/r/{ROOM}": room_document(room=ROOM, messages=[message(7, HELP_LINE)]),
+        f"/r/{SECOND_ROOM}": room_document(
+            room=ROOM, messages=[message(7, DEFECT_LINE)]
+        ),
+    }
+    application = _app_with(settings, engine, documents)
+
+    with TestClient(application, base_url=base_url) as client:
+        csrf = establish_session(client, application)
+        body = client.post(
+            SCAN_PATH,
+            json={"rooms": [ROOM, SECOND_ROOM]},
+            headers={"X-Station-CSRF": csrf},
+        ).json()
+
+    scan = body["last_scan"]
+    reported = [result["room"] for result in scan["results"]]
+    identities = [
+        candidate["id"]
+        for result in scan["results"]
+        for candidate in result["candidates"]
+    ]
+
+    assert len(reported) == len(set(reported)), "a room was reported twice"
+    assert len(identities) == len(set(identities)), "two candidates share an identity"
+    assert len(identities) == scan["candidate_count"]
+
+    # And what actually happened: the borrowed name refused that room by name.
+    assert scan["rooms"] == [ROOM]
+    failures = {item["room"]: item for item in scan["failures"]}
+    assert failures[SECOND_ROOM]["reason"] == "room_unreadable"
+
+
+# ---------------------------------------------------------------------------
+# The two backstops under the per-line guard, exercised by fault injection
+# ---------------------------------------------------------------------------
+#
+# Nothing reachable raises past the per-line refusal any more, which is the
+# point of fixing it there - and it also means these two layers would be
+# untested by any document a transport can answer with. They are the layers
+# that decide whether a *future* refusal is one room or the whole scan, so the
+# failure is injected rather than left to a later reviewer to discover the way
+# this one was.
+
+
+def test_a_derivation_that_fails_outright_costs_one_room_and_not_the_scan(
+    settings: Settings, engine: Engine, base_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SI-284, service layer. A failed room is named; the others still count."""
+    from station_api.workscan import service as service_module
+
+    real = service_module.derive_from_room
+    calls: list[str] = []
+
+    def failing(snapshot, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(snapshot.room)
+        if snapshot.room == ROOM:
+            raise CandidateError("TEST-ONLY: derivation refused")
+        return real(snapshot, **kwargs)
+
+    monkeypatch.setattr(service_module, "derive_from_room", failing)
+
+    documents = {
+        f"/r/{ROOM}": room_document(room=ROOM, messages=[message(1, HELP_LINE)]),
+        f"/r/{SECOND_ROOM}": room_document(
+            room=SECOND_ROOM, messages=[message(9, DEFECT_LINE)]
+        ),
+    }
+    application = _app_with(settings, engine, documents)
+
+    with TestClient(application, base_url=base_url) as client:
+        csrf = establish_session(client, application)
+        reply = client.post(
+            SCAN_PATH,
+            json={"rooms": [ROOM, SECOND_ROOM]},
+            headers={"X-Station-CSRF": csrf},
+        )
+
+    assert calls == [ROOM, SECOND_ROOM]
+    assert reply.status_code == 200
+    scan = reply.json()["last_scan"]
+
+    assert scan["rooms"] == [SECOND_ROOM]
+    assert scan["candidate_count"] == 1
+    failures = {item["room"]: item for item in scan["failures"]}
+    assert failures[ROOM]["reason"] == "room_underivable"
+
+
+def test_a_scan_that_fails_as_a_whole_answers_502_and_not_500(
+    settings: Settings, engine: Engine, base_url: str
+) -> None:
+    """SI-284, route layer.
+
+    ``scan`` reports a failed *room* rather than raising, so this handler is
+    for the case that is not one room. Without it the answer is a generic 500
+    from the ASGI layer, which tells a user nothing about what was read - and
+    that is exactly what an unusable line used to produce.
+    """
+    service, _ = _service(engine)
+
+    def refusing(*args: object, **kwargs: object) -> ScanResult:
+        raise WorkScanError("TEST-ONLY: the scan could not run")
+
+    application = create_app(
+        settings=settings,
+        port=TEST_PORT,
+        engine=engine,
+        web_dist=None,
+        workscan=service,
+    )
+    _with_markers(application)
+    service.scan = refusing  # type: ignore[method-assign]
+
+    with TestClient(application, base_url=base_url, raise_server_exceptions=False) as client:
+        csrf = establish_session(client, application)
+        reply = client.post(
+            SCAN_PATH, json={"rooms": [ROOM]}, headers={"X-Station-CSRF": csrf}
+        )
+
+    assert reply.status_code == 502
+    assert reply.json()["detail"] == "TEST-ONLY: the scan could not run"
+
+
+def test_the_status_document_says_the_prohibitions_are_pattern_matched(
+    mocked_client: TestClient, mocked_app: FastAPI
+) -> None:
+    """SI-283's honesty half, on the surface rather than in a document.
+
+    ADR-0007 8 and ``work-scan.md`` called the six shapes "structurally
+    blocked". The ordering is structural - a prohibition is matched before any
+    signal, on every path - but the matching is a pattern list, and a review
+    walked nineteen lines past it. The stronger word is corrected in the
+    documents; the user is told on the screen.
+    """
+    establish_session(mocked_client, mocked_app)
+    body = mocked_client.get(STATUS_PATH).json()
+
+    assert body["prohibition_statement"] == PROHIBITION_HONESTY_SENTENCE
+    assert "kalip eslesmesiyle" in body["prohibition_statement"]
+    # Still shown beside the derivation sentence, not instead of it.
+    assert body["honesty"] == DERIVATION_HONESTY_SENTENCE

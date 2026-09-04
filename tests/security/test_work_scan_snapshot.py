@@ -55,7 +55,7 @@ def _read_room(document: dict[str, object], *, since: int | None = None):  # typ
     result = client.fetch_room_messages(
         resolve_room_target(ROOM, markers=MARKERS), since=since
     )
-    return parse_room_messages(result, since=since)
+    return parse_room_messages(result, requested_room=ROOM, since=since)
 
 
 def _read_index(document: dict[str, object]):  # type: ignore[no-untyped-def]
@@ -194,7 +194,7 @@ def test_a_document_that_repeats_a_key_is_refused_whole() -> None:
     result = client.fetch_room_messages(resolve_room_target(ROOM, markers=MARKERS))
 
     with pytest.raises(SnapshotParseError):
-        parse_room_messages(result)
+        parse_room_messages(result, requested_room=ROOM)
 
 
 def test_the_kept_counts_are_bounded_and_the_services_total_is_reported_separately() -> None:
@@ -282,3 +282,68 @@ def test_invisible_characters_in_remote_text_are_swept() -> None:
     assert chr(0x202E) not in text
     assert chr(0) not in text
     assert "yardimci olabilir" in text
+
+
+# ---------------------------------------------------------------------------
+# The scope is ours, not the reply's
+# ---------------------------------------------------------------------------
+
+
+def test_a_reply_naming_another_room_is_refused_rather_than_relabelled() -> None:
+    """SI-282. ``room`` on the wire is level-3 content, not the scan's scope.
+
+    Nothing compared the reply's ``room`` with the room that was asked for, so
+    a reply could rename the read. Refused rather than relabelled: content
+    that claims to be another room may well *be* another room's, and filing it
+    under the requested name would be the worse of the two lies.
+    """
+    transport, _ = json_transport(room_document(room="test-only-elsewhere"))
+    client = RoomScanClient(transport=transport, sleep=lambda _: None)
+    result = client.fetch_room_messages(resolve_room_target(ROOM, markers=MARKERS))
+
+    with pytest.raises(SnapshotParseError) as raised:
+        parse_room_messages(result, requested_room=ROOM)
+
+    assert ROOM in str(raised.value)
+
+
+def test_the_refusal_does_not_repeat_the_name_the_reply_chose() -> None:
+    """INV-05: the check that keeps a room off the screen must not print it.
+
+    A reply claiming ``lobby`` is exactly the case this exists for, so the
+    refusal names the room we asked for and nothing else.
+    """
+    transport, _ = json_transport(room_document(room="lobby"))
+    client = RoomScanClient(transport=transport, sleep=lambda _: None)
+    result = client.fetch_room_messages(resolve_room_target(ROOM, markers=MARKERS))
+
+    with pytest.raises(SnapshotParseError) as raised:
+        parse_room_messages(result, requested_room=ROOM)
+
+    assert "lobby" not in str(raised.value)
+
+
+def test_the_snapshot_carries_the_requested_room_and_says_so_separately() -> None:
+    """Two names, and the object holds both rather than one standing in."""
+    snapshot = _read_room(room_document())
+
+    assert snapshot.room == ROOM
+    assert snapshot.reported_room == ROOM
+
+
+def test_the_requested_room_cannot_be_omitted() -> None:
+    """A default would be a way of forgetting, and forgetting hands over scope."""
+    import inspect
+
+    signature = inspect.signature(parse_room_messages)
+    parameter = signature.parameters["requested_room"]
+
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameter.default is inspect.Parameter.empty
+
+    transport, _ = json_transport(room_document())
+    client = RoomScanClient(transport=transport, sleep=lambda _: None)
+    result = client.fetch_room_messages(resolve_room_target(ROOM, markers=MARKERS))
+
+    with pytest.raises(SnapshotParseError):
+        parse_room_messages(result, requested_room="")

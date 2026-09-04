@@ -484,3 +484,130 @@ def test_the_scan_errors_are_not_subclasses_of_the_guards_exception() -> None:
 
     for absorbed in (WorkScanError, ScanFetchError, httpx.TransportError):
         assert not issubclass(OutboundNetworkBlockedError, absorbed)
+
+
+# ---------------------------------------------------------------------------
+# The room policy, on every layer that can name a room
+# ---------------------------------------------------------------------------
+
+
+def test_a_scan_target_cannot_be_hand_built_for_a_denied_room() -> None:
+    """SI-282. The type enforces the policy, not only the resolver.
+
+    ``RoomScanTarget`` was a plain frozen dataclass, so
+    ``RoomScanTarget("lobby", ())`` was one line away from a request to
+    ``/r/lobby`` that every other check in the client waves through - the
+    scheme, host, port and path shape are exactly what the registry produces.
+    ``work-scan.md`` 1 already claimed a target "can only be produced by going
+    through the write path's room policy"; this is that sentence made true.
+    """
+    for room in sorted(DENIED_ROOMS):
+        with pytest.raises(ScanTargetError):
+            RoomScanTarget(room=room, classes=())
+
+    for bad in ("UPPER", "-leading", "a" * 49, "has space", ""):
+        with pytest.raises(ScanTargetError):
+            RoomScanTarget(room=bad, classes=())
+
+    with pytest.raises(ScanTargetError):
+        RoomScanTarget(room=ROOM, classes=("zz",))
+
+    # And a legitimate one still builds, so the guard is not simply refusing
+    # everything.
+    assert RoomScanTarget(room=ROOM, classes=()).room == ROOM
+
+
+def test_the_outbound_path_is_re_checked_against_the_room_policy() -> None:
+    """SI-282, on the layer that calls itself the redundant one.
+
+    ``assert_allowed_url``'s own docstring says it exists for "the mistake a
+    reviewer is least likely to catch by eye". Every check in it passed for
+    ``/r/lobby``, which is the one address ADR-0002 4.1 and INV-05 are most
+    specific about.
+    """
+    for room in sorted(DENIED_ROOMS):
+        with pytest.raises(ScanFetchError):
+            assert_allowed_url(f"{TECHNOCORE_ORIGIN}/r/{room}")
+
+    # The rooms this build does read are untouched, and so is the overview.
+    assert_allowed_url(f"{TECHNOCORE_ORIGIN}/r/{ROOM}")
+    assert_allowed_url(f"{TECHNOCORE_ORIGIN}{ROOM_INDEX_PATH}")
+
+
+def test_no_request_to_a_denied_room_reaches_the_transport() -> None:
+    """The three layers together, measured rather than argued."""
+    transport, recorder = json_transport(room_document(room="lobby"))
+    client = RoomScanClient(transport=transport, sleep=lambda _: None)
+
+    with pytest.raises(ScanTargetError):
+        client.fetch_room_messages(RoomScanTarget(room="lobby", classes=()))
+
+    assert recorder.count == 0
+
+
+def test_the_never_sent_parameters_are_refused_in_any_casing() -> None:
+    """The polling ban is a rule about a parameter, not about a spelling.
+
+    ``{"WAIT": "30"}`` went through the check that is named as the structural
+    half of the ban, on a service whose parameter parsing this build does not
+    control.
+    """
+    for name in sorted(NEVER_SENT_PARAMS):
+        for spelling in (name, name.upper(), name.capitalize()):
+            with pytest.raises(ScanFetchError):
+                assert_allowed_query({"limit": "50", spelling: "30"})
+
+    # A parameter this package does send is still accepted in its own casing.
+    assert_allowed_query({"limit": "50", "format": "json"})
+
+
+def test_the_route_layer_is_scanned_for_timers_and_long_polls_too(
+    api_source_root: Path,
+) -> None:
+    """SI-272's static half, extended to the layer a user actually reaches.
+
+    The two scanners walked ``station_api/workscan`` only, so the module that
+    turns an HTTP request into a scan - ``routes/workscan.py`` - was outside
+    both. A timer added there would have been a timer nothing looked for.
+    """
+    route = api_source_root / "station_api" / "routes" / "workscan.py"
+    assert route.is_file()
+
+    tree = ast.parse(route.read_text(encoding="utf-8"), filename=str(route))
+    docstrings = {
+        id(node.body[0].value)
+        for node in ast.walk(tree)
+        if isinstance(
+            node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
+        )
+        and node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+        and isinstance(node.body[0].value.value, str)
+    }
+
+    banned_imports = ("asyncio", "threading", "sched", "concurrent", "time")
+    banned_calls = ("create_task", "Timer", "Thread", "call_later", "run_forever")
+    offenders: list[str] = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            names = [node.module or ""]
+        else:
+            if isinstance(node, ast.Attribute) and node.attr in banned_calls:
+                offenders.append(f"call: {node.attr}")
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and node.value == "wait"
+                and id(node) not in docstrings
+            ):
+                offenders.append(f"long-poll parameter at line {node.lineno}")
+            continue
+        for name in names:
+            if any(name == item or name.startswith(f"{item}.") for item in banned_imports):
+                offenders.append(f"import: {name}")
+
+    assert offenders == [], f"the scan route grew a scheduler: {offenders}"

@@ -25,9 +25,11 @@ from station_api.modules.registry import ModuleId
 from station_api.workscan.authority import AuthorityLevel
 from station_api.workscan.candidates import (
     DERIVATION_METHOD,
+    DUPLICATE_SEQUENCE_REASON,
     PROHIBITED_MARKERS,
     PROHIBITION_DETAIL,
     SIGNALS,
+    UNUSABLE_SOURCE_REASON,
     CandidateCapability,
     EffortEstimate,
     ProhibitedShape,
@@ -80,7 +82,8 @@ def _derive(  # type: ignore[no-untyped-def]
     transport, _ = json_transport(room_document(messages=messages))  # type: ignore[arg-type]
     client = RoomScanClient(transport=transport, sleep=lambda _: None)
     snapshot = parse_room_messages(
-        client.fetch_room_messages(resolve_room_target(ROOM, markers=MARKERS))
+        client.fetch_room_messages(resolve_room_target(ROOM, markers=MARKERS)),
+        requested_room=ROOM,
     )
     if read_at is not None:
         snapshot = replace(snapshot, staleness=staleness_note(read_at))
@@ -441,3 +444,163 @@ def test_a_candidate_is_community_content_whatever_its_author_looks_like() -> No
 
     assert candidate.authority is AuthorityLevel.COMMUNITY
     assert candidate.source.authority is AuthorityLevel.COMMUNITY
+
+
+# ---------------------------------------------------------------------------
+# The wallet gate, against the spellings a person reads as the same word
+# ---------------------------------------------------------------------------
+
+#: Nineteen lines a review walked straight past the prohibition list with.
+#:
+#: Two families. The first spells a listed word so that a substring search
+#: misses it and a reader does not: an inserted space, a zero-width character,
+#: a soft hyphen, a full stop, or one Cyrillic letter drawn exactly like its
+#: Latin twin. The second does not obfuscate anything - it simply asks for the
+#: same act using a noun the list did not contain.
+#:
+#: Every line also carries a help marker, so each one *did* produce a
+#: candidate before the fix rather than merely failing to be refused.
+_EVADING_WALLET_LINES = (
+    # Separated letters
+    "kim yapabilir: w a l l e t baglayacak biri lazim",
+    "kim yapabilir: wal-let baglayacak biri lazim",
+    "kim yapabilir: w.a.l.l.e.t baglayacak biri lazim",
+    # Zero-width and format characters
+    "kim yapabilir: w\u200ballet baglayacak biri lazim",
+    "kim yapabilir: wal\u200dlet baglayacak biri lazim",
+    "kim yapabilir: wal\u200clet baglayacak biri lazim",
+    "kim yapabilir: wal\u00adlet baglayacak biri lazim",
+    # One Cyrillic letter, drawn as its Latin twin
+    "kim yapabilir: cl\u0430im alacak biri lazim",
+    "kim yapabilir: cuzd\u0430n baglayacak biri lazim",
+    # The same act, a different noun
+    "kim yapabilir: kripto para gonderin",
+    "kim yapabilir: bakiye aktarin",
+    "help wanted: transfer 1 ETH to me",
+    "kim yapabilir: gas ucretini odeyin",
+    "kim yapabilir: btc adresime gonderin",
+    "looking for someone: connect your purse",
+    "looking for someone to buy some tokens",
+    "kim yapabilir: nft mint edin",
+    "kim yapabilir: staking yapin",
+    "kim yapabilir: para gonderin",
+)
+
+
+@pytest.mark.parametrize("text", _EVADING_WALLET_LINES)
+def test_a_wallet_request_is_refused_however_it_is_spelled(text: str) -> None:
+    """SI-283. Every one of these produced a candidate before the fix.
+
+    The list is matched on what a reader sees: format characters are deleted,
+    a handful of Cyrillic and Greek lookalikes are mapped onto their Latin
+    twins, and the prohibition gate is additionally matched against a haystack
+    with the intra-word separators removed.
+    """
+    assert prohibited_shape(text) is ProhibitedShape.WALLET_OR_PAYMENT
+
+
+@pytest.mark.parametrize("text", _EVADING_WALLET_LINES)
+def test_none_of_those_lines_produces_a_candidate(text: str) -> None:
+    """The gate is only worth anything where a candidate would have been."""
+    result = _derive([message(1, text)])
+
+    assert result.candidates == ()
+    assert len(result.refusals) == 1
+    assert result.refusals[0].shape is ProhibitedShape.WALLET_OR_PAYMENT
+    assert result.refusals[0].reason == ProhibitedShape.WALLET_OR_PAYMENT.value
+
+
+def test_an_ordinary_help_request_is_still_a_candidate() -> None:
+    """The widened list has to leave the thing this feature is for alone."""
+    result = _derive([message(1, HELP_LINE), message(2, DEFECT_LINE)])
+
+    assert len(result.candidates) == 2
+    assert result.refusals == ()
+
+
+# ---------------------------------------------------------------------------
+# The other two reasons a line is declined - both were silent
+# ---------------------------------------------------------------------------
+
+
+def test_a_repeated_sequence_number_is_shown_rather_than_dropped() -> None:
+    """SI-284. Two lines read, one candidate, and nothing said why.
+
+    ``seq`` is a total order inside a room, so a repeat is a malformed reply -
+    but the reply is anonymous input and this is what it did. The second line
+    cannot become a second candidate (the identity is ``(room, seq)``), and
+    the rule for a line this build declines is that it is shown.
+    """
+    result = _derive([message(5, HELP_LINE), message(5, DEFECT_LINE)])
+
+    assert result.lines_read == 2
+    assert len(result.candidates) == 1
+    assert len(result.refusals) == 1
+    assert result.refusals[0].reason == DUPLICATE_SEQUENCE_REASON
+    assert result.refusals[0].shape is None
+    assert result.refusals[0].seq == 5
+
+
+def test_a_line_without_a_timestamp_refuses_itself_and_not_the_room() -> None:
+    """SI-284. One unusable line used to raise out of the whole scan.
+
+    ``SourceQuote`` refuses a quote with no ``ts``, ``derive_from_room`` was
+    called outside the service's per-room ``try``, and the route carried no
+    handler - so one message missing one field answered HTTP 500 and threw
+    away every room the same scan had already read.
+    """
+    broken = message(1, HELP_LINE)
+    del broken["ts"]
+
+    result = _derive([broken, message(2, DEFECT_LINE)])
+
+    assert result.lines_read == 2
+    assert len(result.candidates) == 1
+    assert result.candidates[0].source.seq == 2
+    assert len(result.refusals) == 1
+    assert result.refusals[0].reason == UNUSABLE_SOURCE_REASON
+    assert result.refusals[0].seq == 1
+    assert result.refusals[0].detail.strip()
+
+
+# ---------------------------------------------------------------------------
+# The rest of the eight-element guard, which nothing was covering
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "benefit",
+        "deliverable",
+        "success_condition",
+        "test_method",
+        "budget_detail",
+    ],
+)
+@pytest.mark.parametrize("blank", ["", "   ", "\n\t"])
+def test_a_candidate_missing_any_mandatory_sentence_cannot_be_constructed(
+    field: str, blank: str
+) -> None:
+    """SI-278, on the half of ``__post_init__`` no test was reaching.
+
+    Emptying the body of ``WorkCandidate.__post_init__`` turned only three
+    tests red - budget, permissions, risks. The ``missing`` loop over the five
+    mandatory sentences, and the identity check below, were asserted by the
+    invariant and covered by nothing. Whitespace counts as missing, because
+    ``strip()`` is what the guard actually applies.
+    """
+    candidate = _derive([message(1, HELP_LINE)]).candidates[0]
+
+    with pytest.raises(CandidateError) as raised:
+        replace(candidate, **{field: blank})
+
+    assert field in str(raised.value)
+
+
+def test_a_candidate_without_an_identity_cannot_be_constructed() -> None:
+    """The last line of the guard, and the one that makes de-duplication real."""
+    candidate = _derive([message(1, HELP_LINE)]).candidates[0]
+
+    with pytest.raises(CandidateError):
+        replace(candidate, id="")

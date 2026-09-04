@@ -43,9 +43,19 @@ Prohibited work is refused before anything else runs
 -----------------------------------------------------
 Six shapes are named in :class:`ProhibitedShape` and matched **first**, before
 any signal is considered, so a line that looks like one of them produces no
-candidate on any path. The refusal is recorded and shown rather than dropped
-silently: a line this build declined to act on is a fact about the scan, and
-hiding it would make the scan look like it saw less than it did.
+candidate on any path. What is structural is the *ordering* and the fact that
+there is no code path around it; the matching itself is a **pattern list**,
+and the honest word for it is not "structurally impossible". A line that asks
+for a payment in words the list does not contain produces a candidate, and
+:func:`prohibited_shape` says so in its own docstring rather than leaving the
+reader with the stronger impression.
+
+The refusal is recorded and shown rather than dropped silently: a line this
+build declined to act on is a fact about the scan, and hiding it would make
+the scan look like it saw less than it did. That rule holds for every reason a
+line is declined, not only for the six shapes - a repeated ``seq`` and a line
+this build cannot quote are refusals with their own sentence too, for the same
+reason.
 """
 
 from __future__ import annotations
@@ -57,7 +67,7 @@ from enum import StrEnum
 from typing import Final
 
 from station_api.digests import domain_digest
-from station_api.evidence.language import fold
+from station_api.evidence.language import fold, tighten
 from station_api.identity.write_gate import CheckState
 from station_api.modules.registry import ModuleId, ModuleState, get_module
 from station_api.workscan.authority import CONTENT_AUTHORITY, AuthorityLevel
@@ -126,6 +136,30 @@ PROHIBITED_MARKERS: dict[ProhibitedShape, tuple[str, ...]] = {
         "send funds",
         "sign this transaction",
         "islem imzala",
+        # Added after a review walked nineteen lines past the list above by
+        # naming the same act with a different noun. Money has a large
+        # vocabulary; a gate that only knew "wallet" was a gate that only
+        # stopped the people who used that word.
+        "kripto",
+        "crypto",
+        "bakiye",
+        "balance transfer",
+        "gas ucreti",
+        "gas fee",
+        "adresime gonder",
+        "send to my address",
+        "purse",
+        "btc",
+        " eth ",
+        "usdt",
+        "token",
+        "nft",
+        "mint",
+        "staking",
+        "stake et",
+        "para gonder",
+        "para yatir",
+        "transfer et",
     ),
     ProhibitedShape.POINT_FARMING: (
         "puan kasma",
@@ -201,6 +235,25 @@ _FOLDED_PROHIBITIONS: dict[ProhibitedShape, tuple[str, ...]] = {
     for shape, markers in PROHIBITED_MARKERS.items()
 }
 
+#: Shortest tightened needle that may be matched across word boundaries.
+#:
+#: :func:`~station_api.evidence.language.tighten` deletes the separators, so a
+#: tightened needle can match across two innocent words - ``"eth"`` is inside
+#: ``"something"`` the moment the space between two words is gone. Six
+#: characters is where that stops being plausible for the vocabulary in the
+#: list; the short markers keep the ordinary folded match, which still has
+#: word boundaries in it.
+MIN_TIGHTENED_MARKER = 6
+
+_TIGHTENED_PROHIBITIONS: dict[ProhibitedShape, tuple[str, ...]] = {
+    shape: tuple(
+        needle
+        for needle in (tighten(marker) for marker in markers)
+        if len(needle) >= MIN_TIGHTENED_MARKER
+    )
+    for shape, markers in PROHIBITED_MARKERS.items()
+}
+
 
 def prohibited_shape(text: str) -> ProhibitedShape | None:
     """The first prohibited shape a line matches, or ``None``.
@@ -209,10 +262,28 @@ def prohibited_shape(text: str) -> ProhibitedShape | None:
     payment shape is tested first. A line that matches two is reported as the
     most serious one rather than as both: the outcome is identical - nothing
     is produced - and one sentence is easier to act on than two.
+
+    Two haystacks, not one, and the second one is the point of the change a
+    review forced. ``fold`` alone reads ``w a l l e t``, ``wal-let`` and
+    ``w.a.l.l.e.t`` as three strings that are not the word; a person reads all
+    three as the word. :func:`~station_api.evidence.language.tighten` removes
+    the separators so the gate matches what a reader sees. It runs *in
+    addition* to the folded match rather than instead of it, because
+    tightening throws word boundaries away and the short markers still need
+    them.
+
+    This is a pattern list matched against text, and calling it more than that
+    would be the over-claim this package exists to avoid. It is not a semantic
+    classifier and it does not enumerate every way to ask for a payment;
+    :data:`~station_api.workscan.language.DERIVATION_HONESTY_SENTENCE` says as
+    much to the user, on every scan.
     """
-    haystack = fold(text)
+    folded = fold(text)
+    tightened = tighten(text)
     for shape, needles in _FOLDED_PROHIBITIONS.items():
-        if any(needle in haystack for needle in needles):
+        if any(needle in folded for needle in needles):
+            return shape
+        if any(needle in tightened for needle in _TIGHTENED_PROHIBITIONS[shape]):
             return shape
     return None
 
@@ -648,6 +719,25 @@ class WorkCandidate:
         return CONTENT_AUTHORITY
 
 
+#: Why a line was declined, when the reason is not one of the six shapes.
+#:
+#: Both were silent drops until a review counted them: a repeated ``seq``
+#: removed a line from the list with no trace, and a line missing a mandatory
+#: source coordinate raised out of the whole scan. Neither is a prohibited
+#: *shape* - nobody asked for prohibited work - so they get their own reasons
+#: rather than being filed under one.
+DUPLICATE_SEQUENCE_REASON: Final = "duplicate_sequence"
+
+UNUSABLE_SOURCE_REASON: Final = "unusable_source"
+
+DUPLICATE_SEQUENCE_DETAIL = (
+    "Bu satir, ayni odada daha once gorulen bir sira numarasini tekrar "
+    "ediyor. Sira numarasi bir oda icinde tekil olmali; tekrar eden bir "
+    "numara ayni adayi iki kez uretirdi, bu yuzden ikinci satirdan aday "
+    "uretilmedi. Satir yine de burada gosteriliyor."
+)
+
+
 @dataclass(frozen=True, slots=True)
 class RefusedLine:
     """A line this build declined to turn into a candidate, and why.
@@ -659,8 +749,14 @@ class RefusedLine:
 
     room: str
     seq: int
-    shape: ProhibitedShape
+    #: The machine-readable reason. For a prohibited work shape it is that
+    #: shape's own value, so nothing that read this field before sees a
+    #: different string; the two reasons above are the additions.
+    reason: str
     detail: str
+    #: The shape, when the reason *was* a shape. ``None`` for the two reasons
+    #: that are not about the work being asked for.
+    shape: ProhibitedShape | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -760,6 +856,7 @@ def derive_from_room(
                 RefusedLine(
                     room=snapshot.room,
                     seq=message.seq,
+                    reason=shape.value,
                     shape=shape,
                     detail=PROHIBITION_DETAIL[shape],
                 )
@@ -772,10 +869,19 @@ def derive_from_room(
 
         identity = candidate_id(snapshot.room, message.seq)
         if identity in candidates:
-            # Structurally impossible on a well-formed reply, because ``seq``
-            # is a total order within a room. Kept because the reply is
-            # anonymous input: a document that repeated a sequence number
-            # would otherwise produce the same proposal twice.
+            # Impossible on a well-formed reply, because ``seq`` is a total
+            # order within a room. Reachable because the reply is anonymous
+            # input, and *shown* because dropping it silently made a scan
+            # report two lines read and one candidate with nothing in between
+            # to explain the difference.
+            refusals.append(
+                RefusedLine(
+                    room=snapshot.room,
+                    seq=message.seq,
+                    reason=DUPLICATE_SEQUENCE_REASON,
+                    detail=DUPLICATE_SEQUENCE_DETAIL,
+                )
+            )
             continue
 
         substitutions = {
@@ -789,30 +895,49 @@ def derive_from_room(
         )
         assert_no_forbidden_claim(signal.test_method, where="work_scan.test_method")
 
-        candidates[identity] = WorkCandidate(
-            id=identity,
-            signal=signal.id,
-            source=SourceQuote(
-                room=snapshot.room,
-                seq=message.seq,
-                ts=message.ts,
-                author=message.author.value,
-                author_is_did_key=message.author.is_did_key,
-                author_detail=message.author.detail,
-                quote=message.text,
-            ),
-            benefit=benefit,
-            deliverable=signal.deliverable,
-            success_condition=signal.success_condition,
-            test_method=signal.test_method,
-            capability=capability,
-            effort=EffortEstimate(band=signal.effort_band, basis=ESTIMATE_BASIS),
-            budget_state=BUDGET_STATE,
-            budget_detail=BUDGET_DETAIL,
-            permissions=signal.permissions,
-            risks=signal.risks,
-            open_state=open_state_note(snapshot.staleness.read_at),
-        )
+        try:
+            candidates[identity] = WorkCandidate(
+                id=identity,
+                signal=signal.id,
+                source=SourceQuote(
+                    room=snapshot.room,
+                    seq=message.seq,
+                    ts=message.ts,
+                    author=message.author.value,
+                    author_is_did_key=message.author.is_did_key,
+                    author_detail=message.author.detail,
+                    quote=message.text,
+                ),
+                benefit=benefit,
+                deliverable=signal.deliverable,
+                success_condition=signal.success_condition,
+                test_method=signal.test_method,
+                capability=capability,
+                effort=EffortEstimate(band=signal.effort_band, basis=ESTIMATE_BASIS),
+                budget_state=BUDGET_STATE,
+                budget_detail=BUDGET_DETAIL,
+                permissions=signal.permissions,
+                risks=signal.risks,
+                open_state=open_state_note(snapshot.staleness.read_at),
+            )
+        except CandidateError as exc:
+            # One line the reply left incomplete - no ``ts``, an empty body -
+            # is one line, and it is refused as one. Before this guard it
+            # raised out of ``derive_from_room``, past the service's per-room
+            # ``try``, and turned a ten-room scan into HTTP 500 with every
+            # room that *had* been read thrown away with it.
+            refusals.append(
+                RefusedLine(
+                    room=snapshot.room,
+                    seq=message.seq,
+                    reason=UNUSABLE_SOURCE_REASON,
+                    detail=(
+                        "Bu satirdan aday uretilemedi, cunku zorunlu bir "
+                        f"kaynak alani eksik: {exc}"
+                    ),
+                )
+            )
+            continue
 
     return DerivationResult(
         room=snapshot.room,
@@ -868,10 +993,14 @@ __all__ = [
     "BUDGET_STATE",
     "CANDIDATE_DOMAIN",
     "DERIVATION_METHOD",
+    "DUPLICATE_SEQUENCE_DETAIL",
+    "DUPLICATE_SEQUENCE_REASON",
     "ESTIMATE_BASIS",
+    "MIN_TIGHTENED_MARKER",
     "PROHIBITED_MARKERS",
     "PROHIBITION_DETAIL",
     "SIGNALS",
+    "UNUSABLE_SOURCE_REASON",
     "CandidateCapability",
     "DerivationResult",
     "EffortEstimate",

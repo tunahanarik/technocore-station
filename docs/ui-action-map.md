@@ -764,6 +764,7 @@ storage primitive in its own source`).
 | Ne | Nerede | Test |
 |---|---|---|
 | Deterministik çıkarımın bedeli (kalıp eşleşmesi, anlamsal çıkarım yok) | "Bu taramanin siniri" bölümü, **her** okumada, sonuç olmadan da | `workscan-honesty` |
+| Yasak iş biçimlerinin **kalıp eşleşmesiyle** reddedildiği (yani listede olmayan bir sözcük aday üretebilir) | aynı bölüm, dürüstlük cümlesinin yanında, koşulsuz | `workscan-prohibition` |
 | Polling yokluğu ve hiç gönderilmeyen parametreler (`n`, `wait`) | aynı bölüm | `workscan-polling` |
 | Oda listesi bayatlığı: ölçülen okuma anı + sunucunun kendi 3 sn beyanı + beyanın kaynağı | oda seçimi bloğu, koşulsuz | `workscan-staleness-rooms` |
 | Tarama anlık görüntüsü: ölçülen başlangıç/bitiş ve "bu yanıt mesaj okumaları için ayrı bir bayatlık beyanı taşımıyor" | tarama sonucu bloğu | `workscan-staleness-scan` |

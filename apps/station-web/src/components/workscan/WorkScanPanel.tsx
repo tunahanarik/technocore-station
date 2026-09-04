@@ -96,20 +96,6 @@ const SUPPORT_LABEL: Record<string, string> = {
   unexamined: "Henuz incelenmedi",
 };
 
-/**
- * Kibble's own two sentences, in the language it wrote them in.
- *
- * They are constants here because the wire carries only the Turkish rendering
- * of them (`self_description`), and ADR-0007 1 asks for the service's own
- * words. A translated disclaimer is a weaker disclaimer, so both are shown:
- * the quotation, and the Turkish sentence the backend sends beside it.
- *
- * Transcribed from ADR-0007 1, which recorded them from the service's own
- * landing page on 2026-09-04. They are quotations, not claims of ours.
- */
-const KIBBLE_SELF_DESCRIPTION = "Kibble is not FLOP Network and not Technocore. It settles nothing.";
-const KIBBLE_SCORE_DESCRIPTION = "Advisory IOU from the public tape. Nothing is paid.";
-
 function formatDate(value: string): string {
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString("tr-TR");
@@ -187,10 +173,10 @@ function AdapterRecord({ adapter }: { readonly adapter: WorkScanAdapter }) {
           other piece of foreign text on this surface. */}
       <blockquote className="flex flex-col gap-1 border-l-2 border-border pl-3">
         <pre className="whitespace-pre-wrap break-words font-mono text-xs text-foreground">
-          {KIBBLE_SELF_DESCRIPTION}
+          {adapter.self_description_source}
         </pre>
         <pre className="whitespace-pre-wrap break-words font-mono text-xs text-foreground">
-          {KIBBLE_SCORE_DESCRIPTION}
+          {adapter.score_self_description}
         </pre>
         <span className="text-xs text-muted">
           Servisin kendi ifadeleri, yazildigi dilde. Asagidaki Turkce cumle
@@ -673,6 +659,15 @@ export function WorkScanPanel() {
                   beside a result (ADR-0007 2). */}
               <Alert.Description>
                 <span data-testid="workscan-honesty">{status.honesty}</span>
+              </Alert.Description>
+              {/* The same honesty about the refusals. A pattern list that was
+                  described as a structural block is a stronger promise than
+                  the code keeps, so the sentence is here rather than in an
+                  ADR the reader never opens. */}
+              <Alert.Description>
+                <span data-testid="workscan-prohibition">
+                  {status.prohibition_statement}
+                </span>
               </Alert.Description>
             </Alert.Content>
           </Alert>

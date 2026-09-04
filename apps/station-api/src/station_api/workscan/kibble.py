@@ -227,7 +227,18 @@ class AdapterRecord:
     declared_origin: str
     verified: tuple[AdapterFact, ...]
     unverified: tuple[AdapterFact, ...]
+    #: The Turkish rendering, shown so a reader who does not read English
+    #: still gets the disclaimer.
     self_description: str
+    #: The service's own sentence, in the language it wrote it in. On the
+    #: record - and therefore on the wire - rather than transcribed into a
+    #: frontend constant. A quotation kept in two places is a quotation that
+    #: can drift, and the half that drifts is the one nobody diffs; carrying
+    #: it from here means the screen shows what this module holds and a test
+    #: of the response body is a test of what a person actually reads.
+    self_description_source: str
+    #: The same, for what the service says its score is.
+    score_self_description: str
     score_caveat: str
     provenance: str
 
@@ -262,6 +273,8 @@ ADAPTERS: tuple[AdapterRecord, ...] = (
         verified=VERIFIED_FACTS,
         unverified=UNVERIFIED_FACTS,
         self_description=SELF_DESCRIPTION_TR,
+        self_description_source=SELF_DESCRIPTION,
+        score_self_description=SCORE_SELF_DESCRIPTION,
         score_caveat=SCORE_CAVEAT,
         provenance=TABLE_PROVENANCE,
     ),

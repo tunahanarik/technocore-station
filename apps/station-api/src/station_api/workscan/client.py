@@ -72,6 +72,7 @@ from station_api.technocore.sources import (
     TECHNOCORE_PORT,
     TECHNOCORE_SCHEME,
 )
+from station_api.technocore.write_targets import DENIED_ROOMS
 from station_api.workscan.errors import (
     ResponseTooLargeError,
     ScanFetchError,
@@ -81,6 +82,7 @@ from station_api.workscan.errors import (
 from station_api.workscan.targets import (
     DEFAULT_LIMIT,
     NEVER_SENT_PARAMS,
+    ROOM_MESSAGES_TEMPLATE,
     RoomScanTarget,
     ScanTarget,
     ScanTargetId,
@@ -122,6 +124,10 @@ ALLOWED_RESPONSE_HEADERS = ("content-type", "retry-after")
 
 #: Read granularity for the streaming size check.
 _CHUNK_BYTES = 64 * 1024
+
+#: Everything before the room name in the message lane's path. Derived from
+#: the registry's own template, so the two cannot drift apart.
+_ROOM_PATH_PREFIX = ROOM_MESSAGES_TEMPLATE.split("{", 1)[0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +195,34 @@ def assert_allowed_url(url: str) -> None:
     if "/../" in parts.path or parts.path.endswith("/..") or "%2e%2e" in lowered:
         raise ScanFetchError("refusing a path that contains traversal")
 
+    _assert_room_path_allowed(parts.path)
+
+
+def _assert_room_path_allowed(path: str) -> None:
+    """Apply the room policy to the address, not only to the target object.
+
+    Scheme, host, port and path shape were all this check knew, and a request
+    to ``/r/lobby`` satisfies every one of them: it is exactly the address the
+    registry produces, for exactly the room INV-05 says this product never
+    names. The room policy lived one layer up, on
+    :func:`~station_api.workscan.targets.resolve_room_target`, so the layer
+    whose own docstring calls itself the catch for "the mistake a reviewer is
+    least likely to catch by eye" had a hole in the shape of the single room
+    the charter is most specific about.
+
+    Checked on the URL because that is the last thing before the wire. It is
+    the third place the same rule is applied - the resolver, the target's
+    ``__post_init__``, and here - and that is the intent (ADR-0002 4.1,
+    ADR-0007 11, INV-05).
+    """
+    if not path.startswith(_ROOM_PATH_PREFIX):
+        return
+    room = path[len(_ROOM_PATH_PREFIX) :]
+    if room.casefold() in DENIED_ROOMS:
+        raise ScanFetchError(
+            "refusing a room the policy denies, on the outbound path"
+        )
+
 
 def assert_allowed_query(query: Mapping[str, str]) -> None:
     """Refuse a parameter this package has decided not to send.
@@ -198,8 +232,15 @@ def assert_allowed_query(query: Mapping[str, str]) -> None:
     not a security failure, it is a policy failure - it is long-polling, and
     ADR-0007 4 removed polling from this package. A rule that lives only in a
     docstring is a rule that comes back in the next revision.
+
+    The comparison is case-folded. It was not, and ``{"WAIT": "30"}`` went
+    through a check that is named as the structural half of the polling ban -
+    a ban that a service reading its parameters case-insensitively would have
+    honoured the upper-case spelling of.
     """
-    offenders = sorted(set(query) & NEVER_SENT_PARAMS)
+    offenders = sorted(
+        name for name in query if name.casefold() in NEVER_SENT_PARAMS
+    )
     if offenders:
         raise ScanFetchError(
             "refusing a query parameter this package does not send: "

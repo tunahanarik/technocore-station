@@ -1,7 +1,7 @@
 # İş Tara — kamuya açık oda taraması (Paket H1)
 
 Kapsam kararları: [`decisions/0007-paket-h1-kapsam-kararlari-2026-09-04.md`](decisions/0007-paket-h1-kapsam-kararlari-2026-09-04.md).
-Test edilebilir değişmezler: [`security-invariants.md`](security-invariants.md) §9i (SI-271…SI-281).
+Test edilebilir değişmezler: [`security-invariants.md`](security-invariants.md) §9i (SI-271…SI-284).
 
 Bu belge dört soruyu cevaplar: **sözleşmenin neyi doğrulandı ve neyi
 doğrulanamadı**, **deterministik çıkarımın sınırı nerede**, **Kibble'ın durumu
@@ -20,8 +20,17 @@ Beşinci giden istemci: [`workscan/client.py`](../apps/station-api/src/station_a
 | `room_messages` | `GET /r/{room}` | GET | 1 | **3** | 4 MiB |
 
 **Bu listede olmayan hiçbir yol bu registry'den istenmez.** İstemci URL, path,
-method, header veya TLS ayarı kabul etmez; `RoomScanTarget` yalnız yazma
-yolunun oda politikasından geçerek üretilebilir.
+method, header veya TLS ayarı kabul etmez.
+
+`RoomScanTarget` oda politikasını **kendi tipinde** uygular: `__post_init__`
+adı yayımlanmış kalıba, `DENIED_ROOMS`'a ve tanınan oda sınıflarına karşı
+yeniden doğrular. Önceki sürümde bu cümle doğru değildi — tip düz bir frozen
+dataclass'tı ve `RoomScanTarget("lobby", ())` elle kurulup `/r/lobby`'ye
+istek sürülebiliyordu; şema, host, port ve yol şekli registry'nin ürettiğinin
+aynısı olduğu için `assert_allowed_url` bunu geçiriyordu. Politika artık üç
+katmanda: `resolve_room_target`, `RoomScanTarget.__post_init__` ve giden
+URL'in kendisi (`assert_allowed_url`). Üçü de aynı `DENIED_ROOMS`'u okur;
+tekrar bilinçlidir (ADR-0002 4.1, ADR-0007 11, INV-05).
 
 ### `/r/events` neden kapsam dışı
 
@@ -55,6 +64,7 @@ bu pakette **hiçbir istek gönderilmedi**.
 | `count` / `last_seq` / `first_seq` | Yanıtın kendi alanları; `first_seq` boş olabilir | Üçü de okunur. `count` ile gelen dizi uzunluğu ayrışırsa **iki sayı da** gösterilir |
 | `first_seq > since + 1` | "the ring dropped messages you never read" | Ayrı bir **ring düşüşü uyarısı**. Bayatlık notuyla birleştirilmez |
 | `ROOMS_CACHE_SECONDS` | Sunucu `/rooms`'u en çok 3 saniye bayat verebileceğini kendi yapılandırmasında söylüyor | Bayatlık etiketi bu **beyanı** ve okuma anını birlikte taşır |
+| `room` (yanıttaki) | Yanıtın kendi alanı; anonim ve dünyaya yazılabilir bir yüzeyin ürettiği bir değerdir | **Kapsam sayılmaz.** `parse_room_messages` istenen odayı zorunlu argüman olarak alır; yanıt başka bir odayı adlandırırsa belge reddedilir ve oda `room_unreadable` diye adıyla raporlanır. Aday kimliği, referans ve şablonlar **istenen** adı kullanır |
 | oda adı kalıbı | `^[a-z0-9][a-z0-9_-]{0,47}$` | Yazma yolunun `validate_name`'i, aynen |
 | oda sınıfları | `p-`, `mb-`, `d-`, `e-` (manifest'ten okunur) | Yazma yolunun `classes_of` ve `UNDERSTOOD_ROOM_CLASSES`'ı, aynen |
 | `rooms[]` girdisi | `room` ve `topic` **çağıran tarafından yazılmıştır**; diğer alanlar servisin kendi ölçümüdür | Yalnız bu iki alan tutulur; hangilerinin çağıran-yazımı olduğu **bizim modülümüzde** sabittir |
@@ -121,10 +131,32 @@ Bir `is_open` alanı **yoktur** ve yanıt gövdesinde de yoktur: bir boolean bir
 cevap gibi okunur ve bu yüzey cevap üretemez — oda geçmişi düşüren bir halka,
 okuma sınırlı bir dilim, ve cevap okumadan sonra yazılmış olabilir.
 
-### Yapısal olarak engellenen iş biçimleri
+### Kalıp eşleşmesiyle reddedilen iş biçimleri
 
 Altı biçim, **sinyal aranmadan önce** eşleşir; hem sinyal hem yasak taşıyan bir
 satır aday üretmez ve reddedildiği gerekçesiyle gösterilir.
+
+**Yapısal olan sıralamadır, eşleşme değildir.** Bu belge ve ADR-0007 §8 daha
+önce "yasaklar yapısal olarak engellenir" diyordu; bağımsız bir inceleme
+listeyi **on dokuz satırla** aştı: `w a l l e t`, `wal-let`, `w.a.l.l.e.t`,
+araya sıkıştırılmış sıfır-genişlikli karakterler, yumuşak tire, `claim` ve
+`cuzdan` içinde tek bir Kiril harfi, ve listede olmayan eş anlamlılar
+(`kripto para gonderin`, `bakiye aktarin`, `transfer 1 ETH to me`,
+`gas ucretini odeyin`, `btc adresime gonderin`, `connect your purse`,
+`buy some tokens`, `nft mint edin`, `staking yapin`). Her biri aday üretiyordu.
+
+Şimdi üç şey değişti:
+
+1. `fold()` biçim (`Cf`) karakterlerini **siler** ve Kiril/Yunan benzer
+   harflerini Latin karşılıklarına eşler;
+2. yasak listesi ayrıca `tighten()` ile — kelime içi ayraçlar atılmış bir
+   samanlıkta — eşleşir, böylece `w a l l e t` okuyanın gördüğü kelimedir;
+3. liste eş anlamlılarla genişletildi.
+
+Ve cümle gerçeğe indirildi: bu bir **kalıp listesidir**. Listede olmayan bir
+sözcükle istenen bir ödeme işi aday üretebilir. Bu, bir tasarım belgesine
+değil, kullanıcının gördüğü yüzeye yazıldı (`prohibition_statement`, her
+`status` okumasında).
 
 | Biçim | Neden |
 |---|---|
@@ -133,7 +165,18 @@ satır aday üretmez ve reddedildiği gerekçesiyle gösterilir.
 | `spam_ping` | Tekrarlayan bildirim, toplu etiketleme |
 | `empty_acknowledgement` | İçeriksiz "done"; bir şey yazılmış olması sonuç değildir |
 | `self_approval` | Kendi açtığı işi kendi onaylamak. Kabul bir başkasının eylemidir |
-| `duplicate_delivery` | Aynı teslimatın tekrarı. Ayrıca **kimlikle** de engellenir: bir aday kimliği `(room, seq)` üzerinden domain-ayrıştırılmış bir digest'tir, aynı satır aynı kimliği alır |
+| `duplicate_delivery` | Aynı teslimatın tekrarı. Ayrıca **kimlikle** de engellenir: bir aday kimliği `(room, seq)` üzerinden domain-ayrıştırılmış bir digest'tir, aynı satır aynı kimliği alır. `room` artık **istenen** odadır, bu yüzden iki farklı odanın aynı adı iddia etmesi iki adayı tek satıra indiremez |
+
+### Yasak dışındaki iki reddetme gerekçesi
+
+İkisi de sessizdi; ikisi de artık gösterilir. "Reddedilen satır gösterilir,
+sessizce düşürülmez" kuralı yalnız altı biçim için değil, satırın
+reddedildiği **her** gerekçe için geçerlidir.
+
+| Gerekçe | Ne oldu |
+|---|---|
+| `duplicate_sequence` | Yanıt bir `seq`'i tekrar etti. İkinci satır aynı kimliği üretirdi, bu yüzden aday olmaz — ama artık `lines_read: 2, candidates: 1, refusals: 0` yerine gerekçesiyle listelenir |
+| `unusable_source` | Satırda zorunlu bir kaynak alanı yok (`ts` gibi). Eskiden `CandidateError` bütün taramadan dışarı fırlıyordu: on odalık bir tarama HTTP 500 dönüyor ve **okunmuş bütün odalar çöpe gidiyordu**. Şimdi satır başına reddedilir; servis katmanında oda başına, rota katmanında da tarama başına bir yedek koruma vardır (502, 500 değil) |
 
 ---
 
@@ -200,6 +243,14 @@ bir **kayıttır**. İçinde istemci yoktur, fetch edilen bir uç nokta sabiti
 yoktur ve **hiçbir istek gönderilmez**. `adapter_written` ve `contacted`
 alanları saklanmaz, **türetilir** ve daima `False`'tur.
 
+Bu cümlenin iki yarısı vardı ve yalnız biri test ediliyordu. Tel tarafı
+yapısaldı (`Literal[False]`), ama rota bu iki alanı hiç geçirmiyordu: yanıttaki
+`false` değerleri şemadaki **varsayılandan** geliyordu, dolayısıyla iki
+özelliği `True`'ya çeviren mutasyonlar **sıfır** testi kırmızıya döndürdü.
+Rota artık kaydın kendi özelliklerini okur ve `True` olan birini
+serileştirmek yerine reddeder; ayrıca bir test doğrudan
+`get_adapter("kibble").adapter_written is False` diyor.
+
 Durum: `support_unverified`.
 
 | Doğrulandı | Doğrulanamadı |
@@ -217,7 +268,13 @@ hata kullanıcının hatası gibi okunur. Sayfalaması olmayan yetmiş yedi bin
 kayıtlık bir uç noktayı okumak zaten çalışmıyor.
 
 **Servisin kendi ifadesi birebir taşınır** (çevirisi değil, çünkü bir
-sorumluluk reddinin çevirisi daha zayıf bir sorumluluk reddidir):
+sorumluluk reddinin çevirisi daha zayıf bir sorumluluk reddidir) — ve
+**yanıt gövdesinde** taşınır. Önceki sürümde tel yalnız Türkçe çeviriyi
+(`self_description`) taşıyordu; iki İngilizce cümle frontend'de, ADR'den
+elle kopyalanmış birer sabitti. İki yerde tutulan bir alıntı sürüklenebilir
+ve sürüklenen yarı kimsenin diff'lemediğidir, bu yüzden ikisi de kayda
+(`self_description_source`, `score_self_description`) ve oradan tele taşındı;
+frontend artık kendi kopyasını tutmuyor.
 
 > Kibble is not FLOP Network and not Technocore. It settles nothing.
 

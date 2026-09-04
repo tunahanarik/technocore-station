@@ -167,9 +167,29 @@ olmadığı.
 **Son madde için kesin dil yasaktır:** "açık" denemez; yalnız *"şu ana
 kadar okunanda kapanış işareti görülmedi (snapshot …)"* denir.
 
-Yasaklar yapısal olarak engellenir: spam ping, anlamsız "done", kendine iş
-açıp kendini onaylama, duplicate teslimat, puan kasma ve **wallet/claim/
-ödeme işleri** aday olarak üretilemez.
+Yasaklar **kalıp eşleşmesiyle** reddedilir ve sinyal aranmadan **önce**
+eşleşir: spam ping, anlamsız "done", kendine iş açıp kendini onaylama,
+duplicate teslimat, puan kasma ve **wallet/claim/ödeme işleri** aday olarak
+üretilmez.
+
+> **Düzeltme (5 Eylül 2026, PR #17 incelemesi).** Bu madde ilk yazımında
+> "yasaklar **yapısal olarak** engellenir" diyordu ve bu doğru değildi.
+> Yapısal olan **sıralamadır** — yasak kontrolü her yolda sinyalden önce
+> çalışır ve etrafından dolaşan bir kod yolu yoktur. Eşleşmenin kendisi bir
+> kalıp listesidir; bağımsız bir inceleme listeyi on dokuz satırla aştı
+> (araya boşluk/sıfır-genişlikli karakter sokulmuş `wallet`, Kiril harfli
+> `claim`, ve listede olmayan eş anlamlılar). Liste güçlendirildi
+> (`fold()` biçim karakterlerini siler ve benzer harfleri eşler; yasak kapısı
+> ayrıca ayraçları atılmış bir samanlıkta eşleşir; eş anlamlılar eklendi) ve
+> **cümle gerçeğe indirildi**. Sınır kullanıcıya da söylenir: `status` yanıtı
+> her okumada `prohibition_statement` taşır. Ayrıntı:
+> [`../work-scan.md`](../work-scan.md) §3, SI-283.
+
+Ayrıca aday **kimliği** `(room, seq)` üzerinden üretilir ve buradaki `room`
+**istenen** odadır, yanıtın adlandırdığı oda değil. Yanıt başka bir odayı
+adlandırırsa belge reddedilir; aksi hâlde bir yanıt taramanın kapsamını
+yeniden adlandırabilir, iki farklı odayı tek adaya çökertebilir ve INV-05'in
+odasının adını ürünün ekranına yazdırabilirdi (SI-282).
 
 ## 9. Frontend
 

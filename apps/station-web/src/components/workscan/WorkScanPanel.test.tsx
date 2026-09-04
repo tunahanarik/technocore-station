@@ -125,6 +125,11 @@ const CANDIDATE: WorkScanCandidate = {
 const HONESTY =
   "Bu surum adaylari kalip eslesmesiyle cikarir; anlamsal cikarim yoktur, bu yuzden bir odadaki her firsat gorulmez.";
 
+/** The refusal half of the honesty block. Pinned here the way the
+ * derivation sentence is: a paraphrase of a disclaimer is a weaker one. */
+const PROHIBITION =
+  "Yasakli is bicimleri de ayni yontemle, kalip eslesmesiyle reddedilir. Yasak listede olmayan bir sozcukle istenirse aday uretilebilir; bu yuzden bir adayi kabul etmeden once alintiyi okuyun.";
+
 const POLLING =
   "Bu yuzeyde zamanlayici, arka plan gorevi ve uzun bekleme (long-poll) yoktur. Her giden istek, bir kullanici eyleminin icinde ve bir kez yapilir; yenilemek icin islemi yeniden baslatmaniz gerekir.";
 
@@ -164,6 +169,9 @@ const BASE: WorkScanStatus = {
       ],
       self_description:
         "Servis kendini soyle tarif ediyor: FLOP Network degil, Technocore degil ve hicbir seyi kesinlestirmiyor.",
+      self_description_source:
+        "Kibble is not FLOP Network and not Technocore. It settles nothing.",
+      score_self_description: "Advisory IOU from the public tape. Nothing is paid.",
       score_caveat:
         "Ucuncu tarafin 'score' veya 'rank' alani o tarafin kendi hesabidir. Station bu sayiyi kendi cumlesine bir olcut olarak katmaz.",
       provenance:
@@ -174,6 +182,7 @@ const BASE: WorkScanStatus = {
   last_scan: null,
   never_sent_params: ["n", "wait"],
   polling_statement: POLLING,
+  prohibition_statement: PROHIBITION,
 };
 
 const WITH_ROOMS: WorkScanStatus = { ...BASE, room_index: ROOM_INDEX };
@@ -412,6 +421,17 @@ describe("Work scan: the honesty surface", () => {
     expect(screen.getByTestId("workscan-honesty")).toHaveTextContent(HONESTY);
     expect(screen.getByTestId("workscan-polling")).toHaveTextContent(POLLING);
     expect(screen.getByText(/Hicbir istekte gonderilmeyen parametreler: n, wait/)).toBeInTheDocument();
+  });
+
+  it("says the prohibited work shapes are pattern-matched, not understood", async () => {
+    // The six shapes were described as "structurally blocked" in the ADR and
+    // in the docs. The ordering is structural; the matching is a pattern list,
+    // and the reader is told so on the same screen rather than in a document.
+    stub(BASE);
+    render(<WorkScanPanel />);
+    await ready();
+
+    expect(screen.getByTestId("workscan-prohibition")).toHaveTextContent(PROHIBITION);
   });
 
   it("shows a measured staleness line for the room snapshot and invents no threshold", async () => {

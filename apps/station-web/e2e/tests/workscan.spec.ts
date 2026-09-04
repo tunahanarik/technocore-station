@@ -68,6 +68,8 @@ const BASE = {
         { key: "operator", detail: "TEST-ONLY.", state: "not_verified" },
       ],
       self_description: "Servis kendini resmi kaynak saymadigini soyluyor.",
+      self_description_source: "Kibble is not FLOP Network and not Technocore. It settles nothing.",
+      score_self_description: "Advisory IOU from the public tape. Nothing is paid.",
       score_caveat:
         "Ucuncu tarafin 'score' veya 'rank' alani o tarafin kendi hesabidir; Station onu kendi cumlesine katmaz.",
       provenance: "Bu kayit 2026-09-04 tarihinde yazildi: 5 madde dogrulandi, 5 madde dogrulanamadi.",
@@ -78,6 +80,8 @@ const BASE = {
   never_sent_params: ["n", "wait"],
   polling_statement:
     "Bu yuzeyde zamanlayici, arka plan gorevi ve uzun bekleme (long-poll) yoktur. Her giden istek, bir kullanici eyleminin icinde ve bir kez yapilir.",
+  prohibition_statement:
+    "Yasakli is bicimleri de ayni yontemle, kalip eslesmesiyle reddedilir. Yasak listede olmayan bir sozcukle istenirse aday uretilebilir; bu yuzden bir adayi kabul etmeden once alintiyi okuyun.",
 };
 
 const ROOM_INDEX = {

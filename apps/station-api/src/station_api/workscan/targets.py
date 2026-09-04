@@ -47,8 +47,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final, Literal
 
+from technocore_conform import InvalidNameError, validate_name
+
 from station_api.technocore.sources import TECHNOCORE_ORIGIN
 from station_api.technocore.write_targets import (
+    DENIED_ROOMS,
+    UNDERSTOOD_ROOM_CLASSES,
     RoomPolicyError,
     WriteTarget,
     resolve_message_target,
@@ -240,11 +244,55 @@ def messages_query(
 
 @dataclass(frozen=True, slots=True)
 class RoomScanTarget:
-    """One resolved room whose messages may be read."""
+    """One resolved room whose messages may be read.
+
+    ``__post_init__`` re-applies the parts of the room policy that are
+    properties of the *name*, so the sentence "a target can only be built by
+    going through the write path's policy" is true of the type and not only of
+    the one function that is supposed to build it.
+
+    It was not true before. This was a plain frozen dataclass, and a review
+    built ``RoomScanTarget("lobby")`` by hand and drove a request to
+    ``/r/lobby`` straight through the client - the URL check passes, because
+    scheme, host, port and path are all exactly what the registry produces.
+    The route could not reach it, but the redundant layer that exists for
+    precisely the mistake nobody catches by eye had a hole in the shape of
+    INV-05's room.
+
+    What is **not** re-checked here is the manifest markers: whether a
+    successful live check has run is a fact about this process at this moment,
+    not about the name, and a dataclass that read it would be a second copy of
+    a decision :func:`resolve_room_target` already fails closed on.
+    """
 
     room: str
     #: The class markers this room carries, in the order they appear.
     classes: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        try:
+            name = validate_name(self.room, field="room")
+        except InvalidNameError as exc:
+            raise ScanTargetError(
+                "Oda adi resmi ad kalibina uymuyor: kucuk harf, rakam, '-' ve "
+                "'_', 1-48 karakter, harf veya rakamla baslar."
+            ) from exc
+        if name != self.room:
+            raise ScanTargetError(
+                "Oda adi normalize edilmis biciminden farkli; hedef "
+                "olusturulmuyor."
+            )
+        if name in DENIED_ROOMS:
+            raise ScanTargetError(
+                f"'{name}' odasi bir bulusma noktasidir ve Station bu odayi "
+                "okumak icin de adlandirmaz."
+            )
+        unknown = [item for item in self.classes if item not in UNDERSTOOD_ROOM_CLASSES]
+        if unknown:
+            raise ScanTargetError(
+                "Bu oda adi bu surumun tanimadigi bir oda sinifi tasiyor: "
+                f"{', '.join(unknown)}."
+            )
 
     @property
     def method(self) -> Literal["GET"]:

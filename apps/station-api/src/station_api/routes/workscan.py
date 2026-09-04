@@ -29,7 +29,7 @@ What is deliberately absent
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import Response
@@ -67,6 +67,7 @@ from station_api.workscan.candidates import (
 )
 from station_api.workscan.errors import CandidateError, ScanTargetError, WorkScanError
 from station_api.workscan.kibble import AdapterRecord
+from station_api.workscan.language import PROHIBITION_HONESTY_SENTENCE
 from station_api.workscan.service import ScanResult, WorkScanService, WorkScanView
 from station_api.workscan.snapshot import RoomIndexSnapshot, StalenessNote
 from station_api.workscan.targets import NEVER_SENT_PARAMS
@@ -174,7 +175,11 @@ def _room_result(value: DerivationResult) -> WorkScanRoomResult:
             WorkScanRefusal(
                 room=item.room,
                 seq=item.seq,
-                shape=item.shape.value,
+                # The reason, which for a prohibited work shape *is* that
+                # shape's value. A line refused for a repeated sequence number
+                # or a missing source coordinate carries its own reason
+                # instead of being reported as prohibited work.
+                shape=item.reason,
                 detail=item.detail,
             )
             for item in value.refusals
@@ -222,12 +227,48 @@ def _scan(value: ScanResult) -> WorkScanResult:
     )
 
 
+def _never_true(value: bool, *, field: str) -> Literal[False]:
+    """Carry a "this is always false" property onto a ``Literal[False]`` field.
+
+    The narrowing is the point. ``Literal[False]`` is what makes the wire
+    value structural, and a plain ``bool`` would have widened it back; this
+    reads the record's own answer, refuses to serialise a true one, and hands
+    the type system the literal it needs. A record that grew a way to say
+    "yes" therefore fails here, loudly, instead of being replaced by a schema
+    default nobody sees.
+    """
+    if value:
+        raise RuntimeError(
+            f"an adapter record claims {field} is true; this build writes no "
+            "adapter and contacts no third-party service"
+        )
+    return False
+
+
 def _adapter(value: AdapterRecord) -> WorkScanAdapter:
+    """One adapter record, with the two "never" flags **read off the record**.
+
+    They used to be left to the schema's ``Literal[False]`` default, which
+    made the response's ``adapter_written is False`` a restatement of a
+    constant in ``schemas.py``. Two mutations proved it: flipping either
+    property on ``AdapterRecord`` to ``True`` turned no test red, because no
+    test and no code path ever looked at them. The wire invariant was real -
+    ``Literal[False]`` cannot serialise anything else - and the *derivation*
+    half of SI-281 was untested.
+
+    Passing them here makes the two halves one: the properties are on the
+    wire, so a record that started claiming it had been written to would fail
+    validation at this line rather than be quietly overwritten by a default.
+    """
     return WorkScanAdapter(
         id=value.id,
         name=value.name,
         support=value.support.value,
         declared_origin=value.declared_origin,
+        adapter_written=_never_true(value.adapter_written, field="adapter_written"),
+        contacted=_never_true(value.contacted, field="contacted"),
+        self_description_source=value.self_description_source,
+        score_self_description=value.score_self_description,
         verified=[
             WorkScanAdapterFact(
                 key=fact.key, detail=fact.detail, state=fact.state.value
@@ -257,6 +298,7 @@ def _to_response(view: WorkScanView) -> WorkScanStatusResponse:
         last_scan=_scan(view.last_scan) if view.last_scan is not None else None,
         never_sent_params=sorted(NEVER_SENT_PARAMS),
         polling_statement=POLLING_STATEMENT,
+        prohibition_statement=PROHIBITION_HONESTY_SENTENCE,
     )
 
 
@@ -324,12 +366,24 @@ def scan_rooms(
             ),
             headers=_NO_STORE,
         )
-    service.scan(
-        body.rooms,
-        markers=markers,
-        write_gate_open=_write_gate_open(request),
-        limit=body.limit,
-    )
+    # ``scan`` reports a failed room by name and does not raise for one. This
+    # guard is for the case that is not one room: a failure of the scan as a
+    # whole. It exists because it did not, and an unusable line reached the
+    # ASGI layer as an unhandled exception and came back as a generic 500 -
+    # the one answer that tells a user nothing about which rooms were read.
+    try:
+        service.scan(
+            body.rooms,
+            markers=markers,
+            write_gate_open=_write_gate_open(request),
+            limit=body.limit,
+        )
+    except WorkScanError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+            headers=_NO_STORE,
+        ) from exc
     return _json(_to_response(service.describe(write_gate_open=_write_gate_open(request))))
 
 

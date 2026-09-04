@@ -24,6 +24,30 @@ reading the body, and the bound the **service publishes about itself**
 always present - a staleness note that only appeared when something looked
 wrong would be a note nobody ever sees.
 
+The room is the one *we* asked for, never the one the reply claims
+-------------------------------------------------------------------
+``/r/{room}`` echoes a ``room`` field, and that field is a value on an
+anonymous, world-writable surface: it is whatever the answering process chose
+to put there. Nothing downstream may take it as the scan's scope. Two things
+would break if it did, and both are load-bearing:
+
+* the scope this product reports would be the reply's rather than the user's,
+  and a reply claiming ``lobby`` would make the product print the name of the
+  one room INV-05 says it never addresses (ADR-0007 11);
+* a candidate's identity is ``(room, seq)``, so two genuinely different rooms
+  answering with the same ``room`` and ``seq`` would collapse into one
+  candidate and one of the two lines would vanish.
+
+So :func:`parse_room_messages` takes the **resolved**
+:class:`~station_api.workscan.targets.RoomScanTarget`'s room name as a
+required argument, refuses a reply that names a different one, and puts the
+requested name - never the echoed one - on the snapshot. The refusal is
+fail-closed rather than a relabel: a reply that names another room may well
+be *that other room's* content, and filing it under the requested name would
+be a worse lie than filing it under the claimed one. The claimed name is not
+repeated in the refusal either, because repeating it is how ``lobby`` would
+get printed by the very check that exists to keep it off the screen.
+
 The ring drop is the server's signal, not our inference
 --------------------------------------------------------
 The published schema says of ``first_seq``: *"Greater than your `since` + 1
@@ -208,7 +232,15 @@ class RoomMessage:
 class RoomMessagesSnapshot:
     """One room's newest messages, as read once, at one moment."""
 
+    #: The room this build **asked for**, after the write path's policy. Every
+    #: identity, reference and sentence downstream is built from this value
+    #: and never from what the reply claimed.
     room: str
+    #: What the reply's own ``room`` field said. Equal to :attr:`room` by
+    #: construction - a disagreement refuses the document - and kept as a
+    #: separate, separately-named value so that the equality is a fact on the
+    #: object rather than an assumption in a reader's head.
+    reported_room: str
     messages: tuple[RoomMessage, ...]
     #: The service's ``count``. Read, never assumed.
     reported_count: int
@@ -313,20 +345,44 @@ def parse_room_index(result: ScanFetchResult) -> RoomIndexSnapshot:
 
 
 def parse_room_messages(
-    result: ScanFetchResult, *, since: int | None = None
+    result: ScanFetchResult,
+    *,
+    requested_room: str,
+    since: int | None = None,
 ) -> RoomMessagesSnapshot:
-    """Parse one room's messages.
+    """Parse one room's messages, for the room that was actually requested.
 
     ``room``, ``count``, ``last_seq`` and ``messages`` are the schema's
     required fields and all four are read. ``first_seq`` is optional in the
     schema and optional here, which is what makes the ring-drop notice
     absent rather than wrong on an empty room.
+
+    ``requested_room`` is **required** and it is the resolved, policy-checked
+    name from :class:`~station_api.workscan.targets.RoomScanTarget`. It is not
+    a default with a fallback to the reply's own field: a default is a way of
+    forgetting, and forgetting here hands the scan's scope to the document.
+    See the module docstring for why a mismatch is refused rather than
+    relabelled.
     """
+    if not requested_room:
+        raise SnapshotParseError(
+            "Anlik goruntu, istenen oda adi olmadan ayristirilamaz."
+        )
+
     document = _object(result.body, max_bytes=len(result.body))
 
     room = document.get("room")
     if not isinstance(room, str) or not room:
         raise SnapshotParseError("'room' alani metin olarak gelmedi.")
+
+    if room != requested_room:
+        # Deliberately does not echo the claimed name: the whole point of the
+        # check is that a reply must not get to put a room name on our screen.
+        raise SnapshotParseError(
+            f"Yanit, istenen '{requested_room}' odasindan baska bir odayi "
+            "adlandiriyor; belge kullanilmiyor. Okunan icerigin hangi odaya "
+            "ait oldugu bilinemez."
+        )
 
     listed = document.get("messages")
     if not isinstance(listed, list):
@@ -352,7 +408,11 @@ def parse_room_messages(
     first_seq = _optional_int_or_refuse(document, "first_seq")
 
     return RoomMessagesSnapshot(
-        room=safe_display(room),
+        # The requested name, not ``safe_display(room)``: it has already been
+        # through the write path's policy and its own published pattern, so it
+        # carries nothing to sweep and nothing a reply chose.
+        room=requested_room,
+        reported_room=requested_room,
         messages=tuple(messages),
         reported_count=_int_or_refuse(document, "count"),
         last_seq=_int_or_refuse(document, "last_seq"),

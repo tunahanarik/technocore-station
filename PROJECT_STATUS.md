@@ -1340,6 +1340,59 @@ Kapsam kararlari:
       sinyal tablosu kaba ve recall'u olculemiyor; tarama 10 oda icin
       ~6,8 dk surebilir ve iptal kontrolu yok.
 
+
+#### Paket H1 - PR #17 dusman inceleme turu (5 Eylul 2026)
+
+Bagimsiz bir inceleme yedi bulguyu **ham prob ciktisiyla** kanitladi. Hepsi
+kapatildi; her duzeltme testle ve **mutasyon kontroluyle** kanitlandi
+(on uc mutasyon, hepsi en az bir testi kirmiziya dondurdu; kayit
+[`docs/security-invariants.md`](docs/security-invariants.md) §9i).
+
+- [x] **P1 - Yanit taramanin kapsamini yeniden adlandiramaz.** `room`
+      yanittan okunuyor ama hicbir sey onu cozumlenmis hedefle
+      karsilastirmiyordu: her oda `{"room": "lobby"}` donunce urun kapsami
+      `["lobby"]` diye raporluyor, aday referansina ve fayda cumlesine o adi
+      yaziyor, kimligi ondan uretiyordu (iki farkli oda tek adaya cokuyordu).
+      `parse_room_messages` artik cozumlenmis odayi **zorunlu** argüman
+      olarak aliyor ve uyusmazlikta belgeyi reddediyor; reddetme mesaji
+      yanitin sectigi adi **tekrarlamiyor** (INV-05). SI-282, IMP-403.
+- [x] **P2-A - Iki mutasyon hayattaydi.** `adapter_written`/`contacted`
+      `True` yapilinca **0** test kirmizi donuyordu: rota bu alanlari hic
+      gecirmiyor, tel degeri semadaki `Literal[False]` varsayilanindan
+      geliyordu. Rota artik kaydin kendi ozelligini okuyor ve `True` bir
+      kaydi serilestirmeyi reddediyor; ayrica dogrudan iddia eden bir test
+      var. Ayni turda Kibble'in iki Ingilizce cumlesi **tele** tasindi.
+      SI-281, IMP-407.
+- [x] **P2-B - Alti yasak bicim "yapisal" degil, kalip listesiydi.**
+      On dokuz satir listeyi asiyordu (`w a l l e t`, `wal-let`, sifir-genislikli
+      karakterler, yumusak tire, Kiril `а` ile `claim`/`cuzdan`, ve listede
+      olmayan es anlamlilar). `fold()` bicim karakterlerini siliyor ve benzer
+      harfleri esliyor; yasak kapisi ayrica ayraclari atilmis bir samanlikta
+      esliyor; es anlamlilar eklendi. **Ve cumle gercege indirildi**: ADR,
+      belge ve **kullanicinin gordugu yuzey** artik "kalip eslesmesiyle
+      reddedilir" diyor (`prohibition_statement`). SI-283, IMP-406, IMP-408.
+- [x] **P2-C - Oda politikasi artik uc katmanda.** `RoomScanTarget` duz bir
+      frozen dataclass'ti; elle kurulan bir hedef `/r/lobby`'ye surulebiliyor
+      ve URL kontrolunun her maddesini geciyordu. `__post_init__` ve
+      `assert_allowed_url` politikayi yeniden uyguluyor. SI-282, IMP-404.
+- [x] **P2-D - `ts` alani olmayan bir satir artik taramayi dusurmuyor.**
+      Eskiden `CandidateError` servisin oda basina `try`'inin disindan
+      firliyor ve on odalik bir tarama HTTP 500 donuyordu — okunmus butun
+      odalar cope. Satir basina reddediliyor (`unusable_source`); servis oda
+      basina, rota tarama basina (502) yedekliyor ve iki yedek **hata
+      enjeksiyonuyla** suruluyor. SI-284, IMP-405.
+- [x] **P3'ler.** `WorkCandidate.__post_init__`'in bes zorunlu cumlesi ve
+      kimlik kontrolu artik testli (once 0 test kapsiyordu);
+      `assert_allowed_query` buyuk/kucuk harf duyarsiz (`WAIT` reddediliyor);
+      tekrarlanan `seq` sessizce dusmuyor, `duplicate_sequence` gerekcesiyle
+      gosteriliyor; zamanlayici/long-poll statik taramasi
+      `routes/workscan.py`'yi de kapsiyor; Kibble alintilarinin nerede
+      tasindigina dair belge yanlisi duzeltildi (tel genisletildi).
+- [x] **1769 pytest** (1692 -> 1769) + **256 Vitest** (255 -> 256) +
+      **58 Playwright**. Yeni HeroUI bileseni yok, yeni bagimlilik yok.
+- [x] SI-282...SI-284, IMP-403...IMP-408. SI-273, SI-278, SI-279 ve SI-281
+      metinlerindeki yanlis iddialar **duzeltildi**, silinmedi.
+
 ## Sonraki asama: Asama 9 - H2 Agent calisma ortami ve Activity Desk
 
 Butce/izin siniri ve model cagrisi H2'nin; public paylasim H3'un.

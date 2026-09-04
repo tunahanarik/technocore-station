@@ -1162,11 +1162,23 @@ class WorkScanAdapter(StrictModel):
     support: str
     authority: Literal[3] = 3
     declared_origin: str
+    #: ``Literal[False]`` is the wire half of SI-281 and it stays: nothing can
+    #: serialise another value here. The route no longer leaves it to this
+    #: default, though - it reads the record's derived property and refuses a
+    #: true one - because a default the producer never passes makes an
+    #: assertion about this field a restatement of this line.
     adapter_written: Literal[False] = False
     contacted: Literal[False] = False
     verified: list[WorkScanAdapterFact]
     unverified: list[WorkScanAdapterFact]
+    #: The Turkish rendering of the service's own words.
     self_description: str
+    #: The service's own two sentences, in the language it wrote them in.
+    #: Carried on the wire so that "the service's own words are quoted
+    #: verbatim" is a property of the response rather than of a frontend
+    #: constant transcribed by hand from an ADR.
+    self_description_source: str
+    score_self_description: str
     score_caveat: str
     provenance: str
 
@@ -1196,6 +1208,10 @@ class WorkScanStatusResponse(StrictModel):
     #: the absence of polling is checkable from outside the process.
     never_sent_params: list[str]
     polling_statement: str
+    #: The refusal half of the same honesty: the six prohibited work shapes
+    #: are matched by pattern, not recognised by meaning. Shown beside the
+    #: derivation sentence rather than left in a design document.
+    prohibition_statement: str
 
 
 class WorkScanRefreshRequest(StrictModel):

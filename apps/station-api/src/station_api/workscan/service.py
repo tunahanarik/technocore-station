@@ -259,8 +259,27 @@ class WorkScanService:
                     RoomFailure(room=name, reason="room_unreadable", detail=str(exc))
                 )
                 continue
+
+            # Derivation is inside the per-room guard as well, and not only
+            # the read. A single unusable line - one with no ``ts``, say -
+            # raises ``CandidateError``, and outside this ``try`` that one
+            # line would have thrown away every room already read in the same
+            # scan and left the route with an unhandled exception. Per-line
+            # refusals are handled inside ``derive_from_room``; this is the
+            # backstop for anything it does not anticipate, so that "failures
+            # are per room" holds on the derivation half too.
+            try:
+                derived = derive_from_room(snapshot, capability=capability)
+            except CandidateError as exc:
+                failures.append(
+                    RoomFailure(
+                        room=name, reason="room_underivable", detail=str(exc)
+                    )
+                )
+                continue
+
             scanned.append(snapshot.room)
-            results.append(derive_from_room(snapshot, capability=capability))
+            results.append(derived)
 
         result = ScanResult(
             started_at=started_at,
@@ -337,7 +356,10 @@ class WorkScanService:
         """
         target = resolve_room_target(room, markers=markers)
         result = self._client.fetch_room_messages(target, limit=limit)
-        return parse_room_messages(result)
+        # The resolved room, not the one the reply names. A snapshot's scope
+        # is a decision this process made; see ``snapshot`` for what happens
+        # when the document disagrees.
+        return parse_room_messages(result, requested_room=target.room)
 
 
 __all__ = [

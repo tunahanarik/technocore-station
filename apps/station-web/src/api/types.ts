@@ -753,6 +753,11 @@ export interface WorkScanAdapter {
   readonly unverified: readonly WorkScanAdapterFact[];
   /** The service's own description of itself, rendered as it arrives. */
   readonly self_description: string;
+  /** The service's own two sentences, in the language it wrote them in.
+   * They arrive on the wire rather than being transcribed into a constant
+   * here: a quotation kept in two places is a quotation that can drift. */
+  readonly self_description_source: string;
+  readonly score_self_description: string;
   readonly score_caveat: string;
   /** When the record was written and how much of it was confirmed. Always
    * present: the age of a transcription is a fact about every reading of it. */
@@ -784,6 +789,9 @@ export interface WorkScanStatus {
    * the absence of polling is checkable from outside the process. */
   readonly never_sent_params: readonly string[];
   readonly polling_statement: string;
+  /** The refusal half of the honesty sentence: the prohibited work shapes are
+   * matched by pattern, not recognised by meaning. */
+  readonly prohibition_statement: string;
 }
 
 /** The task one candidate opened. Born `suggested`; approved by nobody. */

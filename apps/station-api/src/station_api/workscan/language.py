@@ -117,6 +117,29 @@ DERIVATION_HONESTY_SENTENCE = (
     "bu yuzden bir odadaki her firsat gorulmez."
 )
 
+#: The second half of the same honesty, about the *refusals* rather than the
+#: proposals.
+#:
+#: ADR-0007 8 and this package's own documentation described the six
+#: prohibited work shapes as "structurally blocked". They are not: the
+#: ordering is structural - a prohibition is matched before any signal, on
+#: every path - but the matching itself is a list of patterns, and a review
+#: walked nineteen lines past it by spelling a listed word with an inserted
+#: space or by naming the same act with a noun the list did not carry. The
+#: list is stronger now and it is still a list.
+#:
+#: Written as a separate constant rather than folded into
+#: :data:`DERIVATION_HONESTY_SENTENCE`, on purpose: that sentence is pinned
+#: byte-for-byte in the frontend tests, the end-to-end suite and the package's
+#: verification record, and rewriting a sentence three files quote is how a
+#: quotation stops being one. This is a second sentence beside it, on the same
+#: surface, on every read.
+PROHIBITION_HONESTY_SENTENCE = (
+    "Yasakli is bicimleri de ayni yontemle, kalip eslesmesiyle reddedilir. "
+    "Yasak listede olmayan bir sozcukle istenirse aday uretilebilir; bu "
+    "yuzden bir adayi kabul etmeden once alintiyi okuyun."
+)
+
 #: Precomputed once. Each entry is the folded form of a forbidden phrase.
 _FOLDED = tuple(fold(phrase) for phrase in FORBIDDEN_PHRASES)
 
@@ -221,6 +244,7 @@ __all__ = [
     "NEUTRALISED_MARK",
     "OPEN_STATE_SENTENCE",
     "PERMITTED_ALTERNATIVES",
+    "PROHIBITION_HONESTY_SENTENCE",
     "WORK_SCAN_FORBIDDEN_PHRASES",
     "ForbiddenClaimError",
     "assert_no_forbidden_claim",

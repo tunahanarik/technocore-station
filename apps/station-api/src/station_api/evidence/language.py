@@ -87,6 +87,65 @@ AUDIT_CHAIN_CLAIM = "cevrimdisi degisiklige karsi tespit edici"
 #: dotless i in source, and this is the one place that is deliberate.
 _DOTLESS_I = "\u0131"
 
+#: Latin letters a Cyrillic or Greek letter is visually identical to, mapped
+#: onto the Latin one before anything is compared.
+#:
+#: NFKD does not touch these: ``U+0430 CYRILLIC SMALL LETTER A`` has no
+#: decomposition to ``a``, because as far as Unicode is concerned it is a
+#: different letter that happens to be drawn the same way. That is exactly
+#: what makes it useful to somebody who wants a marker list to miss a word,
+#: and it costs one keystroke: ``cl\u0430im`` with one Cyrillic ``\u0430`` reads as
+#: ``claim`` to every human and matches nothing at all.
+#:
+#: Only the unambiguous lookalikes are listed. A map that guessed would fold
+#: real Russian or Greek text into nonsense, and the point here is to close a
+#: spoofing route, not to transliterate.
+_CONFUSABLES: dict[str, str] = {
+    # Cyrillic
+    "\u0430": "a",
+    "\u0432": "b",
+    "\u0435": "e",
+    "\u043a": "k",
+    "\u043c": "m",
+    "\u043d": "h",
+    "\u043e": "o",
+    "\u0440": "p",
+    "\u0441": "c",
+    "\u0442": "t",
+    "\u0443": "y",
+    "\u0445": "x",
+    "\u0455": "s",
+    "\u0456": "i",
+    "\u0458": "j",
+    # Greek
+    "\u03b1": "a",
+    "\u03b5": "e",
+    "\u03b9": "i",
+    "\u03ba": "k",
+    "\u03bd": "v",
+    "\u03bf": "o",
+    "\u03c1": "p",
+    "\u03c4": "t",
+    "\u03c5": "u",
+    "\u03c7": "x",
+}
+
+_CONFUSABLE_TABLE = str.maketrans(_CONFUSABLES)
+
+def _drop_format_characters(text: str) -> str:
+    """Delete every zero-width and formatting character.
+
+    The zero-width space, joiner and non-joiner, the soft hyphen, the
+    byte-order mark and the bidi controls all occupy no width and carry no
+    meaning inside a word. They share Unicode category ``Cf``, so the
+    *category* is deleted rather than a list of code points maintained by
+    hand - a hand-maintained list is a list somebody adds a character to.
+
+    Deleted rather than replaced with a space, deliberately: ``w<ZWSP>allet``
+    is one word to a reader and has to be one word to a matcher.
+    """
+    return "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+
 
 def fold(text: str) -> str:
     """Case-fold and strip diacritics, so one entry covers every spelling.
@@ -94,11 +153,46 @@ def fold(text: str) -> str:
     ``"sunucu kaniti"`` and its dotted-and-dotless Turkish spelling are the
     same claim, and a checker that caught only one of them would be a checker
     anybody could pass by accident.
+
+    Two further normalisations exist for the same reason and were added when a
+    review found the work-scan prohibition list could be walked past with
+    them: invisible **format characters** are deleted, and a handful of
+    Cyrillic and Greek **lookalike letters** are mapped onto the Latin ones
+    they are drawn as. Both are strictly widening - a string that matched
+    before still matches - and both close a route that costs an attacker one
+    keystroke and a reader nothing at all.
     """
-    lowered = text.casefold()
+    lowered = _drop_format_characters(text).casefold()
     decomposed = unicodedata.normalize("NFKD", lowered)
     stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
-    return re.sub(r"\s+", " ", stripped.replace(_DOTLESS_I, "i"))
+    mapped = stripped.replace(_DOTLESS_I, "i").translate(_CONFUSABLE_TABLE)
+    return re.sub(r"\s+", " ", mapped)
+
+
+#: Characters that separate letters without separating words when somebody is
+#: trying to get past a marker list: spaces, every kind of dash, the dot, the
+#: underscore, the middle dot and the apostrophes.
+_SEPARATORS = re.compile(r"[\s\-\u2010-\u2015_.\u00b7'\u2018\u2019\u02bc]+")
+
+
+def tighten(text: str) -> str:
+    """:func:`fold`, and then every intra-word separator removed.
+
+    ``w a l l e t``, ``wal-let`` and ``w.a.l.l.e.t`` are one word to a reader
+    and three different strings to a substring search. This collapses all of
+    them onto ``wallet`` so that a *prohibition* list is matched on what a
+    person sees rather than on what they typed.
+
+    It is deliberately **not** what :func:`fold` does, and the split is the
+    whole design. Removing separators loses word boundaries, so a tightened
+    haystack matches across them: it is the right trade where the cost of a
+    false positive is one refused line with a stated reason, and the wrong
+    trade everywhere a match *removes* text from a user's own words
+    (:func:`neutralise_forbidden_claims`) or refuses one of our own sentences.
+    Callers therefore opt in, and today the only caller is the work scan's
+    prohibited-shape gate.
+    """
+    return _SEPARATORS.sub("", fold(text))
 
 
 #: Precomputed once. Each entry is the folded form of a forbidden phrase.
@@ -225,4 +319,5 @@ __all__ = [
     "find_forbidden_phrases",
     "fold",
     "neutralise_forbidden_claims",
+    "tighten",
 ]
