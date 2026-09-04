@@ -122,6 +122,33 @@ Bunların hiçbiri §1'deki **auth header** boşluğunu kapatmaz: protokol
 eşlemesinin doğrulanmış olması, isteğin hangi header'la imzalanacağının
 bilindiği anlamına gelmez. O madde yerinde duruyor.
 
+### 5.1 Ek karar: tablo bayatlar, ve bayatlığı görünür olmalıdır
+
+Bağımsız bir inceleme sayfayı **yeniden okudu** ve sayfanın ilerlediğini
+buldu: `omen-alpha → chat/completions` satırı eklenmiş, canlı katalog **35**
+kimlik döndürüyor, fazlalık 7 değil **8**. Kod ise `DOC_LAST_UPDATED =
+"2026-09-03"` pinliyor.
+
+Bu §1.2'nin kayda geçirdiği hatanın **aynı sınıfıdır**: kendi kendini
+mühürleyen bir durum, çünkü hiçbir şey ölçmüyordu.
+
+**Karar (üç parça):**
+
+1. **Kullanıcıya söylenen cümleler bu sürüm hakkındadır.** "Bu model resmi
+   belgenin uç nokta tablosunda yok" bir olgu iddiasıydı ve süreç o sayfayı
+   okumamıştı. Cümleler artık "bu sürümün pinli tablosunda yok (tablo
+   `<tarih>` okundu)" der.
+2. **`TABLE_PROVENANCE` koşulsuz gösterilir** — satır sayısı, okuma tarihi ve
+   sayfanın o günkü altbilgisi. Yalnız bir sorun çıkınca beliren künye,
+   kimsenin okumadığı künyedir.
+3. **`EXPECTED_UNMAPPED_COUNT = 7` pinlenir ve katalogdan türetilmez.**
+   Çekilen katalogdaki eşlemesiz sayı bunu aşarsa `drift_notice` dolar ve
+   panelde uyarı olarak görünür.
+
+**`omen-alpha` tabloya EKLENMEDİ.** Eklemek yeni bir transkripsiyon ve
+orkestratör doğrulaması gerektirir; bu paketin işi sürüklenmeyi görünür
+kılmaktı, sessizce yamamak değil.
+
 ## 6. Dördüncü giden istemci — gerekçeli ve görünür
 
 `OUTBOUND_CLIENT_MODULES` bugün üç modülde kilitli ve yorumu diyor ki
@@ -134,10 +161,17 @@ geçiren görmeli."
 modeli** — OpenCode `Authorization` taşır, Technocore istemcilerinin hiçbiri
 taşımaz.
 
-Allowlist tek düz kümeden `{dizin: {modül}}` haritasına dönüşür; bugünkü
-`path.parent.name != "technocore"` koşulu OpenCode modülü `technocore/`
-dışında olduğu için yanlış sonuç verirdi. Bu daha dürüst: her giden yüzey
-kendi dizininde adlandırılır.
+Allowlist tek düz kümeden çıkar; bugünkü `path.parent.name != "technocore"`
+koşulu OpenCode modülü `technocore/` dışında olduğu için yanlış sonuç
+verirdi.
+
+**Düzeltme (inceleme sonrası).** İlk yazım listeyi `{dizin: {modül}}`
+haritasına çevirdi ve bu **yetmedi**: harita dizini *adıyla* anahtarlıyordu,
+dolayısıyla `station_api/plugins/opencode/client.py` konumuna yerleştirilen
+sahte bir istemci 27 testin hepsini geçti. Liste bugün **kaynak köküne
+göreli tam yolla** anahtarlanır (`station_api/opencode/client.py`) ve
+incelemecinin probu iki yönlü regresyon testi olarak durur. Her giden yüzey
+kendi **konumunda** adlandırılır; bir ad konum değildir.
 
 **SI-71 daraltılır, gevşetilmez:** "giden istekte cookie/auth/DID/CSRF yok"
 kuralı Technocore istemcilerine ait kalır; OpenCode için ayrı bir değişmez
@@ -163,6 +197,47 @@ Veritabanına **yalnız** göreli yol, zaman ve fingerprint girer
 (`secret_metadata` deseni). Saklanan anahtarı geri gösteren/kopyalayan
 endpoint **yoktur**; API yalnız `configured` ve güvenli durum metadata'sı
 döndürür.
+
+### 7.1 Düzeltme (4 Eylül 2026): modül hiç incelenmemişti
+
+Bu bölümü uygulayan dosya `credentials.py` adıyla yazıldı ve deponun kendi
+`.gitignore`'undaki `credentials.*` kuralı yüzünden **hiç commit edilmedi**;
+PR diff'ine girmedi, yani modül incelenmeden birleşti. Ad
+`credential_store.py` oldu ve `test_tracked_sources.py` bu tuzağı bir daha
+kurulamaz hâle getirdi. Sonradan yapılan ayrı denetim dört gerçek kusur
+buldu; hepsi düzeltildi ve bu ADR'nin metni gerçeğe indirildi:
+
+1. **Yukarıdaki yazma sırası artık farklıdır.** "mkstemp → fsync → ACL →
+   `os.replace` → ACL" gerçekten uygulanan sıraydı ve üç modülün docstring'i
+   bunun "zarfın kalıtılmış izinlerle asla kısa süre okunabilir olmadığı"
+   anlamına geldiğini söylüyordu. İzleme, ACL çağrısı anında **537 baytın
+   zaten diskte** olduğunu gösterdi. `credential_store.py`'nin sırası
+   `O_CREAT|O_EXCL` ile boş oluştur → ACL → yaz → fsync → `os.replace` → ACL
+   oldu; dizin de kısıtlanır (SI-265). Vault ve audit zarflarının aynı
+   penceresi **kabul edilen sınır** olarak kaydedildi (SI-266).
+2. **Dosya ile veritabanı ayrışabiliyordu.** İki yazma arasında transaction
+   yoktu ve sıra dosya-önce'ydi; DB hatası sonrası durum belgesi *eski*
+   fingerprint'i "yapılandırılmış" diye gösterirken zarfta yeni anahtar
+   duruyordu. Fingerprint kullanıcının sahip olduğu **tek** tutamak olduğu
+   için sessizce yanlış olması `secret_metadata` deseninin sözünü bozardı.
+   Satır artık **önce düşürülür** (SI-263), ve `os.replace`'ten sonraki bir
+   hata yeni dosyayı da siler (SI-264).
+3. **"Her başarısızlık fail-closed" sözleşmesi yanlıştı.** Modülün en olası
+   iki arızası — DPAPI yok, ACL uygulanamıyor — `VaultError` fırlatıyordu;
+   bunlar `OpenCodeError` değildir ve route yakalamıyordu. Sızıntı yoktu
+   (shield 500 üretiyor, traceback anahtar taşımıyor), ama kullanıcı hiçbir
+   şey öğrenmiyordu. Zarf sınırında çevrilir (SI-267).
+4. **Bellek temizliği yoktur ve artık bu yazılıdır.** Projenin her yerinde
+   `bytearray` + `finally` sıfırlama vardır; burada yoktur, çünkü anahtar
+   Pydantic'ten itibaren `str`'dir. Yalnız bu katmanı `bytes`'a çevirmek
+   üstteki çerçevelerdeki aynı nesneyi bırakırdı. Sapma modül docstring'inde
+   adlandırıldı (SI-270).
+
+Ayrıca `load()` üretimde çağrılmıyordu ama docstring'i "`OpenCodeService`
+her kullanımda register/forget yapar" diyordu; register/forget çifti artık
+`opened()` contextmanager'ına bağlıdır ve çağırandan alınmıştır (SI-269).
+Eşzamanlı okuma/yazma çıplak `PermissionError` üretiyordu; süreç içi tek bir
+kilit eklendi (SI-268).
 
 ## 8. Redaksiyon ve canary
 

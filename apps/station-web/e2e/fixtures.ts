@@ -6,13 +6,49 @@
  * tests reach `technocore.chat` and `opencode.ai` zero times. "We did not
  * click anything that would" is an argument, not evidence, so this file both
  * **blocks** every request that leaves the application origin and **counts**
- * every request the page makes at all, from a listener that routing cannot
- * bypass. Every test asserts the count, and one test deliberately tries to
- * reach `technocore.chat` so that the meter is known to be live rather than
- * merely quiet.
+ * every request that leaves it.
+ *
+ * Which channels are actually covered, and which are not
+ * ------------------------------------------------------
+ * An earlier version of this comment said the listener was one "routing
+ * cannot bypass". That was true of the page it was attached to and false of
+ * everything else, and a review demonstrated both halves:
+ *
+ * * a second page opened with `context.newPage()` **was** blocked by
+ *   `context.route`, but its requests never reached `seen`, because the
+ *   listener was `page.on(...)` on the one page the fixture happened to
+ *   receive. The counter was narrower than the blocker;
+ * * `context.request` - Playwright's `APIRequestContext` - was neither
+ *   blocked nor counted. `context.route` does not intercept it at all, and
+ *   the probe's request went out as far as a real DNS lookup. `shell.spec.ts`
+ *   already uses that channel, so this was not a hypothetical.
+ *
+ * What is covered now:
+ *
+ * 1. **every page in the context**, counted from `context.on("request")` and
+ *    blocked by `context.route("**\/*")`;
+ * 2. **`context.request` and `page.request`**, wrapped below so an off-origin
+ *    call is counted *and* refused before it is issued;
+ * 3. **the server's own outbound attempts**, which no browser-side listener
+ *    can see and which `shell.spec.ts` therefore reads back from the backend.
+ *
+ * What is still not covered, and is refused in source instead: Playwright's
+ * standalone `request` fixture and `playwright.request.newContext()`, which
+ * build an `APIRequestContext` this file never touches.
+ * `harness/discipline.ts` fails the run if a spec uses either.
+ *
+ * Both counters have a negative control in `shell.spec.ts`. Not just the
+ * blocker: a meter that is broken and a suite that is quiet look identical,
+ * so `seen`/`external()` is provoked deliberately too.
  */
 
-import { expect, test as base, type Page, type TestInfo } from "@playwright/test";
+import {
+  expect,
+  test as base,
+  type APIRequestContext,
+  type Page,
+  type TestInfo,
+} from "@playwright/test";
 
 import { readHandshake, sessionUrl, type Handshake } from "./harness/station";
 
@@ -20,11 +56,12 @@ import { readHandshake, sessionUrl, type Handshake } from "./harness/station";
 const LOCAL_SCHEMES = ["about:", "data:", "blob:", "chrome-error:"];
 
 export class OutboundLedger {
-  /** Every request URL the page issued, in order. */
+  /** Every request URL any page in the context issued, in order. */
   readonly seen: string[] = [];
   /** Requests the guard refused because they left the app origin. */
   readonly blocked: string[] = [];
   private expectedBlocked = 0;
+  private expectedExternal = 0;
 
   constructor(private readonly origin: string) {}
 
@@ -32,30 +69,88 @@ export class OutboundLedger {
     return LOCAL_SCHEMES.some((scheme) => url.startsWith(scheme)) || url.startsWith(this.origin);
   }
 
-  /** Off-origin URLs the page actually asked for, whatever routing did next. */
+  /** Off-origin URLs something actually asked for, whatever routing did next. */
   external(): string[] {
     return this.seen.filter((url) => !this.isLocal(url));
+  }
+
+  /** Record a request the browser-side listener cannot see (an API call). */
+  record(url: string): void {
+    this.seen.push(url);
+  }
+
+  /** Refuse an off-origin API call, and count the refusal. */
+  refuse(url: string): void {
+    this.blocked.push(url);
   }
 
   /**
    * Declare that this test provokes `count` blocked requests on purpose.
    *
-   * Only the guard's own self-test uses this, and it provokes them from a
-   * throwaway page rather than from the application. Every other test asserts
-   * a flat zero on both counters.
+   * Only the guard's own self-tests use this, and they provoke them from a
+   * throwaway page or a throwaway API call rather than from the application.
+   * Every other test asserts a flat zero on both counters.
    */
   expectBlocked(count: number): void {
     this.expectedBlocked = count;
   }
 
+  /**
+   * Declare that this test issues `count` off-origin requests on purpose.
+   *
+   * Separate from {@link expectBlocked} because the two counters answer
+   * different questions - "was it stopped" and "was it seen" - and a
+   * negative control for one is not a negative control for the other. That
+   * distinction is the whole finding: the blocker had a self-test and the
+   * meter did not.
+   */
+  expectExternal(count: number): void {
+    this.expectedExternal = count;
+  }
+
   assertClean(): void {
     expect(
       this.external(),
-      "the application page must never request anything outside the local origin",
-    ).toHaveLength(0);
+      "nothing in this context may request anything outside the local origin",
+    ).toHaveLength(this.expectedExternal);
     expect(this.blocked, "off-origin requests refused by the guard").toHaveLength(
       this.expectedBlocked,
     );
+  }
+}
+
+/**
+ * Count and gate one `APIRequestContext`.
+ *
+ * `context.route` does not intercept these calls, so the only place to stand
+ * is in front of the methods themselves. Own properties are assigned over the
+ * prototype's, which is enough: the object is created fresh per test context
+ * and thrown away with it.
+ *
+ * An off-origin call is rejected instead of aborted. There is no route to
+ * abort it in, and a rejection is the honest shape anyway - the request was
+ * never issued at all.
+ */
+function meterApiRequests(api: APIRequestContext, ledger: OutboundLedger): void {
+  const methods = ["fetch", "get", "post", "put", "patch", "delete", "head"] as const;
+  const target = api as unknown as Record<string, (...args: unknown[]) => unknown>;
+
+  for (const method of methods) {
+    const bound = target[method];
+    if (bound === undefined) continue;
+    const original = bound.bind(api);
+    target[method] = (...args: unknown[]): unknown => {
+      const url = typeof args[0] === "string" ? args[0] : String(args[0]);
+      ledger.record(url);
+      if (!ledger.isLocal(url)) {
+        ledger.refuse(url);
+        // A rejected promise rather than a synchronous throw: these methods
+        // are `async` in Playwright's API and a caller writes `await`, so a
+        // refusal has to arrive the way any other failure would.
+        return Promise.reject(new Error(`blocked by the outbound guard: ${url}`));
+      }
+      return original(...args);
+    };
   }
 }
 
@@ -108,10 +203,14 @@ export const test = base.extend<StationFixtures>({
     async ({ context, page, station }, use) => {
       const ledger = new OutboundLedger(station.origin);
 
-      // The measurement. A `request` event fires for every request the page
-      // makes, including ones a page-level route later fulfils, so this
-      // cannot be silenced by a mock a test registers afterwards.
-      page.on("request", (request) => ledger.seen.push(request.url()));
+      // The measurement, at **context** level. A `request` event fires for
+      // every request any page in the context makes, including ones a
+      // page-level route later fulfils, so this cannot be silenced by a mock
+      // a test registers afterwards - and, unlike the `page.on` listener it
+      // replaces, it does not stop at the one page the fixture was handed.
+      context.on("request", (request) => {
+        ledger.record(request.url());
+      });
 
       // The enforcement. Registered on the context before any test body runs,
       // so a same-origin mock registered later on the page still wins and
@@ -125,6 +224,13 @@ export const test = base.extend<StationFixtures>({
         ledger.blocked.push(url);
         await route.abort("blockedbyclient");
       });
+
+      // The channel neither of the two above can reach. `context.route` does
+      // not intercept an `APIRequestContext`, and `context.on("request")` is
+      // a page event; a review's probe went out to a real DNS lookup through
+      // exactly this gap.
+      meterApiRequests(context.request, ledger);
+      meterApiRequests(page.request, ledger);
 
       await use(ledger);
       ledger.assertClean();

@@ -1,63 +1,43 @@
 /**
  * The suite checking itself.
  *
- * ADR-0006 6 says a flaky test is not a green test. The two things that
- * reliably make a browser suite flaky - sleeping instead of waiting for
- * state, and retrying until it passes - and the one thing that silently
- * shrinks it - a committed `test.only` - are all mechanical, so they are
- * checked mechanically rather than left to review.
+ * ADR-0006 6 says a flaky test is not a green test. The things that reliably
+ * make a browser suite flaky - sleeping instead of waiting for state, and
+ * retrying until it passes - and the two that silently shrink it - a
+ * committed `test.only` and a committed `test.skip` - are all mechanical, so
+ * they are checked mechanically rather than left to review.
+ *
+ * **The source scan does not live here.** It lives in
+ * `harness/discipline.ts` and is called from `global-setup.ts`, because a
+ * review showed why: a committed `only` filtered this file out along with
+ * everything else, the run reported `1 passed` and exited 0, and the guard
+ * never executed. Global setup runs before test selection exists. These
+ * tests call the same functions so a violation still shows up as a named
+ * failure during an ordinary run - they are the readable surface, not the
+ * enforcement.
  *
  * This would normally be an ESLint rule. `apps/station-web/eslint.config.js`
  * is write-protected in this environment (a repository hook refuses edits to
- * it), so the rule lives here instead, where it runs on every `test:e2e`.
+ * it), so the rules live in TypeScript instead.
  */
 
-import { readFile, readdir } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
 import config from "../../playwright.config";
+import { disciplineViolations } from "../harness/discipline";
 import { expect, test } from "../fixtures";
 
-const E2E_ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
-
-async function sources(): Promise<{ file: string; body: string }[]> {
-  const files: string[] = [];
-  async function walk(dir: string): Promise<void> {
-    for (const entry of await readdir(dir, { withFileTypes: true })) {
-      if (entry.name.startsWith(".")) continue;
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) await walk(full);
-      else if (entry.name.endsWith(".ts")) files.push(full);
-    }
-  }
-  await walk(E2E_ROOT);
-  return Promise.all(
-    files.map(async (file) => ({
-      file: path.relative(E2E_ROOT, file),
-      body: await readFile(file, "utf8"),
-    })),
-  );
-}
-
 test.describe("suite discipline", () => {
-  test("no spec sleeps instead of waiting for state", async () => {
-    const offenders = (await sources())
-      .filter(({ body }) => /\.waitForTimeout\s*\(|setTimeout\(\s*resolve/.test(stripComments(body)))
-      .map(({ file }) => file);
-
-    // `harness/station.ts` is allowed to poll the filesystem for the
-    // handshake: there is no event to await on a file another process has not
-    // written yet. Nothing under `tests/` may.
-    expect(offenders.filter((file) => file.startsWith("tests"))).toEqual([]);
+  test("the tree keeps its own rules", async () => {
+    // One assertion over every rule, because the scanner reports which rule
+    // and which file, and a failure message that names both is worth more
+    // than four separate tests that each name one.
+    expect(await disciplineViolations()).toEqual([]);
   });
 
-  test("no committed test.only silently shrinks the suite", async () => {
-    const offenders = (await sources())
-      .filter(({ body }) => /\b(test|describe|it)\.only\s*\(/.test(stripComments(body)))
-      .map(({ file }) => file);
-
-    expect(offenders).toEqual([]);
+  test("a focused run cannot report success", () => {
+    // `forbidOnly` used to be `!!process.env.CI`, so exactly the run a
+    // developer looks at - the local one - was the run that accepted a
+    // committed `only` and answered "1 passed".
+    expect(config.forbidOnly).toBe(true);
   });
 
   test("retries stay at zero and the run stays single-worker", () => {
@@ -73,8 +53,3 @@ test.describe("suite discipline", () => {
     expect(config.projects?.map((project) => project.name)).toEqual(["chromium"]);
   });
 });
-
-/** Crude but sufficient: strip line and block comments before scanning. */
-function stripComments(body: string): string {
-  return body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-}

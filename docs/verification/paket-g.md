@@ -126,9 +126,9 @@ test kilidinden daha güçlü ve üründe.
 
 | Kapı | Sonuç |
 |---|---|
-| pytest | **1514 geçti** (1331 → 1514) |
-| Vitest | **230 geçti** (206 → 230) |
-| Playwright (e2e) | **51 geçti** (32.4 sn); agent tarafında beş ardışık koşuda 51/51, kararsızlık yok, `retries: 0` |
+| pytest | **1555 geçti** (1331 → 1514 → inceleme düzeltmeleriyle 1555) |
+| Vitest | **233 geçti** (206 → 233) |
+| Playwright (e2e) | **53 geçti**; bağımsız incelemecinin üç ardışık koşusunda 51/51 kararsızlık yok (36.1 / 34.4 / 34.6 sn), `retries: 0` |
 | ruff (iki koşu) / mypy strict | geçti / 103 dosya 0 hata |
 | eslint / build (tsc+vite) | geçti / geçti |
 | `npm audit` | 0 açık |
@@ -174,8 +174,60 @@ kırıyor. Hook kaldırılıp ESLint bloğu eklenirse boşluk tam kapanır.
 
 ## Bağımsız inceleme sonucu
 
-(PR üzerinde doldurulacak — temiz bağlamlı reviewer subagent koşulacak; bu
-insan güvenlik incelemesi değildir, ADR-0001 §5 kalan risk.)
+Bu pakette **iki ayrı** inceleme koşuldu ve ikincisi ilkinin açtığı bir
+boşluk yüzünden zorunlu hale geldi.
+
+### CI, yerel suite'in göremediğini yakaladı
+
+Yerelde 1514 pytest, temiz mypy ve 51 tarayıcı testi yeşilken CI taze
+checkout'ta `ModuleNotFoundError: station_api.opencode.credentials` ile
+patladı. Sebep: `.gitignore`'daki `credentials.*` — gerçek bir credential
+dosyasının depoya girmesini engellemek için konmuş bir **güvenlik kuralı** —
+aynı adı taşıyan **kaynak modülü** sessizce yuttu.
+
+Modül `credential_store.py` olarak **yeniden adlandırıldı, muafiyet
+verilmedi**: o kurala açılan delik, sonradan gerçeğini içeri alacak olan
+deliktir. Diskte var olup git'te izlenmeyen kaynak dosyayı yakalayan bir
+koruma eklendi (kendini denetleyen ikiziyle).
+
+**Asıl sonuç:** dosya diff'e hiç girmediği için **paketin en
+güvenlik-kritik modülünü hiçbir incelemeci okumamıştı.** Görünür hale
+gelince ayrı bir denetim yaptırıldı.
+
+### Birinci inceleme (PR diffi)
+
+Bir dürüstlük notu: incelemeci ilk raporunda tarayıcı QA bölümünü **hiç
+ölçmeden** yazdığını fark edip **geri çekti**. O maddeler sonra fiilen
+koşuldu; çoğu doğru çıktı ve düzeltme doğrulanmış hallerine göre yapıldı.
+
+| Bulgu | Düzeltme |
+|---|---|
+| **P1:** provider anahtarı **422 gövdesinde geri yansıyor**. `SecretStr` parse edilmiş değerin repr'ini korur; tip hatası sarmalamadan önce olduğu için FastAPI ham girdiyi yankılar. Mevcut sızıntı testi yalnız başarılı store sonrası GET'lere bakıyordu | Her Pydantic hata girdisinden `input` ve `ctx` düşürülür, `loc`/`msg`/`type` kalır. Prob yeniden koşuldu: `CANARY PRESENT: False` |
+| **P1:** dördüncü-yüzey allow-list'i **çıplak dizin adına** bakıyordu. `station_api/plugins/opencode/client.py` yerleştirilip içinden dışarı POST atıldı: **27 test sessizce geçti** | Allow-list kaynak köküne **göreli tam yola** anahtarlandı; gerçek prob depoya konulup testin **isim vererek** kırıldığı doğrulandı, sonra iki regresyon testine dönüştürüldü |
+| **P2:** dört koruma mutasyonda **hiç ateşlenmiyordu** | Kök neden (M4): dala ulaşan her satır aynı zamanda veri koşuluyla da kapalıydı, bir satır sonra aynı kelimeyle reddediliyordu. Kapısız bir tablo eklenip mesaj kendi cümlesine pinlendi. Dördü de artık kırmızıya dönüyor |
+| **P2:** model tablosu **bayatladı** (belge `omen-alpha` eklemiş, katalog 35) ve kullanıcıya *kaynak hakkında olgu* diye söylenen cümle artık doğru değildi | Ret cümleleri **bu build hakkında** konuşuyor; **koşulsuz** bir köken satırı (satır sayısı + okuma tarihi + sayfa altbilgisi) ve bir **sürüklenme uyarısı** eklendi. `omen-alpha` **tabloya eklenmedi** — eklemek yeni bir transkripsiyon ve doğrulama ister |
+| **P2:** tarayıcı QA'nın **öz-denetimi** zayıftı: `test.only` koşuyu 51'den 1'e indirip **başarı** raporluyordu, `test.skip` `CI=1` altında bile denetlenmiyordu, sleep yasağı bir callback **adına** bağlıydı | Disiplin taraması spec'ten çıkarılıp `global-setup`'a alındı — Playwright tek bir test seçmeden koşuyor, yani `only`/`skip`/`--grep` onu eleyemiyor |
+| **P2:** "origin'i terk eden her isteği bloklar ve sayar" iddiası **literal olarak yanlıştı** — `context.request` ne bloklanıyor ne sayılıyordu, istek DNS'e kadar gitti | Sayaç `context` seviyesine taşındı; `context.request`/`page.request` sarmalandı ve origin dışı çağrı **gönderilmeden önce** reddediliyor. Kapsanmayan kanal kaynak taramasıyla yasaklandı; `seen` için eksik negatif kontrol eklendi |
+| **P3'ler:** `sınırsız` kelimesindeki noktalı-ı körlüğü (guard ile test **aynı körlüğü paylaşıyordu**), beşinci aşama-numarası yeri, belgelerin allow-list gerekçesini ters anlatması, `execution-state.json` zaman damgasının geriye gitmesi | Hepsi doğrulanıp düzeltildi; katlama Paket E'den alındı ve test iğneyi **bağımsız** yazıyor. "Doğrulanmamış" bırakılan üç iddia da kontrol edildi, **üçü de doğru** çıktı — biri üç değil **dört** yerdeymiş |
+
+### İkinci inceleme (hiç okunmamış credential modülü)
+
+| Bulgu | Düzeltme |
+|---|---|
+| **P1:** dosya ile DB **ayrışabiliyordu**. Zarf önce diske yazılıyor, DB satırı ayrı oturumda güncelleniyordu; ikinci adım başarısız olursa diskteki anahtar yeni, gösterilen fingerprint eskiydi (prob: durum `9359c4e2` derken zarfta `1b97b5e5` duruyordu). İkinci yol: `os.replace` sonrası hata, çağıran başarısızlık görürken eski anahtarı yok ediyordu | Sıra tersine çevrildi: satır **önce geri çekiliyor**, zarf yazılıyor, sonra diskteki anahtarı adlandıran satır ekleniyor. Her kesinti "eski satır + eski dosya uyumlu" ya da "satır yok → yapılandırılmamış" ile bitiyor; **yanlış fingerprint erişilemez**. `_atomic_write` `os.replace`'in **iki yanında da** fail-closed. Fingerprint'i `describe()`'ta yeniden hesaplamak **reddedildi** — her `/status` yoklamasında anahtarı çözmek, bir raporlama hatasını düzeltmek için maruziyeti en çok çağrılan route'a yaymak olurdu |
+| **P2:** vault hataları OpenCode hiyerarşisinden **kaçıyordu**; en olası iki gerçek arıza opak 500 üretiyordu (sızıntı yok, sözleşme yanlış) | DPAPI/ACL arızaları **503** ile adlandırılıyor, diğerleri 400; orijinal istisna `from` ile bağlı |
+| **P2:** eşzamanlı okuma/yazma ham `PermissionError` fırlatıyordu (53 hata) | Modül düzeyinde kilit + sınırlı retry; prob teste dönüştü, **0 hata** |
+| **P2:** SI-239'un `kind`/`format` yarısını **hiçbir test tutmuyordu** — test döngüsü dosyayı **birikmeli** bozuyor, `version=99` ilk turda takılıp sonrakileri hiç tetiklemiyordu | Döngü her turda taze zarftan başlıyor ve turun kendi mutasyonunun reddi tetiklediğini kanıtlıyor; eksik/fazla/yanlış-tip alan testi eklendi |
+| **P3:** `_atomic_write` docstring'i "ACL yeniden adlandırmadan önce uygulanır" diyordu; izleme sırayı `write → flush → fsync → ACL` gösterdi. Aynı cümle vault ve audit zarflarında da vardı; vault'unki üstüne "ve doğrulanır" deyip hiçbir doğrulama yapmıyordu | Metin değil **kod** düzeltildi: boş dosya → sıfır baytta ACL → yazma → fsync → replace → ACL. Vault/audit yazma yolları **bilinçli değiştirilmedi** (audit zarfı zincirin doğrulamasının dayandığı tek dosya) ve bu **kabul edilmiş sınır** olarak kaydedildi |
+| **P3:** anahtar için bellek temizliği yok ve bu **hiçbir yerde kabul edilmemişti** | Dürüst docstring seçildi: anahtar Pydantic'ten itibaren `str`; yalnız zarf katmanını çevirmek, üç canlı çerçeve aynı değişmez nesneyi tutarken **koruma değil tiyatro** olurdu. Gerçek korumalar adlandırıldı, crash dump'ın kapsanmadığı yazıldı |
+| **P3:** `load()`'un üretim çağıranı yoktu ama docstring **var olmayan bir garanti** veriyordu | `opened()` contextmanager eklendi — register/forget çağırandan alınamıyor; `load()` docstring'i eski iddiayı **yanlış olarak adlandırıyor** |
+| **P3:** dizin ACL'i yoktu; belge eski dosya adını gösteriyordu | Credential dizinine ACL uygulandı (testli); vault/audit'teki miras boşluk **kabul edilmiş sınır** olarak kaydedildi; belge düzeltildi |
+
+**On üç mutasyon kontrolünün hepsi** artık en az bir testi öldürüyor.
+Eklenen değişmezlerin **ikisi bilinçli olarak "kabul edilmiş sınır"dır**,
+düzeltme iddiası değil.
+
+Bu inceleme bir **insan güvenlik incelemesi değildir** (ADR-0001 §5).
 
 ## Sınırlar
 

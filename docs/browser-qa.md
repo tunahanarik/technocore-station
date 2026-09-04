@@ -47,12 +47,20 @@ Bunun sonuçları:
 | `STATION_DATA_DIR` | `%TEMP%\station-e2e-*` | Kullanıcının kimlik verisine dokunulmaz. |
 | Veritabanı | O geçici dizindeki SQLite | Koşu bitince dizin silinir. |
 
-### Üretim veri dizini üç kez reddedilir
+### Üretim veri dizini: bir ret, bir önleme, bir doğrulama
 
-`%LOCALAPPDATA%\TechnocoreStation` hedef alınamaz: harness `main()` içinde
-**çözümlenmiş** yolu karşılaştırıp `SystemExit` atar, Node tarafı dizini
-`mkdtemp` ile kendisi üretir, ve `shell.spec.ts` bunu ayrıca **iddia eder**.
-Üç bariyerin ikisi mekanizma, biri testtir.
+`%LOCALAPPDATA%\TechnocoreStation` hedef alınamaz. İlk yazım bunu "üç kez
+reddedilir" diye özetliyordu; **üçü aynı şey değil** ve farkı yazmak daha
+dürüst:
+
+| Katman | Yer | Ne yapar |
+|---|---|---|
+| **Ret** | `e2e/harness/serve.py:51` | **Çözümlenmiş** yolu karşılaştırır ve eşleşirse `SystemExit` atar. Tek gerçek reddetme budur. |
+| **Önleme** | `e2e/harness/station.ts:116` | Dizini `mkdtemp` ile kendisi üretir, yani üretim yolu hiç istenmez. Bir ret değil, o durumun oluşmaması. |
+| **Doğrulama** | `shell.spec.ts:58` | Koşan sürecin gerçekte hangi dizini kullandığını okur ve üretim yolu olmadığını iddia eder. Bariyer değil, ölçüm. |
+
+Üçü birden "üç bariyer" değildir: biri kapıyı kapatır, biri kapıya hiç
+gelmez, biri kapının kapalı olduğunu ölçer.
 
 ### Oturum devri
 
@@ -69,20 +77,37 @@ yanlış olurdu. Dosya kanalı koşu bitince dizinle birlikte silinir.
 ## 3. Dış ağ: nasıl bloklanıyor, nasıl **ölçülüyor**
 
 ADR-0006 m.2 `technocore.chat` ve `opencode.ai`'ye sıfır istek der. "Öyle bir
-şeye tıklamadık" bir argümandır, kanıt değildir. Bu yüzden üç ayrı katman
-vardır ve üçü de **ölçülür**:
+şeye tıklamadık" bir argümandır, kanıt değildir. Bu yüzden dört ayrı katman
+vardır ve hepsi **ölçülür**:
 
-1. **Tarayıcı sayacı (ölçüm).** `page.on("request")` sayfanın yaptığı her
-   isteği kaydeder. Bu dinleyici, bir testin sonradan kaydettiği `page.route`
-   mock'u tarafından **susturulamaz**; yönlendirme ne yaparsa yapsın istek
-   sayılır. Her testin sonunda otomatik olarak "uygulama origin'i dışına sıfır
-   istek" iddia edilir (`e2e/fixtures.ts`, `OutboundLedger`).
+1. **Tarayıcı sayacı (ölçüm).** `context.on("request")` bu context'teki
+   **her sayfanın** yaptığı her isteği kaydeder. Bir testin sonradan
+   kaydettiği `page.route` mock'u onu susturamaz; yönlendirme ne yaparsa
+   yapsın istek sayılır. Her testin sonunda otomatik olarak "uygulama
+   origin'i dışına sıfır istek" iddia edilir (`e2e/fixtures.ts`,
+   `OutboundLedger`).
+
+   > **Düzeltme (inceleme bulgusu).** Bu dinleyici önce `page.on("request")`
+   > idi ve fixture'a verilen **tek** sayfayı görüyordu: `context.newPage()`
+   > ile açılan ikinci bir sayfanın istekleri bloklanıyor ama sayılmıyordu.
+   > Sayaç kesiciden dardı ve hiçbir şey bunu söylemiyordu.
 2. **Tarayıcı kesici (uygulama).** `context.route("**/*")` origin dışındaki
    her isteği `abort("blockedbyclient")` ile keser ve ayrı bir sayaca yazar.
-3. **Aletin kendi negatif kontrolü.** `shell.spec.ts` içinde bir test, tek
-   kullanımlık bir sayfadan bilerek `https://technocore.chat/healthz`'e gider
-   ve **bloklandığını + sayıldığını** doğrular. Bu olmadan diğer tüm
-   testlerdeki "sıfır" ile "sayaç bozuk" ayırt edilemezdi.
+3. **API isteği kanalı.** `context.request` ve `page.request`
+   (`APIRequestContext`) `context.route` tarafından **hiç** yakalanmaz. Bir
+   inceleme bu kanaldan gerçek bir DNS sorgusu çıkardı: ne bloklandı ne
+   sayıldı. Bugün fixture bu iki nesnenin metotlarını sarmalıyor; origin dışı
+   çağrı **sayılır ve reddedilir**, istek hiç gönderilmez. Playwright'ın
+   bağımsız `request` fixture'ı ve `playwright.request.newContext()` hâlâ
+   kapsam dışıdır, bu yüzden spec'lerde **kullanımı yasaktır** ve
+   `harness/discipline.ts` koşuyu kırar.
+4. **Aletin kendi negatif kontrolleri — her iki sayaç için.**
+   `shell.spec.ts` içinde bir test tek kullanımlık bir sayfadan bilerek
+   `https://technocore.chat/healthz`'e gider ve hem **bloklandığını** hem
+   **sayıldığını** doğrular; ikinci bir test aynısını `context.request` ile
+   yapar; üçüncüsü aynı-origin bir API çağrısının **geçtiğini ve ölçüldüğünü**
+   doğrular. Yalnız kesicinin negatif kontrolü vardı, sayacınki yoktu; bu da
+   sayacın dar olduğunun görülmemesinin sebebiydi.
 
 Buna ek olarak **ürünün kendi CSP'si** ölçüldü: `connect-src`,
 `default-src 'none'`'dan miras aldığı için sayfa dışarı bir istek
@@ -99,7 +124,7 @@ hiçbir test basmaz — ve basılsaydı bu iddia düşerdi.
 
 ## 4. Ne test ediliyor
 
-51 test, dokuz dosya. Hepsi jsdom'da kanıtlanamayan bir şey içindir.
+53 test, dokuz dosya. Hepsi jsdom'da kanıtlanamayan bir şey içindir.
 
 | Dosya | Konu | Neden tarayıcı gerekiyor |
 |---|---|---|
@@ -111,7 +136,7 @@ hiçbir test basmaz — ve basılsaydı bu iddia düşerdi.
 | `opencode.spec.ts` | Anahtar alanının maskeli olması, kaydedilen anahtarın DOM'da **hiçbir yerde** olmaması, eşlemesiz modelin `disabled` olması | "Tüm belgede yok" iddiası ancak gerçek bir DOM'da anlamlıdır. |
 | `a11y.spec.ts` | Her bölümde tek `<h1>`, dört landmark, etiketsiz form alanı olmaması, başlık hiyerarşisi | Erişilebilirlik ağacı tarayıcıda hesaplanır. |
 | `shell.spec.ts` | Oturum devri, cookie bayrakları, harcanan token'ın tekrarlanamaması, veri dizini, dış ağ | 303 + `Set-Cookie` gerçek bir tarayıcı gerektirir. |
-| `suite-discipline.spec.ts` | Paketin kendi kuralları (aşağıda) | — |
+| `suite-discipline.spec.ts` | Paketin kendi kuralları (aşağıda). Taramanın kendisi `harness/discipline.ts`'te ve `globalSetup`'ta koşar | — |
 
 ## 5. Ne test **edilmiyor**
 
@@ -163,10 +188,27 @@ ADR-0006 m.6: **kararsız bir test yeşil sayılmaz.** Uygulaması mekaniktir:
 
 Bu kurallar normalde ESLint'e yazılırdı. `apps/station-web/eslint.config.js`
 bu ortamda **yazma korumalıdır** (bir depo hook'u düzenlemeyi reddediyor), bu
-yüzden kural `suite-discipline.spec.ts` içinde yaşar ve her koşuda çalışır:
-`tests/` altında `waitForTimeout`/`setTimeout` sleep'i, commit edilmiş bir
-`test.only`, `retries !== 0`, `workers !== 1` veya Chromium dışı bir proje
-paketi **kırar**.
+yüzden kural TypeScript'te yaşar.
+
+**Nerede yaşadığı bir inceleme sonrası değişti.** Tarama önce yalnız
+`suite-discipline.spec.ts` içindeydi ve commit edilmiş bir `test.only` onu da
+eliyordu: koşu `1 passed (4.5s)` yazıp **exit 0** veriyordu. Bir ihlalin
+kapatabildiği guard, guard değildir. Tarama bugün
+`e2e/harness/discipline.ts` içindedir ve **`globalSetup`'tan** çağrılır —
+Playwright henüz tek bir test seçmemişken, yani `only`, `skip` veya
+`--grep` onu atlatamaz. Spec aynı fonksiyonları çağırmayı sürdürür, çünkü
+normal bir koşuda ihlali adlandırılmış bir test hatası olarak görmek
+okunaklıdır.
+
+Bugün koşuyu **kıran** şeyler:
+
+| Kural | Neden değişti |
+|---|---|
+| Commit edilmiş `.only` | Suite'i 51'den 1'e indirip başarı raporluyordu. Ayrıca `forbidOnly` artık **koşulsuz** `true`; `!!process.env.CI` idi, yani tam da geliştiricinin baktığı koşu bunu kabul ediyordu. |
+| Commit edilmiş `.skip` / `.fixme` | Hiç denetlenmiyordu. CSP spec'inin tamamı `skip` edilince koşu `5 skipped / 46 passed`, exit 0 diyordu — `CI=1` altında da. A1-R1'in kanıtı tek kelimeyle susturulabiliyordu. |
+| `tests/**` altında herhangi bir `setTimeout` | Eski desen `setTimeout(` + `resolve` iki token'ıydı, yani bir **callback adına** bağlıydı: `setTimeout(done, 750)` geçiyordu. |
+| Ölçülemeyen `request` kanalı | Playwright'ın bağımsız `request` fixture'ı ve `playwright.request` giden defterin göremediği bir `APIRequestContext` üretir. |
+| `retries !== 0`, `workers !== 1`, Chromium dışı proje | Değişmedi; ikisi de mutasyonla doğrulandı. |
 
 > Bunun sonucu bir boşluktur ve dürüstçe yazılıdır: `e2e/**` ESLint tarafından
 > **linlenmiyor**. Tip denetimi vardır (`tsconfig.e2e.json`, `tsconfig.json`
@@ -177,7 +219,9 @@ paketi **kırar**.
 ### Gözlenen kararlılık
 
 Aynı makinede art arda **beş** tam koşu: **51/51**, süre 31.9–34.0 s. Flaky
-işaretli test yok, retry yok, quarantine yok.
+işaretli test yok, retry yok, quarantine yok. Bağımsız inceleme aynı ölçümü
+üç koşuyla tekrarladı ve doğruladı. Paket G'nin inceleme düzeltmelerinden
+sonra suite **53/53**'tür (iki yeni negatif kontrol).
 
 ## 8. Açık bulgular
 

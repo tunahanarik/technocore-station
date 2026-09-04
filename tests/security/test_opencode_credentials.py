@@ -18,13 +18,20 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 from pathlib import Path
+from typing import Any
 
 import pytest
 from sqlalchemy import Engine, inspect
+from sqlalchemy.orm import Session
 from station_api.config import Settings
 from station_api.evidence.audit_envelope import AuditEnvelope, AuditEnvelopeError
-from station_api.logging_setup import _MIN_REGISTERABLE_LENGTH
+from station_api.logging_setup import (
+    _MIN_REGISTERABLE_LENGTH,
+    contains_registered_secret,
+)
+from station_api.opencode import credential_store as credential_store_module
 from station_api.opencode.credential_store import (
     CREDENTIAL_ID,
     DOMAIN_SEPARATION_LABEL,
@@ -34,11 +41,23 @@ from station_api.opencode.credential_store import (
     MIN_KEY_LENGTH,
     ApiKeyEnvelope,
     assert_storable,
+    credential_dir,
     credential_path,
     fingerprint,
 )
-from station_api.opencode.errors import CredentialEnvelopeError
+from station_api.opencode.errors import (
+    CredentialEnvelopeError,
+    OpenCodeConfigurationError,
+    OpenCodeError,
+)
 from station_api.opencode.service import OpenCodeService
+from station_api.strict_json import b64u_decode, b64u_encode
+from station_api.vault.errors import (
+    VaultAclError,
+    VaultCapabilityError,
+    VaultError,
+    VaultUnlockError,
+)
 
 from tests.conftest import TEST_ONLY_OPENCODE_CREDENTIAL
 
@@ -125,15 +144,71 @@ def test_the_envelope_has_the_audit_shape_and_hides_the_credential(
 def test_the_envelope_is_versioned_and_kind_checked(
     envelope: ApiKeyEnvelope, data_dir: Path
 ) -> None:
+    """Each mutation starts from a **fresh** envelope. It did not before.
+
+    The previous loop called ``path.read_bytes()`` *inside* the loop, so
+    round two mutated round one's already-broken file. ``version=99`` stuck,
+    every later round was refused on the version, and the ``kind`` and
+    ``format`` branches were never reached: deleting either check from
+    ``_unwrap`` left the whole suite green. Reading the good bytes once,
+    before the loop, and restoring them after each round is the entire fix -
+    and the restore doubles as proof that the file was broken by *this*
+    mutation and not by the previous one.
+    """
     envelope.store(TEST_ONLY_OPENCODE_CREDENTIAL)
     path = credential_path(data_dir)
+    good = path.read_bytes()
+    assert envelope.load() == TEST_ONLY_OPENCODE_CREDENTIAL
 
     for mutation in ({"version": 99}, {"kind": "material"}, {"format": "other"}):
-        document = json.loads(path.read_bytes())
+        document = json.loads(good)
         document.update(mutation)
         path.write_bytes(json.dumps(document).encode())
         with pytest.raises(CredentialEnvelopeError):
             envelope.load()
+
+        path.write_bytes(good)
+        assert envelope.load() == TEST_ONLY_OPENCODE_CREDENTIAL, (
+            f"the envelope did not survive round-tripping past {mutation}"
+        )
+
+
+@windows_only
+def test_an_envelope_with_a_missing_or_extra_or_mistyped_field_is_refused(
+    envelope: ApiKeyEnvelope, data_dir: Path
+) -> None:
+    """The other half of SI-239, which nothing held.
+
+    ``require_exact_keys`` and the ``created_at`` type check were both
+    unreachable from any test: removing either one changed no result. Both
+    are load-bearing - an envelope missing ``dpapi_blob`` or carrying a sixth
+    field is not one this build wrote, and a build that read it anyway would
+    be guessing about a file that holds a credential.
+    """
+    envelope.store(TEST_ONLY_OPENCODE_CREDENTIAL)
+    path = credential_path(data_dir)
+    good = path.read_bytes()
+    fields = ("format", "version", "kind", "created_at", "dpapi_blob")
+
+    def refuses(document: dict[str, Any], why: str) -> None:
+        path.write_bytes(json.dumps(document).encode())
+        with pytest.raises(CredentialEnvelopeError):
+            envelope.load()
+        path.write_bytes(good)
+        assert envelope.load() == TEST_ONLY_OPENCODE_CREDENTIAL, why
+
+    for missing in fields:
+        document = json.loads(good)
+        del document[missing]
+        refuses(document, f"a envelope without {missing!r} was accepted")
+
+    document = json.loads(good)
+    document["extra"] = "a field this build never wrote"
+    refuses(document, "an envelope with a sixth field was accepted")
+
+    document = json.loads(good)
+    document["created_at"] = 0
+    refuses(document, "an envelope with a non-string created_at was accepted")
 
 
 @windows_only
@@ -299,3 +374,447 @@ def test_the_acl_is_restricted_to_the_current_user_and_system(
 
     granted = sorted(acl_grantee_sids(credential_path(data_dir)))
     assert granted == sorted(("S-1-5-18", current_user_sid()))
+
+
+# ---------------------------------------------------------------------------
+# The store path's redaction window
+# ---------------------------------------------------------------------------
+#
+# ``OpenCodeService.store_credential`` wraps the envelope write in
+# ``_registered``, which puts the key in the redaction registry for the
+# duration of the call. Until now nothing drove that: a mutation review
+# deleted the registration and only the baseline failures moved, because
+# every test that asserted redaction went through the *client* path, which
+# registers the key separately.
+#
+# The window is what makes an exception raised inside the write safe. DPAPI,
+# an ACL call and a rename all happen in there, and any of them can raise
+# with the value on the stack.
+
+
+def test_the_store_path_registers_the_key_for_redaction_while_it_writes(
+    engine: Engine, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Observed from inside the envelope write, which is where it matters.
+
+    The probe replaces :meth:`ApiKeyEnvelope.store` so no DPAPI call is made
+    and no envelope is left behind - the assertion is about the registry, not
+    about the file - and asks the redaction registry the one question that
+    can distinguish a live control from a comment: *is the key registered
+    right now?*
+    """
+    from station_api.logging_setup import contains_registered_secret
+
+    observed: list[bool] = []
+
+    def probe(self: ApiKeyEnvelope, key: str) -> str:
+        observed.append(contains_registered_secret(key))
+        return fingerprint(key)
+
+    monkeypatch.setattr(ApiKeyEnvelope, "store", probe)
+
+    service = OpenCodeService(engine=engine, data_dir=settings.data_dir)
+    service.store_credential(TEST_ONLY_OPENCODE_CREDENTIAL)
+
+    assert observed == [True], "the key was not registered while it was being written"
+
+
+def test_the_store_path_drops_the_key_from_the_registry_when_it_returns(
+    engine: Engine, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Registered for exactly as long as it is in use, and no longer.
+
+    A registry that only grows is a registry that eventually scrubs ordinary
+    log lines, which is how a redaction control gets switched off in
+    practice. The client path already asserts this; the store path did not.
+    """
+    from station_api.logging_setup import contains_registered_secret
+
+    monkeypatch.setattr(ApiKeyEnvelope, "store", lambda self, key: fingerprint(key))
+
+    service = OpenCodeService(engine=engine, data_dir=settings.data_dir)
+    service.store_credential(TEST_ONLY_OPENCODE_CREDENTIAL)
+
+    assert not contains_registered_secret(TEST_ONLY_OPENCODE_CREDENTIAL)
+
+
+def test_the_key_is_still_registered_when_the_envelope_write_raises(
+    engine: Engine, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The case the window exists for, and the cleanup that must still run.
+
+    A failure inside the write is exactly when a traceback carrying the value
+    would be logged, so the registration has to be live at the moment the
+    exception is raised - and gone again once it has propagated.
+    """
+    from station_api.logging_setup import contains_registered_secret
+
+    observed: list[bool] = []
+
+    def explode(self: ApiKeyEnvelope, key: str) -> str:
+        observed.append(contains_registered_secret(key))
+        raise OSError("simulated DPAPI failure")
+
+    monkeypatch.setattr(ApiKeyEnvelope, "store", explode)
+
+    service = OpenCodeService(engine=engine, data_dir=settings.data_dir)
+    with pytest.raises(OSError):
+        service.store_credential(TEST_ONLY_OPENCODE_CREDENTIAL)
+
+    assert observed == [True]
+    assert not contains_registered_secret(TEST_ONLY_OPENCODE_CREDENTIAL)
+
+
+# ---------------------------------------------------------------------------
+# The file and the row must not be able to disagree
+# ---------------------------------------------------------------------------
+#
+# The fingerprint is the only handle a user has on "which key is stored"
+# (SI-242). ``store_credential`` writes two things with no transaction
+# between them, and the order used to be file first, so a database failure
+# after a successful write left the row naming the *previous* key while the
+# envelope held the new one - and the status endpoint reported that stale
+# fingerprint as configured. The two tests below are the two ways the probe
+# produced that state.
+
+
+@windows_only
+def test_a_failed_metadata_write_never_leaves_a_fingerprint_naming_another_key(
+    engine: Engine, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A database failure must cost the claim, never make it wrong.
+
+    ``_withdraw_credential_row`` deletes with ``session.execute`` and the
+    insert uses ``session.add``, so breaking ``add`` alone reproduces exactly
+    the failure the probe injected: the envelope on disk is the new key and
+    the row could not be written. The connection must read as *not
+    configured* - never as configured under the old fingerprint (SI-263).
+    """
+    service = OpenCodeService(engine=engine, data_dir=settings.data_dir)
+    service.store_credential(TEST_ONLY_OPENCODE_CREDENTIAL)
+
+    before = service.describe()
+    assert before.configured is True
+    assert before.fingerprint_short == fingerprint(TEST_ONLY_OPENCODE_CREDENTIAL)[:12]
+
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("simulated database failure")
+
+    monkeypatch.setattr(Session, "add", refuse)
+    with pytest.raises(RuntimeError):
+        service.store_credential(SECOND_CREDENTIAL)
+    monkeypatch.undo()
+
+    after = service.describe()
+    assert after.configured is False
+    assert after.fingerprint_short == ""
+    assert after.fingerprint_short != before.fingerprint_short, (
+        "the status document named a key that is no longer the stored one"
+    )
+    # And the reason the old fingerprint would have been a lie: the key on
+    # disk really is the new one.
+    assert ApiKeyEnvelope(settings.data_dir).load() == SECOND_CREDENTIAL
+
+
+@windows_only
+def test_a_failure_after_the_rename_leaves_no_envelope_at_all(
+    envelope: ApiKeyEnvelope, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail-closed on the far side of ``os.replace``.
+
+    The old ``except BaseException`` only removed the temporary file, which
+    is nothing to do once the rename has happened: the probe showed a caller
+    seeing a failure while the previous key was gone and an unrestricted new
+    one was live. The only honest outcome there is *no envelope*, which
+    ``describe()`` reports as not configured and a user can act on.
+    """
+    envelope.store(TEST_ONLY_OPENCODE_CREDENTIAL)
+    target = credential_path(data_dir)
+    real = credential_store_module.windows_acl.restrict_to_current_user
+
+    def fail_after_replace(path: Path) -> str:
+        if path == target:
+            raise VaultAclError("simulated failure after os.replace")
+        return real(path)
+
+    monkeypatch.setattr(
+        credential_store_module.windows_acl,
+        "restrict_to_current_user",
+        fail_after_replace,
+    )
+    with pytest.raises(OpenCodeConfigurationError):
+        envelope.store(SECOND_CREDENTIAL)
+    monkeypatch.undo()
+
+    assert not envelope.exists()
+    assert list(credential_dir(data_dir).glob("*.tmp")) == []
+    with pytest.raises(CredentialEnvelopeError):
+        envelope.load()
+
+
+# ---------------------------------------------------------------------------
+# Every failure stays inside the OpenCode hierarchy
+# ---------------------------------------------------------------------------
+#
+# ``station_api.opencode.errors`` says every failure here is fail-closed in
+# the connection's own vocabulary. The two most likely real faults - DPAPI
+# unavailable and an ACL that could not be applied - were raised by the vault
+# as ``VaultError`` subclasses, which no route catches. The shield turned
+# them into an opaque 500 carrying no key, so nothing leaked; the contract
+# was still false and the user was told nothing.
+
+
+@windows_only
+def test_a_dpapi_capability_failure_is_named_in_the_opencode_hierarchy(
+    envelope: ApiKeyEnvelope, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unavailable(payload: bytes) -> bytes:
+        raise VaultCapabilityError("simulated DPAPI capability failure")
+
+    monkeypatch.setattr(credential_store_module.dpapi, "protect", unavailable)
+
+    with pytest.raises(OpenCodeConfigurationError) as caught:
+        envelope.store(TEST_ONLY_OPENCODE_CREDENTIAL)
+
+    assert isinstance(caught.value, OpenCodeError)
+    assert not isinstance(caught.value, VaultError)
+    assert isinstance(caught.value.__cause__, VaultCapabilityError)
+    assert "DPAPI" in str(caught.value)
+    assert TEST_ONLY_OPENCODE_CREDENTIAL not in str(caught.value)
+
+
+@windows_only
+def test_an_acl_failure_is_named_in_the_opencode_hierarchy(
+    envelope: ApiKeyEnvelope, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(path: Path) -> str:
+        raise VaultAclError("simulated ACL failure")
+
+    monkeypatch.setattr(
+        credential_store_module.windows_acl, "restrict_to_current_user", refuse
+    )
+
+    with pytest.raises(OpenCodeConfigurationError) as caught:
+        envelope.store(TEST_ONLY_OPENCODE_CREDENTIAL)
+
+    assert isinstance(caught.value, OpenCodeError)
+    assert not isinstance(caught.value, VaultError)
+    assert isinstance(caught.value.__cause__, VaultAclError)
+    monkeypatch.undo()
+    assert not envelope.exists()
+
+
+@windows_only
+def test_a_blob_dpapi_cannot_unprotect_is_a_credential_refusal_not_a_vault_error(
+    envelope: ApiKeyEnvelope, data_dir: Path
+) -> None:
+    """The read-side twin: a tampered blob used to escape as VaultUnlockError."""
+    envelope.store(TEST_ONLY_OPENCODE_CREDENTIAL)
+    path = credential_path(data_dir)
+
+    document = json.loads(path.read_bytes())
+    blob = bytearray(b64u_decode(document["dpapi_blob"]))
+    blob[-1] ^= 0xFF
+    document["dpapi_blob"] = b64u_encode(bytes(blob))
+    path.write_bytes(json.dumps(document).encode())
+
+    with pytest.raises(CredentialEnvelopeError) as caught:
+        envelope.load()
+
+    assert isinstance(caught.value, OpenCodeError)
+    assert not isinstance(caught.value, VaultError)
+    assert isinstance(caught.value.__cause__, VaultUnlockError)
+
+
+# ---------------------------------------------------------------------------
+# Two writers and two readers of one file
+# ---------------------------------------------------------------------------
+
+
+@windows_only
+def test_concurrent_readers_and_writers_never_raise_a_raw_os_error(
+    envelope: ApiKeyEnvelope, data_dir: Path
+) -> None:
+    """Windows refuses ``os.replace`` while a reader holds the target open.
+
+    Unsynchronised, the probe saw 53 failures across 160 operations, 13 of
+    them ``PermissionError`` - an ``OSError``, outside this package's
+    hierarchy, so an HTTP 500. The write was already fail-safe (the previous
+    key survived, and no temporary file was left), so this is about the error
+    *type* and about ``load()`` having no production caller yet: package H's
+    executor would have met it first, in the field.
+    """
+    envelope.store(TEST_ONLY_OPENCODE_CREDENTIAL)
+    known = {TEST_ONLY_OPENCODE_CREDENTIAL, SECOND_CREDENTIAL}
+
+    errors: list[BaseException] = []
+    seen: list[str] = []
+    lock = threading.Lock()
+
+    def write(value: str) -> None:
+        for _ in range(15):
+            try:
+                envelope.store(value)
+            except BaseException as exc:
+                with lock:
+                    errors.append(exc)
+
+    def read() -> None:
+        for _ in range(30):
+            try:
+                value = envelope.load()
+            except BaseException as exc:
+                with lock:
+                    errors.append(exc)
+            else:
+                with lock:
+                    seen.append(value)
+
+    threads = [
+        threading.Thread(target=write, args=(TEST_ONLY_OPENCODE_CREDENTIAL,)),
+        threading.Thread(target=write, args=(SECOND_CREDENTIAL,)),
+        threading.Thread(target=read),
+        threading.Thread(target=read),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == [], f"concurrent access raised {len(errors)} times"
+    assert set(seen) <= known
+    assert envelope.load() in known
+    assert list(credential_dir(data_dir).glob("*.tmp")) == []
+
+
+# ---------------------------------------------------------------------------
+# The ACL lands before the bytes, and covers the directory
+# ---------------------------------------------------------------------------
+
+
+@windows_only
+def test_the_envelope_is_restricted_before_a_single_byte_is_written(
+    envelope: ApiKeyEnvelope, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The docstring's claim, measured rather than believed.
+
+    Under ``mkstemp`` the order was write, fsync, ACL, and a trace showed 537
+    bytes already on disk under an inherited DACL when the ACL call ran. The
+    file is now created empty with ``O_CREAT | O_EXCL`` and restricted at
+    zero bytes, so the first ACL call on a file must see an empty one.
+    """
+    real = credential_store_module.windows_acl.restrict_to_current_user
+    sizes: list[int] = []
+
+    def watched(path: Path) -> str:
+        if path.is_file():
+            sizes.append(path.stat().st_size)
+        return real(path)
+
+    monkeypatch.setattr(
+        credential_store_module.windows_acl, "restrict_to_current_user", watched
+    )
+    envelope.store(TEST_ONLY_OPENCODE_CREDENTIAL)
+
+    assert sizes, "no ACL call was made on a file at all"
+    assert sizes[0] == 0, (
+        f"{sizes[0]} bytes of envelope existed before the ACL was applied"
+    )
+
+
+@windows_only
+def test_the_credential_directory_is_restricted_too(
+    envelope: ApiKeyEnvelope, data_dir: Path
+) -> None:
+    """The file's protected DACL is what matters; the directory is completeness.
+
+    Windows lets an Administrator take ownership regardless, so this is not a
+    trust boundary - it is the gap that had no reason to exist. The vault's
+    equivalent gap is recorded as an accepted limitation (SI-266) rather than
+    quietly shared.
+    """
+    from station_api.vault.windows_acl import acl_grantee_sids, current_user_sid
+
+    envelope.store(TEST_ONLY_OPENCODE_CREDENTIAL)
+
+    granted = sorted(acl_grantee_sids(credential_dir(data_dir)))
+    assert granted == sorted(("S-1-5-18", current_user_sid()))
+
+
+# ---------------------------------------------------------------------------
+# Registration belongs to the accessor, not to a docstring
+# ---------------------------------------------------------------------------
+#
+# ``load()`` used to promise that ``OpenCodeService`` registered the key for
+# redaction "around every use". The service never called ``load()`` at all,
+# so the sentence described a caller that did not exist - and package H's
+# executor, reading it, would have had no reason to register anything.
+
+
+@windows_only
+def test_load_on_its_own_registers_nothing(envelope: ApiKeyEnvelope) -> None:
+    envelope.store(TEST_ONLY_OPENCODE_CREDENTIAL)
+    key = envelope.load()
+    assert not contains_registered_secret(key), (
+        "load() registered the key, so its docstring's warning is stale"
+    )
+
+
+@windows_only
+def test_opened_registers_the_key_for_the_block_and_forgets_it_after(
+    envelope: ApiKeyEnvelope,
+) -> None:
+    envelope.store(TEST_ONLY_OPENCODE_CREDENTIAL)
+
+    with envelope.opened() as key:
+        assert key == TEST_ONLY_OPENCODE_CREDENTIAL
+        assert contains_registered_secret(key)
+
+    assert not contains_registered_secret(TEST_ONLY_OPENCODE_CREDENTIAL)
+
+
+@windows_only
+def test_opened_forgets_the_key_even_when_the_block_raises(
+    envelope: ApiKeyEnvelope,
+) -> None:
+    """The case the contextmanager exists for.
+
+    A caller that raised mid-use is exactly the caller that would have
+    skipped a hand-written ``forget_secret``, leaving a registry that only
+    grows - which is how a redaction control gets switched off in practice.
+    """
+    envelope.store(TEST_ONLY_OPENCODE_CREDENTIAL)
+    observed: list[bool] = []
+
+    with pytest.raises(RuntimeError), envelope.opened() as key:
+        observed.append(contains_registered_secret(key))
+        raise RuntimeError("the caller failed mid-use")
+
+    assert observed == [True]
+    assert not contains_registered_secret(TEST_ONLY_OPENCODE_CREDENTIAL)
+
+
+@windows_only
+def test_a_row_without_an_envelope_names_no_key_at_all(
+    engine: Engine, settings: Settings
+) -> None:
+    """"Not configured" must not come with a fingerprint beside it.
+
+    ``configured`` was already gated on the file existing, but the
+    fingerprint, and both timestamps, came from the row alone - so an
+    envelope removed from underneath the row produced a status document that
+    said *not configured* and still named a key. That is the same wrong
+    answer as SI-263's, in a quieter voice: a user reading it would believe
+    the key survives somewhere.
+    """
+    service = OpenCodeService(engine=engine, data_dir=settings.data_dir)
+    service.store_credential(TEST_ONLY_OPENCODE_CREDENTIAL)
+    assert service.describe().fingerprint_short != ""
+
+    credential_path(settings.data_dir).unlink()
+
+    view = service.describe()
+    assert view.configured is False
+    assert view.fingerprint_short == ""
+    assert view.configured_at is None
+    assert view.updated_at is None

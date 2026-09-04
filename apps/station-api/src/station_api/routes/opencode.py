@@ -142,7 +142,10 @@ def _catalog(view: CatalogView) -> OpenCodeCatalogStatus:
         ],
         model_count=len(view.models),
         selectable_count=view.selectable_count,
+        unmapped_count=view.unmapped_count,
         listing_caveat=LISTING_CAVEAT,
+        table_provenance=view.table_provenance,
+        drift_notice=view.drift_notice,
     )
 
 
@@ -220,11 +223,24 @@ def store_credential(
 
 @router.post("/credential/forget", response_model=OpenCodeStatusResponse)
 def forget_credential(request: Request, session: CurrentSession) -> Response:
-    """Remove the stored key. Takes no body, so there is nothing to steer."""
+    """Remove the stored key. Takes no body, so there is nothing to steer.
+
+    ``def`` for the same reason ``store_credential`` is: this touches the
+    filesystem. The ``CredentialEnvelopeError`` branch exists because
+    removing the envelope can fail on Windows while another handle is open on
+    it, and "the file is still there" must be reported rather than reported
+    as success - the caller is a user trying to revoke a credential.
+    """
     del session
     try:
         view = _service(request).forget_credential()
     except OpenCodeConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+            headers=_NO_STORE,
+        ) from exc
+    except CredentialEnvelopeError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),

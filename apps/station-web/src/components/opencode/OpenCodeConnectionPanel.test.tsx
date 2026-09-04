@@ -87,8 +87,12 @@ const BASE: OpenCodeStatus = {
     models: [],
     model_count: 0,
     selectable_count: 0,
+    unmapped_count: 0,
     listing_caveat:
       "Bu liste saglayicinin acik katalogudur ve anahtarsiz da yanit verir. Bir modelin listelenmesi, bu hesabin onu cagirabildigi anlamina gelmez.",
+    table_provenance:
+      "Protokol eslemesi bu surumde sabit: 27 satirlik tablo 2026-09-04 tarihinde okundu ve kaynak sayfanin o gunku altbilgisi '2026-09-03' diyordu. Kaynak o tarihten sonra degismis olabilir; Station sayfayi kendiliginden yeniden okumaz.",
+    drift_notice: "",
   },
   spending: {
     budget_available: false,
@@ -129,6 +133,32 @@ const WITH_CATALOG: OpenCodeStatus = {
     models: [FREE_MODEL, TRAINING_MODEL, UNMAPPED_MODEL],
     model_count: 3,
     selectable_count: 2,
+    unmapped_count: 1,
+  },
+};
+
+/**
+ * The catalog after it outgrew the pinned protocol table.
+ *
+ * The backend decides when this sentence exists; the panel's only job is to
+ * show it when it does and to show nothing when it does not. Both halves are
+ * asserted, because a warning that is always on is not a warning.
+ */
+const WITH_DRIFT: OpenCodeStatus = {
+  ...BASE,
+  catalog: {
+    ...BASE.catalog,
+    state: "ok",
+    fetched_at: "2026-09-04T09:30:00+00:00",
+    models_fetched_at: "2026-09-04T09:30:00+00:00",
+    detail: "Katalog okundu.",
+    http_status: 200,
+    models: [FREE_MODEL, TRAINING_MODEL, UNMAPPED_MODEL],
+    model_count: 35,
+    selectable_count: 2,
+    unmapped_count: 8,
+    drift_notice:
+      "Saglayicinin katalogu 35 model listeledi ve bunlarin 8 tanesi bu surumun pinli tablosunda yok. Tablo 2026-09-04 tarihinde okundugunda fazlalik 7 idi. Kaynak sayfa buyumus gorunuyor: tablo bayat olabilir. Eslemesi olmayan modeller secilemez, tahmin de edilmez.",
   },
 };
 
@@ -447,6 +477,44 @@ describe("OpenCode model catalogue", () => {
     expect(screen.getByText("3 listelendi · 2 secilebilir")).toBeInTheDocument();
     // A real date, not an empty dash: the cache has an age and it is visible.
     expect(screen.getAllByText(/2026/).length).toBeGreaterThan(0);
+  });
+
+  it("always shows where the pinned protocol table came from and when", async () => {
+    // Not conditional on a problem. The table's age is a fact about every
+    // reading of it, and a provenance line that only appears next to a
+    // warning is a line nobody has ever read.
+    stub(WITH_CATALOG);
+    render(<OpenCodeConnectionPanel />);
+    await ready();
+
+    const provenance = screen.getByTestId("opencode-table-provenance");
+    expect(provenance).toHaveTextContent("2026-09-04 tarihinde okundu");
+    expect(provenance).toHaveTextContent("2026-09-03");
+    expect(provenance).toHaveTextContent("degismis olabilir");
+  });
+
+  it("stays quiet about drift while the catalog matches the pinned table", async () => {
+    stub(WITH_CATALOG);
+    render(<OpenCodeConnectionPanel />);
+    await ready();
+
+    expect(screen.queryByTestId("opencode-catalog-drift")).not.toBeInTheDocument();
+    expect(screen.queryByText("Model tablosu bayat olabilir")).not.toBeInTheDocument();
+  });
+
+  it("warns, visibly, when the catalog has outgrown the pinned table", async () => {
+    // The case the connection was blind to: the source page gained rows and
+    // every number in this build stayed where it was, so the surplus models
+    // were listed as unselectable and looked exactly like the expected ones.
+    stub(WITH_DRIFT);
+    render(<OpenCodeConnectionPanel />);
+    await ready();
+
+    expect(screen.getByText("Model tablosu bayat olabilir")).toBeInTheDocument();
+    const notice = screen.getByTestId("opencode-catalog-drift");
+    expect(notice).toHaveTextContent("35 model listeledi");
+    expect(notice).toHaveTextContent("8 tanesi");
+    expect(notice).toHaveTextContent("bayat olabilir");
   });
 
   it("reports a failed refresh without deleting the cache or its date", async () => {

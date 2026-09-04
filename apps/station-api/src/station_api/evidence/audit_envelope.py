@@ -132,12 +132,25 @@ def fingerprint(material: bytes) -> str:
 def _atomic_write(target: Path, payload: bytes) -> None:
     """Write via a temp file in the same directory, then rename.
 
-    The ACL is applied to the temporary file *before* the rename, so the
-    envelope is never briefly readable under inherited permissions, and again
-    afterwards because a rename can carry a different security descriptor
-    depending on the volume. The shape is ``DpapiVault._atomic_write``'s; the
-    code is not shared because that method resolves the vault's own directory
-    and this one must not write there.
+    The ACL is applied to the temporary file before the *rename* and again
+    afterwards, because a rename can carry a different security descriptor
+    depending on the volume.
+
+    Stated precisely, because the neighbouring copy of this sentence was
+    measurably wrong: the order is write, fsync, ACL, rename, ACL, so the
+    payload does exist on disk under the directory's inherited permissions
+    for the moment between the write and the ACL call. What is protected in
+    that moment is the DPAPI ciphertext, not the material.
+    :func:`station_api.opencode.credential_store._atomic_write` closes the
+    window by creating the file empty and restricting it first; this one is
+    left as it is because the audit material's envelope is never rewritten
+    and changing its write path would touch the one file the chain's
+    verification depends on. The gap is recorded rather than described away
+    (SI-265).
+
+    The shape is ``DpapiVault._atomic_write``'s; the code is not shared
+    because that method resolves the vault's own directory and this one must
+    not write there.
     """
     target.parent.mkdir(parents=True, exist_ok=True)
     handle, temp_name = tempfile.mkstemp(dir=target.parent, suffix=".tmp")

@@ -39,9 +39,13 @@ where the code lives:
   about whether a key is valid;
 * that the catalog carries only ``{id, object, created, owned_by}`` - no
   protocol mapping, no context limit, no tool support, no display name and
-  no data-retention term - and that it returned **34** ids where the
-  documented table has 27. The surplus is exactly what ``UNVERIFIED`` is
-  for: listed, and not addressable;
+  no data-retention term - and that on the day it was read it returned
+  **34** ids where the documented table has 27. The surplus is exactly what
+  ``UNVERIFIED`` is for: listed, and not addressable. That count is a
+  measurement with a date on it, not a property of the service: a later read
+  returned 35, which is why :data:`EXPECTED_UNMAPPED_COUNT` is pinned and
+  :func:`catalog_drift_notice` says so out loud when the catalog outgrows
+  it;
 * that ``opencode-go/<id>`` is a **provider prefix** and the wire id is the
   bare id;
 * that the client is asked to send ``x-opencode-session`` and not to use a
@@ -477,23 +481,86 @@ _MAPPINGS_BY_ID: dict[str, ModelMapping] = {
     mapping.wire_id: mapping for mapping in MODEL_MAPPINGS
 }
 
-#: The sentence shown beside a catalog id the documented table does not list
-#: - the seven-model surplus described above. Turkish and diacritic-free,
-#: like every other user-visible string in this codebase.
+#: The sentence shown beside a catalog id :data:`MODEL_MAPPINGS` does not
+#: list. Turkish and diacritic-free, like every other user-visible string in
+#: this codebase.
+#:
+#: The wording is deliberate and was corrected once. It used to say "this
+#: model is not in the official documentation's endpoint table", which is a
+#: claim about **the source page as it is right now** - and this process has
+#: not read that page since it was built. A review caught the sentence
+#: telling a user something false: the live page had gained a row for a model
+#: the table below still calls unlisted. What this build can honestly say is
+#: what is in *its own pinned table*, and when that table was read.
 UNMAPPED_REASON = (
-    "Bu model resmi belgenin uc nokta tablosunda yok, bu yuzden hangi "
-    "protokol ailesini konustugu dogrulanamadi. Listeleniyor ama secilemez; "
-    "listelenmek bu hesabin onu cagirabildigi anlamina da gelmez."
+    "Bu model, bu surumun pinli uc nokta tablosunda yok (tablo "
+    f"{PRIVACY_TABLE_READ_ON} tarihinde okundu). Konustugu protokol ailesi "
+    "bu yuzden dogrulanmadi; listeleniyor ama secilemez. Listelenmek bu "
+    "hesabin onu cagirabildigi anlamina da gelmez."
 )
 
 #: The sentence shown when the entry exists but its family was not published.
-#: No row in :data:`MODEL_MAPPINGS` is in that state today; the path is kept,
-#: and kept tested, because it is where a future id lands if the page adds a
-#: model to one table and not the other.
+#: No row in :data:`MODEL_MAPPINGS` is in that state today; the path is kept
+#: and driven by a test that can reach *only* it (an injected row whose data
+#: term is a documented ``no``, so the acknowledgement gate cannot stand in
+#: for the protocol gate), because it is where a future id lands if the page
+#: adds a model to one table and not the other.
+#:
+#: Scoped to this build for the same reason as :data:`UNMAPPED_REASON`.
 UNVERIFIED_REASON = (
-    "Bu modelin protokol ailesi resmi belgede yazili degil. Tahmin "
-    "edilmedi; secilemez."
+    "Bu modelin protokol ailesi, bu surumun pinli tablosunda bos (tablo "
+    f"{PRIVACY_TABLE_READ_ON} tarihinde okundu). Tahmin edilmedi; secilemez."
 )
+
+#: How many catalog ids the pinned table did **not** list on the day it was
+#: transcribed: the live catalog answered 34 ids, the Endpoints table had 27
+#: rows (ADR-0005 1).
+#:
+#: Written out rather than derived, and this is the whole point. A number
+#: computed from the catalog would agree with whatever the catalog said next,
+#: which is how the table quietly went stale in the first place: the pinned
+#: transcription is dated 3 September and the source page's own footer has
+#: since moved on, so a later read returned ids nothing here has ever seen.
+#: Pinning the expected surplus turns that from an invisible drift into a
+#: sentence the user is shown.
+EXPECTED_UNMAPPED_COUNT: Final = 7
+
+#: Always shown beside the model list, whatever the catalog said. Not
+#: conditional on anything: the table's age is a fact about every reading of
+#: it, and a provenance line that only appears when something else goes wrong
+#: is a provenance line nobody ever sees.
+TABLE_PROVENANCE = (
+    f"Protokol eslemesi bu surumde sabit: {len(MODEL_MAPPINGS)} satirlik "
+    f"tablo {PRIVACY_TABLE_READ_ON} tarihinde okundu ve kaynak sayfanin o "
+    f"gunku altbilgisi '{DOC_LAST_UPDATED}' diyordu. Kaynak o tarihten sonra "
+    "degismis olabilir; Station sayfayi kendiliginden yeniden okumaz."
+)
+
+
+def catalog_drift_notice(*, listed_count: int, unmapped_count: int) -> str:
+    """A visible warning when the fetched catalog outgrew the pinned table.
+
+    Empty while the two agree. Non-empty the moment the provider lists more
+    ids than the transcription accounted for, which is the earliest signal
+    available without re-reading the page - and the signal that was missing
+    when a review found the live catalog had grown from 34 ids to 35 while
+    :data:`MODEL_MAPPINGS` stayed at its 27 rows and nothing said a word.
+
+    It is a *notice*, not a refusal. The surplus models were already listed
+    and unselectable; what changes is that the user is told the table itself
+    may be behind, instead of being left to infer it from a list of models
+    with no protocol.
+    """
+    if listed_count <= 0 or unmapped_count <= EXPECTED_UNMAPPED_COUNT:
+        return ""
+    return (
+        f"Saglayicinin katalogu {listed_count} model listeledi ve bunlarin "
+        f"{unmapped_count} tanesi bu surumun pinli tablosunda yok. Tablo "
+        f"{PRIVACY_TABLE_READ_ON} tarihinde okundugunda fazlalik "
+        f"{EXPECTED_UNMAPPED_COUNT} idi. Kaynak sayfa buyumus gorunuyor: "
+        "tablo bayat olabilir. Eslemesi olmayan modeller secilemez, tahmin "
+        "de edilmez."
+    )
 
 
 def find_mapping(
@@ -536,7 +603,9 @@ def selectable_model_ids(
 
 
 __all__ = [
+    "DOC_LAST_UPDATED",
     "ENDPOINTS",
+    "EXPECTED_UNMAPPED_COUNT",
     "MODEL_MAPPINGS",
     "OPENCODE_HOST",
     "OPENCODE_ORIGIN",
@@ -546,6 +615,7 @@ __all__ = [
     "PRIVACY_TABLE_SOURCE",
     "PROVIDER_CONSOLE_URL",
     "PROVIDER_PREFIX",
+    "TABLE_PROVENANCE",
     "TRAINING_FAMILY_PREFIXES",
     "UNMAPPED_REASON",
     "UNVERIFIED_REASON",
@@ -556,6 +626,7 @@ __all__ = [
     "OpenCodeEndpoint",
     "Protocol",
     "TrainingUse",
+    "catalog_drift_notice",
     "find_mapping",
     "get_endpoint",
     "looks_like_a_training_family",

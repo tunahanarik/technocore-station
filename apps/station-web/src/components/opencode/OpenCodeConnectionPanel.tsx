@@ -536,7 +536,24 @@ export function OpenCodeConnectionPanel() {
             </p>
           )}
 
+          {catalog.drift_notice !== "" && (
+            <Alert data-testid="opencode-catalog-drift" status="warning">
+              <Alert.Indicator />
+              <Alert.Content>
+                <Alert.Title>Model tablosu bayat olabilir</Alert.Title>
+                <Alert.Description>{catalog.drift_notice}</Alert.Description>
+              </Alert.Content>
+            </Alert>
+          )}
+
           <p className="text-xs text-muted">{catalog.listing_caveat}</p>
+
+          {/* Not conditional on anything going wrong: the pinned table's age
+              is a property of every reading of it, and a provenance line that
+              only appears alongside a problem is one nobody ever reads. */}
+          <p className="text-xs text-muted" data-testid="opencode-table-provenance">
+            {catalog.table_provenance}
+          </p>
 
           <p className="text-xs text-muted">
             Liste yalniz siz istediginizde yenilenir. Saglayicinin acik katalogu

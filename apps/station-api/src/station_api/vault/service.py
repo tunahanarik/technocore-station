@@ -238,10 +238,26 @@ class DpapiVault:
     def _atomic_write(self, target: Path, payload: bytes) -> None:
         """Write via a temp file in the same directory, then rename.
 
-        The ACL is applied to the temporary file *before* the rename, so the
-        secret is never briefly readable under inherited permissions. It is
-        applied again afterwards and verified, because a rename can carry a
-        different security descriptor depending on the volume.
+        The ACL is applied to the temporary file before the *rename*, and
+        again afterwards because a rename can carry a different security
+        descriptor depending on the volume. Any failure raises
+        ``VaultAclError`` and the temporary file is removed, so a vault whose
+        ACL could not be applied is never left behind.
+
+        Two claims that used to be here are gone because neither was true of
+        this code. It said the secret is "never briefly readable under
+        inherited permissions": the order is write, fsync, ACL, rename, ACL,
+        so the payload is on disk under the directory's inherited DACL for
+        the moment between the write and the first ACL call - what sits there
+        is the DPAPI blob, not the seed. And it said the ACL is "verified":
+        nothing here reads the DACL back. ``windows_acl.acl_grantee_sids``
+        does, and the vault's tests use it, but this method does not, so it
+        does not claim to.
+
+        The directory is created with ``mkdir`` and left on inherited
+        permissions; only the file carries a protected DACL. That is an
+        accepted limitation, recorded in ``docs/security-invariants.md``
+        (SI-266) rather than implied away here.
         """
         directory = vault_dir(self._data_dir)
         directory.mkdir(parents=True, exist_ok=True)

@@ -518,7 +518,17 @@ export interface OpenCodeCatalog {
   readonly models: readonly OpenCodeModel[];
   readonly model_count: number;
   readonly selectable_count: number;
+  /** How many listed models the pinned protocol table has no row for. */
+  readonly unmapped_count: number;
   readonly listing_caveat: string;
+  /** When the pinned protocol table was read, and what the source page's own
+   * footer said that day. Always present: the age of a transcription is a
+   * fact about every reading of it, not an exception to report. */
+  readonly table_provenance: string;
+  /** Empty while the catalog and the pinned table agree; a warning once the
+   * provider lists more unmapped models than the transcription accounted
+   * for. Rendered verbatim, and never suppressed. */
+  readonly drift_notice: string;
 }
 
 export interface OpenCodePublishedLimit {

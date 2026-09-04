@@ -376,8 +376,12 @@ const OPENCODE_UNCONFIGURED: OpenCodeStatus = {
     models: [],
     model_count: 0,
     selectable_count: 0,
+    unmapped_count: 0,
     listing_caveat:
       "Bu liste saglayicinin acik katalogudur ve anahtarsiz da yanit verir. Bir modelin listelenmesi, bu hesabin onu cagirabildigi anlamina gelmez.",
+    table_provenance:
+      "Protokol eslemesi bu surumde sabit: 27 satirlik tablo 2026-09-04 tarihinde okundu ve kaynak sayfanin o gunku altbilgisi '2026-09-03' diyordu. Kaynak o tarihten sonra degismis olabilir; Station sayfayi kendiliginden yeniden okumaz.",
+    drift_notice: "",
   },
   spending: {
     budget_available: false,

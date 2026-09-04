@@ -41,13 +41,19 @@ from station_api.opencode.catalog import (
 from station_api.opencode.client import OpenCodeClient
 from station_api.opencode.errors import ModelNotSelectableError, OpenCodeResponseError
 from station_api.opencode.registry import (
+    DOC_LAST_UPDATED,
+    EXPECTED_UNMAPPED_COUNT,
     MODEL_MAPPINGS,
+    PRIVACY_TABLE_READ_ON,
+    TABLE_PROVENANCE,
     UNMAPPED_REASON,
     UNVERIFIED_REASON,
     MappingVerification,
     ModelMapping,
     Protocol,
     TrainingUse,
+    catalog_drift_notice,
+    find_mapping,
     selectable_model_ids,
 )
 from station_api.opencode.service import (
@@ -109,6 +115,32 @@ UNVERIFIED_TABLE: tuple[ModelMapping, ...] = (
         protocol_verification=MappingVerification.UNVERIFIED,
         retention="unknown",
         training_use=TrainingUse.UNKNOWN,
+        privacy_source="TEST-ONLY",
+        privacy_read_on="2026-09-04",
+        note="TEST-ONLY",
+    ),
+)
+
+#: The same absence, with the **training gate held open**.
+#:
+#: :data:`UNVERIFIED_TABLE` above carries ``TrainingUse.UNKNOWN``, which means
+#: two separate refusals apply to it: the protocol family was never
+#: published, *and* an unknown data term needs an acknowledgement. A test that
+#: only checked "it was refused" therefore could not tell which guard fired -
+#: and a review found that deleting the ``selectable`` check left every test
+#: green, because the acknowledgement gate raised an error carrying the same
+#: word one line later.
+#:
+#: This row makes the protocol check the **only** thing that can refuse it:
+#: the term is a documented ``no``, so the acknowledgement gate is not
+#: reachable and a refusal can come from nowhere else.
+UNVERIFIED_UNGATED_TABLE: tuple[ModelMapping, ...] = (
+    ModelMapping(
+        wire_id=OBSERVED_MODEL_ID,
+        protocol=Protocol.CHAT_COMPLETIONS,
+        protocol_verification=MappingVerification.UNVERIFIED,
+        retention="0 days",
+        training_use=TrainingUse.NO,
         privacy_source="TEST-ONLY",
         privacy_read_on="2026-09-04",
         note="TEST-ONLY",
@@ -575,8 +607,83 @@ def test_a_model_whose_family_was_never_published_is_refused(
     with pytest.raises(ModelNotSelectableError) as caught:
         service.select_model(OBSERVED_MODEL_ID)
 
+    # Not merely "secilemez": every refusal on this route contains that word,
+    # so asserting it alone cannot tell which guard fired. This row is also
+    # gated on an unknown data term, which is exactly why the *reason* has to
+    # be pinned - see the test below for the row that removes the ambiguity.
     assert "secilemez" in str(caught.value)
     assert service.describe().selected_model == ""
+
+
+def test_the_unverified_guard_is_what_refuses_an_unverified_row(
+    engine: Engine, settings: Settings
+) -> None:
+    """The ``selectable`` check, driven where nothing else can stand in for it.
+
+    A mutation review deleted ``if not mapping.selectable`` from
+    :meth:`OpenCodeService.select_model` and the whole suite stayed green:
+    every row that reached the branch was *also* gated on an unknown data
+    term, so the next guard raised an error carrying the same Turkish word
+    and every assertion still matched. The branch was dead code that read
+    like a control.
+
+    :data:`UNVERIFIED_UNGATED_TABLE` closes that: its term is a documented
+    ``no``, so the acknowledgement gate cannot fire and the only thing left
+    that can refuse the choice is the protocol check. The message is pinned
+    on its own sentence rather than on a word every refusal shares.
+    """
+    transport, _ = catalog_transport()
+    service = _service(
+        engine, settings, transport=transport, mappings=UNVERIFIED_UNGATED_TABLE
+    )
+
+    # The gate that must *not* be the one firing.
+    mapping = find_mapping(OBSERVED_MODEL_ID, mappings=UNVERIFIED_UNGATED_TABLE)
+    assert mapping is not None
+    assert mapping.requires_training_acknowledgement is False
+    assert mapping.selectable is False
+
+    with pytest.raises(ModelNotSelectableError) as caught:
+        service.select_model(OBSERVED_MODEL_ID)
+
+    detail = str(caught.value)
+    assert "protokol ailesi bu surumun pinli tablosunda bos" in detail
+    assert "onaylamaniz" not in detail
+    assert service.describe().selected_model == ""
+
+
+def test_an_acknowledgement_does_not_unlock_an_unverified_row(
+    engine: Engine, settings: Settings
+) -> None:
+    """And the acknowledgement is not a way around it either.
+
+    The training gate and the protocol gate are independent, so answering the
+    first must leave the second exactly where it was.
+    """
+    transport, _ = catalog_transport()
+    service = _service(
+        engine, settings, transport=transport, mappings=UNVERIFIED_UNGATED_TABLE
+    )
+
+    with pytest.raises(ModelNotSelectableError) as caught:
+        service.select_model(OBSERVED_MODEL_ID, training_acknowledged=True)
+
+    assert "protokol ailesi bu surumun pinli tablosunda bos" in str(caught.value)
+    assert service.describe().selected_model == ""
+
+
+def test_an_unverified_row_is_absent_from_the_addressable_set(
+    engine: Engine, settings: Settings
+) -> None:
+    """The same verdict, read from the other side of the module.
+
+    ``selectable_model_ids`` is what an executor would consult, and a row the
+    chooser refuses must not appear there - otherwise the two disagree about
+    which models this build can address.
+    """
+    del engine, settings
+    assert selectable_model_ids(mappings=UNVERIFIED_UNGATED_TABLE) == frozenset()
+    assert selectable_model_ids(mappings=UNVERIFIED_TABLE) == frozenset()
 
 
 def test_a_surplus_model_is_refused_through_the_real_table(
@@ -768,3 +875,162 @@ def test_a_successful_read_dates_the_attempt_and_the_list_identically(
     assert view.models_fetched_at is not None
     assert view.models_fetched_at == view.fetched_at
     assert service.describe().catalog.models_fetched_at == view.models_fetched_at
+
+
+# ---------------------------------------------------------------------------
+# The pinned table's age, and the drift nobody would have noticed
+# ---------------------------------------------------------------------------
+#
+# The table below is a transcription with a date on it. A review re-read the
+# source page and found it had grown - one more model, on a family the pinned
+# table does not carry - while every number in this build stayed where it
+# was. Nothing in the product said a word: the extra id was simply listed as
+# unselectable, indistinguishable from the surplus that was expected.
+#
+# Two things follow. The per-model sentence must be about *this build's*
+# table rather than about the source page, because only the first is
+# something this process has actually read; and the count has to be pinned so
+# a catalog that outgrows it is visible instead of merely quiet.
+
+
+def test_the_unselectable_sentences_speak_about_this_build_and_not_the_source() -> None:
+    """A claim about a page we have not re-read is not a fact we can state.
+
+    The old wording - "this model is not in the official documentation's
+    endpoint table" - became false the moment the page gained a row, and
+    nothing here would have known. The replacement is checkable from inside
+    the process: it names the pinned table and the day it was read.
+    """
+    for sentence in (UNMAPPED_REASON, UNVERIFIED_REASON):
+        assert "bu surumun pinli" in sentence
+        assert PRIVACY_TABLE_READ_ON in sentence
+        assert "secilemez" in sentence
+        # The claim that went stale, in either spelling.
+        assert "resmi belgenin uc nokta tablosunda yok" not in sentence
+        assert "resmi belgede yazili degil" not in sentence
+
+
+def test_the_table_provenance_is_always_available_and_carries_both_dates() -> None:
+    """Two dates, because they answer two different questions.
+
+    When *we* read the page, and what the page's own footer claimed that day.
+    A page read today can still have stopped being updated a year ago, and
+    only one of the two would say so.
+    """
+    assert PRIVACY_TABLE_READ_ON in TABLE_PROVENANCE
+    assert DOC_LAST_UPDATED in TABLE_PROVENANCE
+    assert str(len(MODEL_MAPPINGS)) in TABLE_PROVENANCE
+    assert "degismis olabilir" in TABLE_PROVENANCE
+
+
+def test_the_pinned_surplus_and_the_pinned_table_size_are_stated_together() -> None:
+    """Both numbers are transcription facts, and neither is derived.
+
+    A surplus computed from the catalog would agree with whatever the catalog
+    said next, which is precisely the self-sealing shape ADR-0005 1.2 records.
+    Editing either number is therefore a visible change here.
+    """
+    assert len(MODEL_MAPPINGS) == 27
+    assert EXPECTED_UNMAPPED_COUNT == 7
+    # The measurement they came from: 34 listed ids, 27 documented rows.
+    assert len(MODEL_MAPPINGS) + EXPECTED_UNMAPPED_COUNT == 34
+
+
+def test_the_drift_notice_is_silent_while_the_catalog_matches_the_pin() -> None:
+    """Silence has to mean something, so it must be reachable."""
+    assert catalog_drift_notice(listed_count=34, unmapped_count=7) == ""
+    assert catalog_drift_notice(listed_count=27, unmapped_count=0) == ""
+    # Nothing fetched at all is not drift.
+    assert catalog_drift_notice(listed_count=0, unmapped_count=0) == ""
+
+
+def test_the_drift_notice_fires_on_the_reading_the_review_actually_took() -> None:
+    """The exact numbers from the re-read: 35 listed, 8 with no row.
+
+    This is the case the product was blind to. The notice names all three
+    figures, so a user can see which one moved.
+    """
+    notice = catalog_drift_notice(listed_count=35, unmapped_count=8)
+
+    assert notice != ""
+    assert "35" in notice
+    assert "8" in notice
+    assert str(EXPECTED_UNMAPPED_COUNT) in notice
+    assert PRIVACY_TABLE_READ_ON in notice
+    assert "bayat" in notice
+
+
+def test_a_catalog_that_outgrew_the_table_says_so_through_the_service(
+    engine: Engine, settings: Settings
+) -> None:
+    """End to end: a fetched document with more surplus than the pin allows.
+
+    Built from synthetic ids so nothing here claims a model exists. What is
+    being measured is that the count reaches the view and the sentence comes
+    with it - the two halves the connection was missing.
+    """
+    grown = {
+        "object": "list",
+        "data": [
+            {"id": OBSERVED_MODEL_ID, "object": "model", "owned_by": "opencode"},
+            *(
+                {
+                    "id": f"drifted-{index}-TEST-ONLY",
+                    "object": "model",
+                    "owned_by": "opencode",
+                }
+                for index in range(EXPECTED_UNMAPPED_COUNT + 1)
+            ),
+        ],
+    }
+    transport, _ = catalog_transport(grown)
+    service = _service(engine, settings, transport=transport)
+
+    view = service.refresh_catalog()
+
+    assert view.unmapped_count == EXPECTED_UNMAPPED_COUNT + 1
+    assert view.drift_notice != ""
+    assert str(EXPECTED_UNMAPPED_COUNT + 1) in view.drift_notice
+    assert view.table_provenance == TABLE_PROVENANCE
+    # The models are still listed, and still refused. A notice is a notice.
+    assert len(view.models) == EXPECTED_UNMAPPED_COUNT + 2
+    assert view.selectable_count == 1
+
+
+def test_the_ordinary_fixture_catalog_raises_no_drift_notice(
+    engine: Engine, settings: Settings
+) -> None:
+    """The negative half, so a notice that fired always would prove nothing."""
+    transport, _ = catalog_transport()
+    service = _service(engine, settings, transport=transport)
+
+    view = service.refresh_catalog()
+
+    assert view.unmapped_count == 2
+    assert view.drift_notice == ""
+    # Still carried, because provenance is not conditional on a problem.
+    assert view.table_provenance == TABLE_PROVENANCE
+
+
+def test_an_unverified_row_is_not_counted_as_a_missing_row(
+    engine: Engine, settings: Settings
+) -> None:
+    """Two absences, two meanings - and only one of them is about the table.
+
+    A row that exists with no published family says nothing about the source
+    page having grown. Counting it as drift would make the warning fire for
+    the wrong reason, which is how a warning stops being read.
+    """
+    transport, _ = catalog_transport()
+    service = _service(
+        engine, settings, transport=transport, mappings=UNVERIFIED_UNGATED_TABLE
+    )
+
+    view = service.refresh_catalog()
+
+    unverified = next(m for m in view.models if m.model_id == OBSERVED_MODEL_ID)
+    assert unverified.selectable is False
+    assert unverified.protocol != ""
+    # Four ids with no row at all; the unverified one is not among them.
+    assert view.unmapped_count == 4
+    assert view.drift_notice == ""

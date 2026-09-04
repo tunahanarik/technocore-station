@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import Engine
@@ -43,6 +44,7 @@ from station_api.security.middleware import (
     SecurityHeadersMiddleware,
     SessionMiddleware,
     unhandled_exception_shield,
+    validation_error_shield,
 )
 from station_api.security.sessions import SessionStore
 from station_api.security.tokens import BootstrapTokenStore
@@ -328,5 +330,14 @@ def create_app(
     # and the request id itself (SI-126). The body is a constant
     # {"detail": "internal_error"}; the traceback goes to the server log only.
     app.add_exception_handler(Exception, unhandled_exception_shield)
+
+    # The 422's twin. FastAPI's default validation handler answers with
+    # Pydantic's error list, and every entry of it carries ``input`` - the
+    # value that was submitted. On the credential route that value is the
+    # provider key, and a *type* error is raised before ``SecretStr`` ever
+    # wraps it, so the default handler quoted the raw key straight back
+    # (SI-243). This one keeps the location, the message and the type, and
+    # drops every key that carries a submitted value.
+    app.add_exception_handler(RequestValidationError, validation_error_shield)
 
     return app

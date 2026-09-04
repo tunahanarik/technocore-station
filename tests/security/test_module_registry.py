@@ -566,6 +566,10 @@ def test_the_task_tables_have_no_secret_shaped_columns(engine: Engine) -> None:
 
 #: The two calls that carry the release number: the one that stamps it into
 #: ``app_metadata`` and the one that shows it to the user.
+#:
+#: Every root these are scanned in is named in the test below. Adding a new
+#: place that opens the database means adding its root there; the browser
+#: harness is the fifth such place and was invisible until it was.
 STAGE_BEARING_CALLS = ("initialise_database", "ServiceStatus")
 
 
@@ -595,7 +599,7 @@ def _stage_call_sites(root: Path) -> dict[str, int]:
 def test_every_entry_point_names_the_same_release_stage(
     api_source_root: Path, repo_root: Path
 ) -> None:
-    """SI-232 (F-10). One release, one stage number, four call sites.
+    """SI-232 (F-10). One release, one stage number, every call site.
 
     ``launcher.py``, ``routes/api.py`` and the test fixture all said ``6``;
     ``cli/__main__.py`` still opened the database at ``stage=3``, three
@@ -603,13 +607,23 @@ def test_every_entry_point_names_the_same_release_stage(
     ``app_metadata`` and shown on ``/api/app/status``, so an application that
     presents itself as an older release than the one under test is a small lie
     - and this suite has already refused that shape of lie once, one file over.
+
+    Package G adds a **fifth** call site and the scan had to grow with it.
+    ``apps/station-web/e2e/harness/serve.py`` opens the same database for the
+    browser suite, and it sat outside both roots this test read: four entry
+    points were held consistent and the fifth was free to drift. A guard that
+    covers all-but-one of a set is the shape of guard that gets believed and
+    is not true, so the harness is scanned here rather than trusted.
     """
     application = _stage_call_sites(api_source_root / "station_api")
+    harness = _stage_call_sites(repo_root / "apps" / "station-web" / "e2e")
     fixtures = _stage_call_sites(repo_root / "tests")
 
     assert len(application) >= 3, application
+    assert harness, "the browser harness opens the database and must name a stage"
     assert fixtures, "the suite should migrate at the stage under test"
     assert set(application.values()) == {CURRENT_SCHEMA_STAGE}, application
+    assert set(harness.values()) == {CURRENT_SCHEMA_STAGE}, harness
     assert CURRENT_SCHEMA_STAGE in set(fixtures.values()), fixtures
 
 

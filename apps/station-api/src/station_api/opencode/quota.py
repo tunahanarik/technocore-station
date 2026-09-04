@@ -28,6 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final, Literal
 
+from station_api.evidence.language import fold
 from station_api.opencode.registry import PROVIDER_CONSOLE_URL
 
 #: Unchanged from Package F, and unchanged deliberately (ADR-0005 9). A real
@@ -89,20 +90,33 @@ UNKNOWN_COST_SENTENCE = (
     "yazilmaz."
 )
 
-#: The one word this module will not accept about the subscription.
+#: The one word this module will not accept about the subscription, in both
+#: languages the product's own strings are written in.
+#:
+#: Written in the **folded** form, because that is what they are compared as
+#: - the same convention ``evidence/language.py`` uses and for the same
+#: reason. This mattered here: the guard used to case-fold with
+#: :meth:`str.casefold`, which leaves U+0131 LATIN SMALL LETTER DOTLESS I
+#: exactly where it is. The Turkish spelling of the word is written with that
+#: letter, so ``"sinirsiz"`` never matched it - and the test that was
+#: supposed to prove the guard worked spelled the word the same ASCII way the
+#: guard did, so the blindness was shared and invisible. A rule and its test
+#: agreeing with each other is not evidence.
 FORBIDDEN_SUBSCRIPTION_WORDS = ("sinirsiz", "unlimited")
 
 
 def assert_no_unlimited_claim(text: str) -> None:
     """Refuse our own sentence if it calls the subscription unlimited.
 
-    The same shape as ``evidence/language.py``'s charter guard: a rule about
-    what the product may say is worth enforcing on the product's own strings,
-    because those are the ones a future edit will get wrong.
+    The same shape as ``evidence/language.py``'s charter guard, and now
+    literally the same folding: a rule about what the product may say is
+    worth enforcing on the product's own strings, because those are the ones
+    a future edit will get wrong - and a rule that only catches one of a
+    word's two spellings is worse than no rule, because it reads like one.
     """
-    lowered = text.casefold()
+    folded = fold(text)
     for word in FORBIDDEN_SUBSCRIPTION_WORDS:
-        if word in lowered:
+        if fold(word) in folded:
             raise ValueError(
                 f"a spending sentence called the subscription {word!r}"
             )

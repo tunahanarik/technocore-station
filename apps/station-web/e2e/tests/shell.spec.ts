@@ -87,7 +87,14 @@ test.describe("outbound network", () => {
     // It cannot be provoked from the application page: the app's own CSP
     // refuses the connection before a request is ever issued, which is the
     // stronger property and is asserted separately in csp.spec.ts.
+    //
+    // This exercises **both** counters, which it did not used to. The
+    // listener was attached to the `page` fixture, so a second page's
+    // requests were blocked and never seen; the meter was narrower than the
+    // blocker and nothing said so, because the only self-test asserted the
+    // blocker. Now the same probe proves the ledger saw it too.
     outbound.expectBlocked(1);
+    outbound.expectExternal(1);
     const scratch = await context.newPage();
 
     await expect(scratch.goto("https://technocore.chat/healthz")).rejects.toThrow(
@@ -96,7 +103,47 @@ test.describe("outbound network", () => {
 
     expect(outbound.blocked).toHaveLength(1);
     expect(outbound.blocked[0]).toContain("technocore.chat");
+    // The half that was missing: a second page is measured, not merely
+    // stopped.
+    expect(outbound.external()).toHaveLength(1);
+    expect(outbound.external()[0]).toContain("technocore.chat");
     await scratch.close();
+  });
+
+  test("the api request channel is refused and counted too", async ({ context, outbound }) => {
+    // The gap a review actually walked through. `context.route` does not
+    // intercept an `APIRequestContext`, so this call was neither blocked nor
+    // counted and reached a real DNS lookup - while the fixture's own
+    // comment claimed it was a listener routing could not bypass.
+    //
+    // `shell.spec.ts` already uses this channel one test up, for a
+    // same-origin replay, so it was not a theoretical hole.
+    outbound.expectBlocked(1);
+    outbound.expectExternal(1);
+
+    await expect(context.request.get("https://opencode.ai/zen/go/v1/models")).rejects.toThrow(
+      /blocked by the outbound guard/,
+    );
+
+    expect(outbound.blocked).toHaveLength(1);
+    expect(outbound.blocked[0]).toContain("opencode.ai");
+    expect(outbound.external()).toHaveLength(1);
+  });
+
+  test("a same-origin api request is measured and allowed through", async ({
+    context,
+    outbound,
+    station,
+  }) => {
+    // The positive half. A meter that refused everything would satisfy the
+    // test above and break the suite; this shows it discriminates, and that
+    // the local call is on the ledger rather than invisible to it.
+    const response = await context.request.get(`${station.origin}/api/health`);
+
+    expect(response.ok()).toBe(true);
+    expect(outbound.seen.some((url) => url.endsWith("/api/health"))).toBe(true);
+    expect(outbound.external()).toHaveLength(0);
+    expect(outbound.blocked).toHaveLength(0);
   });
 
   test("the backend itself made no outbound attempt during the run", async ({ page, station }) => {

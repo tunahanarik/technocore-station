@@ -15,8 +15,13 @@
  *   * **`workers: 1`.** One backend process, one SQLite file, one session
  *     table. Parallel workers would interleave writes to shared server state
  *     and produce exactly the nondeterminism the line above forbids.
- *   * **`forbidOnly`.** A committed `test.only` would silently shrink the
- *     suite to one test while still reporting success.
+ *   * **`forbidOnly: true`, unconditionally.** A committed `test.only`
+ *     shrinks the suite to one test while still reporting success. This used
+ *     to be `!!process.env.CI`, which left the run a developer actually
+ *     looks at - the local one - accepting it silently: a review committed
+ *     an `only` and got `1 passed (4.5s)`, exit 0. The suite's own guard
+ *     could not catch it either, because `only` mode filtered that spec out
+ *     as well; it now runs from `globalSetup`, before test selection exists.
  *
  * `baseURL` is intentionally absent: the origin carries an ephemeral port
  * chosen by the operating system at launch (INV-02) and is read from the
@@ -32,7 +37,7 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  forbidOnly: !!process.env.CI,
+  forbidOnly: true,
 
   timeout: 30_000,
   expect: { timeout: 7_000 },

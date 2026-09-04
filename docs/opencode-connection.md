@@ -81,11 +81,47 @@ düşmüştü. Yanlış yönde başarısız olan bir ihtiyat, ihtiyat değildir.
 | `messages` (`@ai-sdk/anthropic`) | `…/zen/go/v1/messages` | 8 |
 | `chat/completions` (`@ai-sdk/openai-compatible`) | `…/zen/go/v1/chat/completions` | 15 |
 
-Canlı katalog **34** kimlik döndürmüştü. Aradaki **7 fazlalık** tabloda yok:
-`unverified` kalır, **listelenir ama seçilemez**, nedeni (`UNMAPPED_REASON`)
-kullanıcıya gider ve tahmin edilmez. `selectable_count`, `model_count`'tan
-ayrı bir alan olarak döner; "listeleniyor" ile "adreslenebiliyor" iki ayrı
-sayıdır.
+Tablo **4 Eylül 2026'da** okundu; kaynak sayfanın o günkü altbilgisi
+`Sep 3, 2026` diyordu. O okumada canlı katalog **34** kimlik döndürdü ve
+aradaki **7 fazlalık** tabloda yoktu: `unverified` kalır, **listelenir ama
+seçilemez**, nedeni kullanıcıya gider ve tahmin edilmez. `selectable_count`,
+`model_count`'tan ayrı bir alan olarak döner; "listeleniyor" ile
+"adreslenebiliyor" iki ayrı sayıdır.
+
+### Tablonun bayatlaması, ve neden artık görünür
+
+Bağımsız bir inceleme sayfayı **yeniden okudu**: sayfa `omen-alpha →
+chat/completions` satırını kazanmıştı ve canlı katalog **35** kimlik
+döndürüyordu — fazlalık 7 değil **8**. Bu bir transkripsiyon hatası değil,
+**sürüklenme**dir: kod `DOC_LAST_UPDATED = "2026-09-03"` pinliyor, sayfa ise
+ilerlemiş. İki sonucu vardı ve ikisi de kapatıldı.
+
+**1. Kullanıcıya kaynak hakkında olgu söyleniyordu.** Eski cümle "Bu model
+resmi belgenin uç nokta tablosunda yok" diyordu — süreç o sayfayı derlemeden
+beri okumamışken **şimdiki hâli** hakkında bir iddia. Sayfa satır kazanınca
+cümle yanlış oldu ve hiçbir şey bunu bilemezdi. Cümleler artık **bu sürüm**
+hakkındadır ve okuma tarihini taşır:
+
+> Bu model, bu sürümün pinli uç nokta tablosunda yok (tablo 2026-09-04
+> tarihinde okundu). …
+
+**2. Sürüklenmeyi fark eden bir şey yoktu.** `len(MODEL_MAPPINGS) == 27` ve
+fazlalık sayısı pinliydi ama karşılaştırılmıyordu. Bugün:
+
+* `TABLE_PROVENANCE` **koşulsuz** gösterilir — tablo kaç satır, ne zaman
+  okundu, sayfanın altbilgisi ne diyordu. Yalnız bir sorun çıkınca beliren
+  bir künye, kimsenin okumadığı künyedir.
+* `EXPECTED_UNMAPPED_COUNT = 7` pinlidir ve **katalogdan türetilmez** — türetilse
+  kataloğun her dediğini onaylardı, ki bu tam olarak ADR-0005 §1.2'nin ders
+  çıkardığı kendi kendini mühürleyen hata biçimidir.
+* Çekilen katalogdaki eşlemesiz model sayısı bu pini aşarsa
+  `catalog.drift_notice` dolar ve panelde **uyarı** olarak render edilir:
+  "Sağlayıcının kataloğu 35 model listeledi ve bunların 8 tanesi bu sürümün
+  pinli tablosunda yok… tablo bayat olabilir."
+
+`omen-alpha` tabloya **eklenmedi**. Eklemek yeni bir transkripsiyon ve
+orkestratör doğrulaması gerektirir; bu paketin işi sürüklenmeyi *görünür*
+kılmaktı, sessizce yamamak değil.
 
 Uçtan uca kanıt artık enjekte edilmiş bir tabloyla değil, **gerçek tabloyla**
 alınıyor: `test_opencode_catalog.py::test_a_documented_model_can_be_chosen…`,
@@ -137,23 +173,41 @@ değildir; ayrıca bir test `client.py`'nin **hiçbir `except` bloğunun**
 `Exception`/`BaseException`/`AssertionError` yakalamadığını sözdizim ağacından
 doğrular — çünkü mock'u unutulmuş bir test, sessizce geçen bir testtir.
 
-### Allow-list haritasının yeni hâli
+### Allow-list'in bugünkü hâli: tam yol
 
-`OUTBOUND_CLIENT_MODULES` düz bir kümeden **dizin → modül** haritasına
-dönüştü:
+`OUTBOUND_CLIENT_MODULES` düz bir kümeden önce **dizin → modül** haritasına,
+sonra **kaynak köküne göreli tam yol** kümesine dönüştü:
 
 ```python
-OUTBOUND_CLIENT_MODULES = {
-    "technocore": {"client.py", "write_client.py", "evidence_client.py"},
-    "opencode":   {"client.py"},
-}
+OUTBOUND_CLIENT_MODULES = frozenset({
+    "station_api/technocore/client.py",
+    "station_api/technocore/write_client.py",
+    "station_api/technocore/evidence_client.py",
+    "station_api/opencode/client.py",
+})
 ```
 
-Eski yazım (`name in MODULES and parent.name == "technocore"`) iki yönden
-yanlıştı: `opencode/client.py` httpx import etseydi **geçerdi** — `client.py`
-listedeydi — ve aynı anda her izinli modülün tek bir dizinde yaşadığını
-iddia ediyordu. Harita her giden yüzeyi kendi dizininde adlandırır; bir
-dizinde izinli bir ad, başka bir dizinde izinli değildir.
+**İki adımın gerekçesi, doğru yönüyle.** Bu belge bir süre birinci adımı
+tersine anlattı; düzeltilmiş hâli şudur.
+
+Paket G öncesindeki yazım `path.name not in MODULES or path.parent.name !=
+"technocore"` idi. `opencode/client.py` httpx import etseydi bu kural onu
+**reddederdi** — adı listedeydi ama dizini `technocore/` değildi — ve kural
+aynı anda her izinli modülün tek bir dizinde yaşadığını iddia ediyordu; bu
+da artık doğru değildi.
+
+İlk düzeltme listeyi **çıplak üst dizin adına** göre anahtarladı ve bir
+inceleme onu tek hamlede kırdı: `station_api/plugins/opencode/client.py`
+konumuna yerleştirilen, httpx import edip anahtarı rastgele bir host'a
+gönderen bir modül **27 testin hepsini sessizce geçti**, çünkü üst dizininin
+adı `opencode`'du. Çıplak bir ad konum değildir: ağacın herhangi bir yerinde
+`opencode` veya `technocore` adlı yeni bir dizin muafiyeti miras alırdı.
+
+Tam yol bunu kapatır. `station_api/opencode/client.py` tek bir dosyadır, bir
+adlandırma kuralı değil. İncelemecinin probu regresyon testi olarak durur
+(`test_write_gate.py::test_a_client_planted_where_a_directory_borrows_an_allowed_name_is_refused`)
+ve ters yönü kapatan bir ikizi vardır
+(`::test_a_client_planted_where_a_directory_borrows_the_technocore_name_is_refused`).
 
 Görev katmanının yasak listesi de genişledi: `station_api.opencode`'un
 **tamamı** yasak, yalnız istemci modülü değil. Servis kullanıcı adına ağa
@@ -164,12 +218,44 @@ olurdu.
 
 ## 3. Kimlik bilgisi zarfı — ve audit'ten tek farkı
 
-`station_api/opencode/credentials.py`. Paket E'nin `audit_envelope.py`
+`station_api/opencode/credential_store.py`. Paket E'nin `audit_envelope.py`
 **şeklini** kopyalar, kodunu değil:
 
 * zarf `{format, version, kind, created_at, dpapi_blob}` ve okurken
   `require_exact_keys`'ten geçer;
-* yazma atomiktir: mkstemp → fsync → ACL → `os.replace` → ACL.
+* yazma atomiktir: `O_CREAT|O_EXCL` ile **boş** oluştur → ACL → yaz → fsync →
+  `os.replace` → ACL, ve rename'in **her iki yanında** fail-closed.
+
+> Dosyanın adı ilk yazımda `credentials.py`'ydi ve deponun kendi
+> `.gitignore`'undaki `credentials.*` kuralı yüzünden hiç commit edilmemişti;
+> yani PR diff'ine hiç girmedi ve modül **incelenmeden** birleşti. Ad
+> `credential_store.py` olarak düzeltildi ve `test_tracked_sources.py` aynı
+> tuzağı bir daha kurulamaz hâle getirdi. Bu belgedeki eski ad da bu yüzden
+> düzeltildi: tuzağa düşüren tam olarak o addı.
+
+### Ayrı denetimin bulduğu dört şey
+
+Modül sonradan tek başına denetlendi. Dördü de düzeltildi, hiçbiri
+"belgelendi ve bırakıldı" değil:
+
+| Bulgu | Kanıt | Düzeltme |
+|---|---|---|
+| Dosya ile DB **ayrışabiliyordu**; `/status` yanlış fingerprint gösteriyordu | DB oturumu bozulduğunda zarfta yeni anahtar, satırda eski fingerprint | `store_credential` satırı **önce düşürür**, dosya yazıldıktan sonra yeniden yazar (SI-263) |
+| `os.replace`'ten **sonraki** hata eski anahtarı yok edip yenisini korumasız bırakıyordu | ACL çağrısı patlatıldı; eski anahtar gitti, yeni anahtar canlı kaldı | rename olduysa hedef de silinir — sonuç "zarf yok" (SI-264) |
+| Vault hataları OpenCode hiyerarşisinden **kaçıyordu** | DPAPI/ACL arızası route'ta yakalanmayan `VaultError`, opak 500 | zarf sınırında çevrilir: makine arızası 503, zarf arızası 400 (SI-267) |
+| SI-239'un `kind`/`format` yarısını **hiçbir test tutmuyordu** | döngü bozuk dosyayı biriktiriyordu; `version=99` ilk turda takılıyordu | döngü her turda taze zarftan başlar; eksik/fazla/yanlış-tipli alan testi eklendi (SI-239) |
+
+Ayrıca: ACL artık **tek bayt yazılmadan** uygulanır (eski sıra yaz → fsync →
+ACL idi ve izleme 537 baytın inherited DACL altında var olduğunu gösterdi),
+dizinin kendisi de kısıtlanır, ve `store`/`load`/`delete` süreç içi tek bir
+kilitle sıralanır — eşzamanlı okuma/yazma `PermissionError` üretiyordu.
+
+`load()` **hiçbir şey kaydetmez** ve docstring'i artık bunu söyler; üretimde
+kullanılacak yol `opened()` contextmanager'ıdır, register/forget çifti
+çağırandan alınmıştır. Bellek temizliği (`bytearray` + sıfırlama) burada
+**yoktur** ve modül docstring'i bunu açıkça yazar: anahtar Pydantic'ten
+itibaren `str`'dir ve yalnız bu katmanı `bytes`'a çevirmek üstteki üç
+çerçevedeki aynı nesneyi bırakırdı.
 
 **Bilinçli fark — ve bu farkın kendisi test edilmiştir.** Audit zincirinin
 materyali **asla üzerine yazılmaz**; provider anahtarı **yazılmalıdır**, çünkü
@@ -407,19 +493,25 @@ Beş route; hepsi oturum + CSRF + Host + Origin + Sec-Fetch-Site arkasında
 
 ## 9. Testler
 
+Sayılar `pytest --collect-only -q` çıktısıdır (parametrelenmiş testler ayrı
+sayılır) ve **ayrı kimlik-bilgisi denetiminin** düzeltmelerinden sonraki
+hâliyle yeniden sayılmıştır.
+
 | Dosya | Test | Kapsam |
 |---|---|---|
 | `test_opencode_client.py` | 24 | allow-list, TLS, redirect, gövde tavanı, tekrar politikası, header'lar, tek `Authorization` |
-| `test_opencode_credentials.py` | 15 | zarf şekli, üzerine yazma farkı, domain separation, fingerprint, ACL, DB sınırı |
-| `test_opencode_protocols.py` | 49 | üç aile × fixture, 401/403/404/429/5xx, 200-içi hata, bozuk/boş gövde, uydurulmayan usage |
-| `test_opencode_catalog.py` | 28 | parse, eşleme, listelenen≠seçilebilir, eğitim onayı, cache tarihi/hatası |
-| `test_opencode_http.py` | 25 | route kümesi, oturum/CSRF, anahtar dönmüyor, sıfır giden istek |
-| `test_opencode_leakage.py` | 13 | canary: gövde+header, OpenAPI, SQLite, zarf, veri dizini, log, bundle, yansıtılan anahtar |
+| `test_opencode_credentials.py` | 31 | zarf şekli (eksik/fazla/yanlış-tipli alan dahil), üzerine yazma farkı, domain separation, fingerprint, ACL (dosya **ve** dizin, bayttan önce), DB sınırı, **dosya↔satır ayrışmasının iki yolu**, vault hatalarının çevrilmesi, eşzamanlılık, `opened()` |
+| `test_opencode_protocols.py` | 62 | üç aile × fixture, 401/403/404/429/5xx, 200-içi hata, bozuk/boş gövde, uydurulmayan usage |
+| `test_opencode_catalog.py` | 46 | parse, eşleme, listelenen≠seçilebilir, eğitim onayı, cache tarihi/hatası, **yalnız protokol kapısının ateşlendiği satır**, **sürüklenme uyarısı** |
+| `test_opencode_http.py` | 33 | route kümesi, oturum/CSRF, anahtar dönmüyor, sıfır giden istek, **Türkçe "sınırsız" yasağı**, **DPAPI/ACL arızasının 503'ü** |
+| `test_opencode_leakage.py` | 17 | canary: gövde+header, OpenAPI, SQLite, zarf, veri dizini, log, bundle, yansıtılan anahtar, **reddedilen gövdenin 422'si** |
+| `test_tracked_sources.py` | 3 | kaynak ağacındaki her dosya gerçekten **izleniyor**; `credentials.*` tuzağı bir daha kurulamaz |
 
-Ayrıca genişletilen mevcut testler: `test_write_gate.py` (allow-list haritası
-+ yeni bir "harita dosya adına göre değil dizine göre" testi),
-`test_outbound_guard.py` (üç yeni ikiz), `test_module_registry.py` (migration
-`0008` ve OpenCode tablolarının sütun denetimi).
+Ayrıca genişletilen mevcut testler: `test_write_gate.py` (29 test — tam yol
+allow-list'i ve iki "ödünç alınmış dizin adı" probu), `test_outbound_guard.py`
+(20 test), `test_module_registry.py` (34 test — migration `0008`, OpenCode
+tablolarının sütun denetimi ve **beşinci aşama-numarası yeri**).
+
 
 Hiçbir test gerçek bir çağrı yapmaz; hepsi `httpx.MockTransport` iledir ve
 autouse ağ kesici iki katmanda blokludur.

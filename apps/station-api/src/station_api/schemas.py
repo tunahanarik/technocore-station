@@ -907,7 +907,18 @@ class OpenCodeCatalogStatus(OpenCodeStrictModel):
     models: list[OpenCodeModelStatus]
     model_count: int
     selectable_count: int
+    #: How many listed models the pinned protocol table has no row for.
+    unmapped_count: int
     listing_caveat: str
+    #: When the pinned protocol table was read, and what the source page's
+    #: own footer said that day. Always present: the age of a transcription
+    #: is a fact about every reading of it, not an exception to report.
+    table_provenance: str
+    #: Empty while the catalog and the pinned table agree. Non-empty once the
+    #: provider lists more unmapped models than the transcription accounted
+    #: for - the drift signal that was missing when the table went stale and
+    #: nothing said so.
+    drift_notice: str
 
 
 class OpenCodePublishedLimit(StrictModel):

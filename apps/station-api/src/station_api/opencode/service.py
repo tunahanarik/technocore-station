@@ -70,7 +70,9 @@ from station_api.opencode.errors import (
     OpenCodeResponseError,
 )
 from station_api.opencode.registry import (
+    TABLE_PROVENANCE,
     ModelMapping,
+    catalog_drift_notice,
     find_mapping,
     wire_model_id,
 )
@@ -141,6 +143,17 @@ class CatalogView:
     models: tuple[ModelView, ...]
     models_fetched_at: datetime | None
     selectable_count: int
+    #: How many listed models the pinned table has no row for. Shown as a
+    #: number rather than only as per-row sentences, because the *count* is
+    #: what says whether the table itself is behind.
+    unmapped_count: int
+    #: Always populated: when the protocol table was read, and what the
+    #: source page's own footer said that day.
+    table_provenance: str
+    #: Empty while the catalog and the pinned table agree; a warning once the
+    #: catalog lists more unmapped models than the transcription accounted
+    #: for (:func:`catalog_drift_notice`).
+    drift_notice: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,30 +220,67 @@ class OpenCodeService:
         Replaces an existing one, deliberately (ADR-0005 7). Registered for
         redaction across the whole call so an exception raised anywhere in
         here cannot carry the value into a log line.
+
+        **The claim is withdrawn before it can become false.** The file and
+        the metadata row are two writes with no transaction between them, and
+        the order used to be file first: a database failure after a
+        successful write left the row describing the *previous* key while the
+        envelope held the new one, so ``/api/opencode/status`` answered
+        "configured, ``9359c4e2``" about a key that was no longer there. The
+        fingerprint is the only handle a user has on which key is stored
+        (SI-242), so a fingerprint that is quietly wrong is worse than no
+        fingerprint at all.
+
+        Dropping the row first makes the wrong answer unreachable rather than
+        unlikely. Every interruption now lands on one of:
+
+        * the delete failed - nothing was written, the old row and the old
+          envelope still agree;
+        * the write failed - there is no row, so the connection reads as
+          *not configured* even though a file may remain, which understates
+          rather than misnames;
+        * the insert failed - the new key is on disk and unnamed, and the
+          connection again reads as *not configured*, so the user re-enters
+          it instead of trusting a stale fingerprint.
+
+        ``created_at`` is carried across the gap because it describes when
+        the connection was first set up, not when this particular key was
+        written; ``updated_at`` is what moves (SI-263).
         """
         self._require_engine()
+        first_configured_at = self._withdraw_credential_row()
+
         with self._registered(api_key):
             fingerprint = self._envelope.store(api_key)
 
         now = datetime.now(UTC)
         with self._session() as session:
-            row = session.get(OpenCodeCredentialMetadata, CREDENTIAL_ID)
-            if row is None:
-                session.add(
-                    OpenCodeCredentialMetadata(
-                        id=CREDENTIAL_ID,
-                        envelope_relpath=self._envelope.relpath(),
-                        fingerprint=fingerprint,
-                        created_at=now,
-                        updated_at=now,
-                    )
+            session.add(
+                OpenCodeCredentialMetadata(
+                    id=CREDENTIAL_ID,
+                    envelope_relpath=self._envelope.relpath(),
+                    fingerprint=fingerprint,
+                    created_at=first_configured_at or now,
+                    updated_at=now,
                 )
-            else:
-                row.envelope_relpath = self._envelope.relpath()
-                row.fingerprint = fingerprint
-                row.updated_at = now
+            )
             session.commit()
         return self.describe()
+
+    def _withdraw_credential_row(self) -> datetime | None:
+        """Remove the metadata row, returning the ``created_at`` it carried.
+
+        Separate from :meth:`forget_credential` because it deletes only the
+        claim, never the envelope: the file is about to be replaced, and
+        removing it here would turn a failed write into data loss.
+        """
+        with self._session() as session:
+            row = session.get(OpenCodeCredentialMetadata, CREDENTIAL_ID)
+            first_configured_at = row.created_at if row is not None else None
+            if row is not None:
+                session.delete(row)
+                session.commit()
+        return first_configured_at
 
     def forget_credential(self) -> ConnectionView:
         """Remove the envelope and its metadata row.
@@ -257,11 +307,15 @@ class OpenCodeService:
         """The whole read-only picture. Sends nothing."""
         row = self._credential_row()
         configured = row is not None and self._envelope.exists()
+        # Every metadata field is gated on ``configured``, not merely on the
+        # row existing. A row without an envelope describes a key that is not
+        # there, and showing its fingerprint beside "not configured" would be
+        # the same wrong answer in a quieter voice.
         return ConnectionView(
             configured=configured,
-            fingerprint_short=row.fingerprint[:12] if row is not None else "",
-            configured_at=row.created_at if row is not None else None,
-            updated_at=row.updated_at if row is not None else None,
+            fingerprint_short=row.fingerprint[:12] if configured and row else "",
+            configured_at=row.created_at if configured and row else None,
+            updated_at=row.updated_at if configured and row else None,
             check=self.check_connection(),
             selected_model=self._selected_model(),
             catalog=self.catalog_view(),
@@ -358,6 +412,11 @@ class OpenCodeService:
             models=(),
             models_fetched_at=None,
             selectable_count=0,
+            unmapped_count=0,
+            # Present even before anything was fetched: the table's age is a
+            # property of this build, not of a reading.
+            table_provenance=TABLE_PROVENANCE,
+            drift_notice="",
         )
         if self._engine is None:
             return empty
@@ -402,6 +461,11 @@ class OpenCodeService:
         # trusted from the stored row: the table is the authority, and a
         # build whose table changed must not keep showing yesterday's verdict.
         views = build_views(entries, mappings=self._mappings)
+        # A model with no protocol at all is one the pinned table has no row
+        # for; an unselectable model with a protocol is a row that exists and
+        # was never published. Only the first kind says anything about the
+        # table being behind the source page, so only the first kind counts.
+        unmapped = sum(1 for view in views if view.protocol == "")
         return CatalogView(
             state=state,
             fetched_at=fetched_at,
@@ -410,6 +474,11 @@ class OpenCodeService:
             models=views,
             models_fetched_at=models_fetched_at,
             selectable_count=sum(1 for view in views if view.selectable),
+            unmapped_count=unmapped,
+            table_provenance=TABLE_PROVENANCE,
+            drift_notice=catalog_drift_notice(
+                listed_count=len(views), unmapped_count=unmapped
+            ),
         )
 
     # --- model choice ------------------------------------------------------
@@ -429,13 +498,14 @@ class OpenCodeService:
         mapping = find_mapping(bare, mappings=self._mappings)
         if mapping is None:
             raise ModelNotSelectableError(
-                f"'{bare}' icin protokol eslemesi yok. Listeleniyor olabilir "
-                "ama secilemez; Station baska bir modele gecmez."
+                f"'{bare}' icin bu surumun pinli tablosunda esleme yok. "
+                "Listeleniyor olabilir ama secilemez; Station baska bir "
+                "modele gecmez."
             )
         if not mapping.selectable:
             raise ModelNotSelectableError(
-                f"'{bare}' modelinin protokol ailesi resmi belgede yazili "
-                "degil. Tahmin edilmedi, bu yuzden secilemez."
+                f"'{bare}' modelinin protokol ailesi bu surumun pinli "
+                "tablosunda bos. Tahmin edilmedi, bu yuzden secilemez."
             )
         if mapping.requires_training_acknowledgement and not training_acknowledged:
             raise ModelNotSelectableError(

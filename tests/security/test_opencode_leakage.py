@@ -349,3 +349,146 @@ def test_the_credential_is_dropped_even_when_the_request_fails() -> None:
         )
 
     assert not contains_registered_secret(TEST_ONLY_OPENCODE_CREDENTIAL)
+
+
+# ---------------------------------------------------------------------------
+# The error path, which the surfaces above did not cover
+# ---------------------------------------------------------------------------
+#
+# Everything before this point inspects a **successful** store and the reads
+# that follow it. That left the rejection path unmeasured, and the rejection
+# path was where the credential actually escaped: ``api_key`` is a
+# ``SecretStr``, but a *type* error is raised before the value is ever
+# wrapped in one, so FastAPI's default validation handler answered 422 with
+# Pydantic's error list - and every entry of that list carries ``input``, the
+# submitted value, verbatim.
+#
+# These do not need DPAPI: nothing is stored, which is the whole point.
+
+
+def _rejecting_client(
+    settings: Settings, engine: Engine, base_url: str
+) -> tuple[TestClient, FastAPI]:
+    app = create_app(settings=settings, port=TEST_PORT, engine=engine, web_dist=None)
+    return TestClient(app, base_url=base_url), app
+
+
+def test_a_rejected_credential_body_is_not_quoted_back_in_the_422(
+    settings: Settings, engine: Engine, base_url: str
+) -> None:
+    """The canary, sent in a shape the schema refuses (SI-243).
+
+    A list where a string is expected fails at the type level, which is
+    exactly the case ``SecretStr`` cannot help with. The answer must name the
+    field and the rule and nothing else.
+    """
+    client, app = _rejecting_client(settings, engine, base_url)
+    with client:
+        csrf = establish_session(client, app)
+        response = client.post(
+            "/api/opencode/credential",
+            json={"api_key": [TEST_ONLY_OPENCODE_CREDENTIAL]},
+            headers={"X-Station-CSRF": csrf},
+        )
+
+    assert response.status_code == 422
+    _assert_clean(response.content, "the 422 body")
+    rendered = " ".join(f"{key}: {value}" for key, value in response.headers.items())
+    _assert_clean(rendered.encode(), "the 422 headers")
+
+    # The half that has to survive: a caller still learns what was wrong.
+    entries = response.json()["detail"]
+    assert entries, "the rejection must still say what it refused"
+    assert entries[0]["loc"] == ["body", "api_key"]
+    assert entries[0]["type"] == "string_type"
+    assert "input" not in entries[0]
+    assert "ctx" not in entries[0]
+
+
+def test_a_rejected_body_carries_no_submitted_value_on_any_route(
+    settings: Settings, engine: Engine, base_url: str
+) -> None:
+    """The rule is global, not a patch on one route.
+
+    ``/api/opencode/model`` has no secret field, and that is the point: the
+    shield is registered for the application, so a body rejected anywhere
+    describes the rule rather than repeating what was sent.
+    """
+    client, app = _rejecting_client(settings, engine, base_url)
+    marker = "SUBMITTEDVALUEMARKER0123456789"
+    with client:
+        csrf = establish_session(client, app)
+        response = client.post(
+            "/api/opencode/model",
+            json={"model_id": {"nested": marker}, "training_acknowledged": False},
+            headers={"X-Station-CSRF": csrf},
+        )
+
+    assert response.status_code == 422
+    assert marker not in response.text
+    for entry in response.json()["detail"]:
+        assert "input" not in entry
+        assert "ctx" not in entry
+
+
+def test_the_422_carries_the_hardening_headers_and_is_never_cached(
+    settings: Settings, engine: Engine, base_url: str
+) -> None:
+    """An exception handler's response is born outside the middleware chain.
+
+    The 500 shield learned this once (SI-126). The 422 is built the same way
+    and would have shipped bare without the same treatment.
+    """
+    client, app = _rejecting_client(settings, engine, base_url)
+    with client:
+        csrf = establish_session(client, app)
+        response = client.post(
+            "/api/opencode/credential",
+            json={"api_key": 12345},
+            headers={"X-Station-CSRF": csrf},
+        )
+
+    assert response.status_code == 422
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert "default-src 'none'" in response.headers["Content-Security-Policy"]
+    assert response.headers["X-Station-Request-Id"]
+
+
+def test_the_stripper_drops_every_value_bearing_key_and_keeps_the_rest() -> None:
+    """The rule itself, away from HTTP.
+
+    Stated separately so a future edit that renames a key has one obvious
+    place to fail, and so the shape check (a non-list, a non-dict entry) is
+    pinned rather than assumed.
+    """
+    from station_api.security.middleware import (
+        VALUE_BEARING_ERROR_KEYS,
+        strip_submitted_values,
+    )
+
+    assert {"input", "ctx"} == VALUE_BEARING_ERROR_KEYS
+
+    cleaned = strip_submitted_values(
+        [
+            {
+                "type": "string_type",
+                "loc": ["body", "api_key"],
+                "msg": "Input should be a valid string",
+                "input": [TEST_ONLY_OPENCODE_CREDENTIAL],
+                "ctx": {"given": TEST_ONLY_OPENCODE_CREDENTIAL},
+            }
+        ]
+    )
+    assert cleaned == [
+        {
+            "type": "string_type",
+            "loc": ["body", "api_key"],
+            "msg": "Input should be a valid string",
+        }
+    ]
+    _assert_clean(json.dumps(cleaned).encode(), "the stripped error list")
+
+    # Anything unrecognised is dropped, never passed through.
+    assert strip_submitted_values("not a list") == []
+    assert strip_submitted_values([TEST_ONLY_OPENCODE_CREDENTIAL]) == []
