@@ -24,6 +24,8 @@ from station_api.config import Settings
 from station_api.db.migrations_runner import initialise_database
 from station_api.launcher import reserve_loopback_socket
 
+from tests.security.test_module_registry import CURRENT_SCHEMA_STAGE
+
 pytestmark = pytest.mark.integration
 
 STARTUP_TIMEOUT_SECONDS = 20
@@ -100,11 +102,15 @@ def test_full_session_handoff_over_the_wire(live_server: LiveServer) -> None:
 
         # These two deliberately differ, and the gap widens with every stage
         # that is not about writing. Stage 4 is the stage that opened writes
-        # and that does not move again; stage 6 is the stage this build
+        # and that does not move again; stage 7 is the stage this build
         # implements. Collapsing them would either backdate the later work or
         # claim writes arrived several releases later than they did.
+        #
+        # The stage number is read from the one place the suite pins it, so
+        # this file cannot drift a release behind the entry points the way
+        # ``cli/__main__.py`` once did (SI-232).
         assert payload["technocore"]["write_available_from_stage"] == 4
-        assert payload["service"]["stage"] == 6
+        assert payload["service"]["stage"] == CURRENT_SCHEMA_STAGE
 
         # And the composer is honest about being shut on a fresh launch: no
         # check has run, so the manifest half of the gate blocks.

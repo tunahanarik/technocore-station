@@ -86,7 +86,7 @@ DYNAMIC_LOADING_FUNCTIONS = (
 #: rather than imported: the number says which release the file on disk was
 #: written for, and a constant that derived it from one of the call sites
 #: would agree with whichever one drifted (F-10).
-CURRENT_SCHEMA_STAGE = 6
+CURRENT_SCHEMA_STAGE = 7
 
 #: Proje 0's completion outputs, charter 7.2, in charter order. Written out
 #: here rather than imported so a silent reordering or deletion in the
@@ -452,11 +452,18 @@ def test_a_module_with_an_unbuilt_requirement_is_never_complete() -> None:
 
 
 def test_the_task_layer_has_no_outbound_surface(api_source_root: Path) -> None:
-    """No fourth client, no socket, no outbound registry (ADR-0004 2).
+    """No new client, no socket, no outbound registry (ADR-0004 2).
 
-    ``OUTBOUND_CLIENT_MODULES`` is locked at three and the comment beside it
-    says why: a fourth entry means a fourth outbound surface. This asserts the
-    new packages did not quietly become one by another route.
+    ``OUTBOUND_CLIENT_MODULES`` names every reviewed outbound module and the
+    comment beside it says why: another entry means another outbound surface.
+    This asserts the task packages did not quietly become one by another
+    route - by importing a client rather than by importing httpx.
+
+    Package G widened the banned list rather than the permission. The whole
+    of ``station_api.opencode`` is here, not just its client module: the
+    service reaches the network on the caller's behalf, so a task layer that
+    imported *it* would have an outbound surface at one remove, which is
+    exactly the shape this scan was written to catch.
     """
     banned = (
         "httpx",
@@ -469,6 +476,7 @@ def test_the_task_layer_has_no_outbound_surface(api_source_root: Path) -> None:
         "station_api.technocore.client",
         "station_api.technocore.write_client",
         "station_api.technocore.evidence_client",
+        "station_api.opencode",
     )
     offenders: list[str] = []
 
@@ -558,6 +566,10 @@ def test_the_task_tables_have_no_secret_shaped_columns(engine: Engine) -> None:
 
 #: The two calls that carry the release number: the one that stamps it into
 #: ``app_metadata`` and the one that shows it to the user.
+#:
+#: Every root these are scanned in is named in the test below. Adding a new
+#: place that opens the database means adding its root there; the browser
+#: harness is the fifth such place and was invisible until it was.
 STAGE_BEARING_CALLS = ("initialise_database", "ServiceStatus")
 
 
@@ -587,7 +599,7 @@ def _stage_call_sites(root: Path) -> dict[str, int]:
 def test_every_entry_point_names_the_same_release_stage(
     api_source_root: Path, repo_root: Path
 ) -> None:
-    """SI-232 (F-10). One release, one stage number, four call sites.
+    """SI-232 (F-10). One release, one stage number, every call site.
 
     ``launcher.py``, ``routes/api.py`` and the test fixture all said ``6``;
     ``cli/__main__.py`` still opened the database at ``stage=3``, three
@@ -595,13 +607,23 @@ def test_every_entry_point_names_the_same_release_stage(
     ``app_metadata`` and shown on ``/api/app/status``, so an application that
     presents itself as an older release than the one under test is a small lie
     - and this suite has already refused that shape of lie once, one file over.
+
+    Package G adds a **fifth** call site and the scan had to grow with it.
+    ``apps/station-web/e2e/harness/serve.py`` opens the same database for the
+    browser suite, and it sat outside both roots this test read: four entry
+    points were held consistent and the fifth was free to drift. A guard that
+    covers all-but-one of a set is the shape of guard that gets believed and
+    is not true, so the harness is scanned here rather than trusted.
     """
     application = _stage_call_sites(api_source_root / "station_api")
+    harness = _stage_call_sites(repo_root / "apps" / "station-web" / "e2e")
     fixtures = _stage_call_sites(repo_root / "tests")
 
     assert len(application) >= 3, application
+    assert harness, "the browser harness opens the database and must name a stage"
     assert fixtures, "the suite should migrate at the stage under test"
     assert set(application.values()) == {CURRENT_SCHEMA_STAGE}, application
+    assert set(harness.values()) == {CURRENT_SCHEMA_STAGE}, harness
     assert CURRENT_SCHEMA_STAGE in set(fixtures.values()), fixtures
 
 
@@ -622,3 +644,70 @@ def test_migration_0007_changed_no_existing_table(engine: Engine) -> None:
         "recovery_record",
     ):
         assert table in names, f"{table} disappeared"
+
+
+def test_migration_0008_changed_no_existing_table(engine: Engine) -> None:
+    """Package G is additive too, and its three tables are named here.
+
+    The same assertion the previous migration got, extended rather than
+    replaced: every earlier table survives, and the new ones exist under the
+    names the model layer expects.
+    """
+    names = set(inspect(engine).get_table_names())
+
+    for table in (
+        "app_metadata",
+        "identity",
+        "secret_metadata",
+        "manifest_check",
+        "official_source_snapshot",
+        "message_nonce_reservation",
+        "evidence_record",
+        "audit_event",
+        "audit_chain_metadata",
+        "recovery_record",
+        "task_record",
+        "task_evidence_outcome",
+        "task_state_transition",
+    ):
+        assert table in names, f"{table} disappeared"
+
+    for table in (
+        "opencode_credential_metadata",
+        "opencode_catalog_check",
+        "opencode_model_snapshot",
+    ):
+        assert table in names, f"{table} was not created"
+
+
+def test_the_opencode_tables_have_no_secret_shaped_columns(engine: Engine) -> None:
+    """``key`` included, which is why the credential column is a *path*.
+
+    A table that stores a provider credential's metadata is exactly where a
+    column called ``api_key`` would look natural and be catastrophic, so the
+    scan that already covers the task tables covers these by name too.
+    """
+    forbidden = (
+        "seed",
+        "private",
+        "secret",
+        "mnemonic",
+        "passphrase",
+        "password",
+        "key",
+        "token",
+    )
+    inspector = inspect(engine)
+    offenders: list[str] = []
+
+    for table in (
+        "opencode_credential_metadata",
+        "opencode_catalog_check",
+        "opencode_model_snapshot",
+    ):
+        for column in inspector.get_columns(table):
+            name = str(column["name"]).lower()
+            if any(fragment in name for fragment in forbidden):
+                offenders.append(f"{table}.{name}")
+
+    assert offenders == [], f"secret-shaped columns found: {offenders}"

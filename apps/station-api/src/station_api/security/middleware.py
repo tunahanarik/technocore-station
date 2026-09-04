@@ -17,6 +17,13 @@ One response class is built outside this chain entirely: Starlette runs the
 ``Exception`` handler in ServerErrorMiddleware, which wraps even
 SecurityHeaders, so ``unhandled_exception_shield`` below applies the hardening
 headers and the request id itself (SI-126, IMP-260).
+
+``validation_error_shield`` sits at the other end - Starlette runs non-500
+handlers in ExceptionMiddleware, *inside* everything above - so the chain
+already dresses its response. It sets the same headers anyway, so that the
+422 stays correct if it is ever re-registered somewhere the chain does not
+reach, and so neither shield reads as the exception to the other
+(SI-243, IMP-368).
 """
 
 from __future__ import annotations
@@ -26,6 +33,7 @@ from collections.abc import Awaitable, Callable
 from secrets import compare_digest
 from uuid import uuid4
 
+from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -211,6 +219,71 @@ async def unhandled_exception_shield(request: Request, exc: Exception) -> Respon
         exc_info=exc,
     )
     response = _denied("internal_error", status_code=500)
+    response.headers[REQUEST_ID_HEADER_NAME] = request_id
+    apply_security_headers(response, request.url.path, no_store=True)
+    return response
+
+
+#: Keys Pydantic puts in a validation error that carry the **submitted value**
+#: rather than a description of the rule it broke. ``input`` is the offending
+#: value verbatim; ``ctx`` carries whatever the validator chose to attach and
+#: has held the value too. Neither is needed to say what was wrong, and both
+#: are how a rejected request body ends up quoted back over HTTP (SI-243).
+VALUE_BEARING_ERROR_KEYS = frozenset({"input", "ctx"})
+
+
+def strip_submitted_values(errors: object) -> list[dict[str, object]]:
+    """A validation error list with every echoed value removed.
+
+    Kept as a function so the rule can be exercised directly, and so the
+    handler below has no branching of its own. Anything that is not the
+    expected shape is dropped rather than passed through: a body we cannot
+    recognise is a body we cannot promise carries no submitted value.
+    """
+    cleaned: list[dict[str, object]] = []
+    if not isinstance(errors, list):
+        return cleaned
+    for error in errors:
+        if not isinstance(error, dict):
+            continue
+        cleaned.append(
+            {
+                str(key): value
+                for key, value in error.items()
+                if str(key) not in VALUE_BEARING_ERROR_KEYS
+            }
+        )
+    return cleaned
+
+
+async def validation_error_shield(request: Request, exc: Exception) -> Response:
+    """A 422 that describes the rule, never the value that broke it.
+
+    FastAPI's default handler answers a ``RequestValidationError`` with
+    Pydantic's own error list, and every entry of that list carries ``input``
+    - the submitted value, verbatim. For most bodies that is merely noisy.
+    For ``POST /api/opencode/credential`` it is a leak: the field is a
+    ``SecretStr``, but a **type** error is raised before the value is ever
+    wrapped in one, so the raw provider key travelled straight back out in
+    the response body (nothing rendered it, which made it exactly the kind of
+    leak a review finds and a user never would).
+
+    So the value-bearing keys are removed here, for every route at once. The
+    location, the message and the machine-readable ``type`` all survive,
+    which is everything a caller needs to fix the request.
+
+    Unlike the 500 shield this one runs *inside* the middleware chain -
+    Starlette keeps non-500 handlers in ExceptionMiddleware - so the headers
+    and the request id would arrive anyway. They are applied here regardless,
+    because "it happens to be wrapped today" is a weaker guarantee than
+    "this response carries them", and ``no_store=True`` says outright that a
+    rejected body is never cached whatever path produced it.
+    """
+    errors = exc.errors() if isinstance(exc, RequestValidationError) else []
+    response = JSONResponse(
+        {"detail": strip_submitted_values(errors)}, status_code=422
+    )
+    request_id = getattr(request.state, "request_id", None) or uuid4().hex
     response.headers[REQUEST_ID_HEADER_NAME] = request_id
     apply_security_headers(response, request.url.path, no_store=True)
     return response

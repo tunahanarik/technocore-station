@@ -1,0 +1,7 @@
+# Playwright run output: traces, screenshots and error contexts from failed
+# tests. Diagnostic only, regenerated on every run, and potentially large.
+# Scoped here rather than in the root .gitignore so this package owns its own
+# hygiene.
+.artifacts/
+test-results/
+playwright-report/

@@ -5,10 +5,11 @@ Why a registry and not a directory move
 The roadmap sentence "Proje 0 has been moved behind a module boundary" and the
 task's own sentence "existing record identities and migration history must not
 break" pull in opposite directions, and the exploration priced the physical
-move: at least six tests break (``OUTBOUND_CLIENT_MODULES`` pins the
-``technocore/`` directory **by name**, ``test_write_gate.py`` uses literal
-module paths, three places audit the route set), and no behaviour is bought
-with them. So ADR-0004 1 settles it: a module is a record here, the responsible
+move: at least six tests break (``OUTBOUND_CLIENT_MODULES`` pinned the
+``technocore/`` directory by name at the time, and pins the full source-root
+relative path of every outbound client today; ``test_write_gate.py`` uses
+literal module paths; three places audit the route set), and no behaviour is
+bought with them. So ADR-0004 1 settles it: a module is a record here, the responsible
 code stays where it is, and **Proje 0 is not moved** - it is represented.
 
 What a record is allowed to claim

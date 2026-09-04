@@ -1,7 +1,8 @@
 # UI eylem haritası
 
 > Paket C çıktısı; Paket D ile "Oluştur ve Doğrula" bölümü (§5), Paket E ile
-> "Kanıtlar" bölümü (§7) dolduruldu.
+> "Kanıtlar" bölümü (§7), Paket G ile "Ayarlar ve Yardım" bölümü (§8)
+> dolduruldu.
 > Sol menülü dashboard kabuğundaki **her** etkileşimin sözleşmesi: önkoşul,
 > çağrılan işlev, loading/success/error/timeout/iptal davranışı ve otomatik
 > test kimliği.
@@ -33,6 +34,8 @@ Her istek `AbortSignal.timeout(ms)` ile sınırlıdır:
 | `sendComposeMessage` (`POST /api/compose/send`) | 45 000 ms | Backend'in kendi yazma bütçesi connect 5 sn + write 10 sn + read 15 sn'dir; **daha kısa bir istemci süresi, sunucu hâlâ yazarken isteği bırakıp sonucu `timeout` (yerel servis hakkında bir iddia) diye gösterirdi.** Fazladan pay, cevabın sunucunun üç değerli verdict'i olarak kalmasını sağlar |
 | `captureEvidenceLine` (`POST /api/evidence/capture`) | 90 000 ms | Yakalama yerel bir okuma değildir: backend odanın resmî export'unu açar ve **12 MiB tavanına kadar** satır satır tarar. Backend'in kendi bütçesi connect 5 sn + read 30 sn'dir, ama o read süresi **chunk başınadır**, tarama tamamına değil — yavaş bir bağlantı otuz saniyede bir kez bile takılmadan route'u dakikalarca meşgul edebilir. Daha kısa bir istemci süresi, ilerleyen bir taramayı bırakıp sonucu `timeout` diye gösterir ve backend'in **altı yakalama durumundan hangisine** vardığını hiç öğrenemezdik; oysa "okuyamadım" ile "satır orada değil" ayrı bulgulardır ve bir istemci kronometresi ikisini birleştiremez |
 | `exportEvidence` (`POST /api/evidence/export`, elle `fetch`) | 15 000 ms | Varsayılan; dışa aktarım yerel veritabanından üretilir, dışarı çıkmaz |
+| `storeOpenCodeCredential` (`POST /api/opencode/credential`) | 20 000 ms | **Dışarı hiç çıkmaz**: route bir DPAPI zarfını yerel diske yazar (mkstemp → fsync → ACL → atomik replace → ACL) ve sonra yerel durumu okur. Varsayılan 15 sn yerel bir *okuma* için ölçülmüştür; burada bloklayan route sunucu threadpool'unda kuyruğa girer, iki Windows ACL çağrısı ve bir fsync bekler. Asıl gerekçe kısa sürenin maliyeti: replace ortasında bırakılan bir yazma `timeout` (yerel servis hakkında bir iddia) diye raporlanır, oysa zarf pekâlâ yerine oturmuş olabilir — ve kullanıcının bunu öğrenmesinin tek yolu **anahtarı yeniden yazmaktır**. Uygulamadaki diğer her istek bedelsiz tekrarlanır; bu tekrarlanmaz |
+| `refreshOpenCodeCatalog` (`POST /api/opencode/catalog/refresh`) | 90 000 ms | Sunucunun kendi bütçesi **iki sınırlı deneme**, her biri connect 5 sn + read 30 sn, aralarında en fazla 5 sn backoff: `fetch_error` diyebilmesi için yaklaşık 75 saniye. Daha kısa bir istemci süresi ilerleyen bir yenilemeyi bırakıp `timeout` derdi ve kullanıcının asıl sorduğu şeyi — katalog durumunu — atardı. Bu istek **hiçbir kimlik bilgisi taşımaz**; katalogun anahtarsız yanıt vermesi zaten §8'deki "denetim rozet üretmez" kararının gerekçesidir |
 
 ### 1.2 `ApiError` sınıflandırması (`kind`)
 
@@ -467,12 +470,92 @@ seed`).
 
 ## 8. Ayarlar ve Yardım
 
+Paket G bu bölüme OpenCode Go bağlantısını ekledi:
+`pages/SettingsHelpPage.tsx` (tema, servis bilgisi, yazma kapısı, yardım) +
+`components/opencode/OpenCodeConnectionPanel.tsx` (credential, denetim,
+sözleşme notları, model kataloğu, kota bağlamı).
+
+### 8.1 Verilmiş sözün bilinçli revizyonu
+
+Bu sayfa şunu söylüyordu: *"bu ekranda bilerek hicbir secret giris veya
+gosterim alani yoktur"*, ve `pages.test.tsx::offers no secret input anywhere`
+bunu `input[type="password"] === null` ile sabitliyordu. Paket G ile söz artık
+doğru değil: sağlayıcı API anahtarı burada giriliyor.
+
+Söz **sessizce silinmedi, daraltılarak yeniden yazıldı** (ADR-0005 §10,
+ADR-0001 §6). Yeni metin üç şeyi ayrı ayrı söylüyor: (1) DID seed'i, private
+key ve recovery parolası için **frontend'de hiçbir istisna yoktur** ve bunları
+kabul eden ya da gösteren bir alan uygulamanın hiçbir yerinde bulunmaz;
+(2) tek istisna sağlayıcı API anahtarıdır; (3) anahtar maskeli alana bir kez
+yazılır, aynı-origin yerel servise bir kez iletilir, **kaydedildikten sonra
+alandan ve bellekten silinir** ve hiçbir yoldan geri gösterilemez.
+
+Test **gevşetilmedi, güçlendirildi**. Eski iddia "hiç password alanı yok"tu;
+yenisi "**tam olarak bir** password alanı olabilir, o da OpenCode anahtarıdır,
+`autocomplete="off"` taşır, seed/private key/recovery/kasa parolası etiketli
+hiçbir alan yoktur ve `textarea` hâlâ sıfırdır". Eski iddianın "en az bir
+password alanı var" gibi zayıf bir biçime çevrilmesi ikinci bir alanın kimse
+fark etmeden eklenmesine izin verirdi.
+
+### 8.2 Kontrol tablosu
+
 | Kontrol | Önkoşul | API / işlev | Loading | Success | Error | Timeout | İptal | Test |
 |---|---|---|---|---|---|---|---|---|
 | "Koyu tema / Acik tema" | — | `applyTheme()` (yalnız DOM; kalıcı depolama YOK) | — | tema değişir; yeniden açılışta sistem teması | — | — | — | `pages.test.tsx::hosts the theme control and says the choice is not persisted` |
 | otomatik kapı okuma | bölüm seçili | `GET /api/write-gate` (`fetchWriteGate`) | "Kapi durumu okunuyor..." | kapı özeti + kontrol listesi | `ErrorRegion` "Kapi durumu okunamadi" + "Yeniden dene" | `kind=timeout` | bölüm değişince unmount | `pages.test.tsx::renders the real write gate from /api/write-gate`, `::shows a persistent error with retry when the gate cannot be read` |
 | uygulama/servis bilgisi | kabuk `status` yüklü | prop (yeni istek yok) | — | aşama/mod/veritabanı/oturum taşıma | durum yoksa dürüst açıklama metni | — | — | `pages.test.tsx::shows the application and service facts from the backend status` |
-| yardım notu | — | — | — | "OpenCode Go baglantisi Paket G'de, kullanim kilavuzu Paket J'de eklenecek" | — | — | — | `pages.test.tsx::is honest about what arrives in later packages` |
+| yardım notu | — | — | — | "OpenCode Go baglantisi bu pakette acildi... kullanim kilavuzu Paket J'de"; tanı çıktısının redakte olduğu ve anahtarın oraya girmediği yazılır | — | — | — | `pages.test.tsx::is honest about what arrives in later packages` |
+| otomatik bağlantı okuma | bölüm seçili | `GET /api/opencode/status` (`fetchOpenCodeStatus`, 15 sn) | "Baglanti durumu okunuyor..." | `configured` + parmak izi + iki zaman damgası; **anahtar yok** | `ErrorRegion` "Baglanti durumu okunamadi" + "Yeniden dene" (yalnız okumayı tekrarlar) | `kind=timeout` aynı bölge | bölüm değişince unmount | `pages.test.tsx::never shows a stored key back, only a fingerprint` |
+| API anahtarı alanı (`PassphraseField`, `type=password`, `autoComplete="off"`) | anahtar kayıtlı değil **veya** "Anahtari degistir" basıldı | yalnız yerel React state | — | değer yalnız bileşen state'inde; panoya, bildirime, ölçüme, tanı çıktısına yazılmaz; tarayıcı tarafında hiçbir yere kaydedilmez | — | — | "Vazgec" alanı ve state'i siler | `pages.test.tsx::permits exactly one masked field, and it is the OpenCode provider key`, `OpenCodeConnectionPanel.test.tsx::uses no browser-side persistence for the key or the selection` |
+| "Anahtari kaydet" | alan boş değil, başka işlem uçuşta değil | `POST /api/opencode/credential` `{api_key}` (`storeOpenCodeCredential`, **20 sn**) | buton "Kaydediliyor..." + panelin bütün butonları disabled | anahtar **bir kez** gider; dönen durum "kaydedildi, doğrulanmadı"dır; input ve state anında temizlenir, alan ekrandan kalkar | `ErrorRegion` "Anahtar kaydedilemedi" — **sunucu düzyazısı düşürülür**, yerine `ApiError`'ın güvenli sınıf cümlesi konur (yansıtılan anahtar render edilmez); `onRetry` yok, kullanıcı butona kendi basar | `kind=timeout` aynı bölge; anahtar **hata durumunda** alanda kalır ki kullanıcı yeniden yazmak zorunda kalmasın | yok (sonuç beklenir) | `OpenCodeConnectionPanel.test.tsx::wipes the key from the field and from the document once it is stored`, `::keeps the redacted diagnostics payload free of the key when a store fails`, `::starts no second store while one is in flight` |
+| "Anahtari degistir" / "Vazgec" | anahtar kayıtlı | yalnız React state | — | maskeli alanı açar / kapatır ve state'i siler | — | — | — | `OpenCodeConnectionPanel.test.tsx::offers no control that reads a stored key back` |
+| "Baglantiyi denetle" | başka işlem uçuşta değil | `GET /api/opencode/status` (aynı okuma) | buton "Denetleniyor..." + hepsi disabled | **rozet üretmez.** En güçlü sonuç "Anahtar kaydedildi, dogrulanmadi" + gerekçelerin **tamamı** (çoğul liste). Yanına "yeni bir dogrulama uretmez" ve "Anahtarin bicimi dogru diye gecerli sayilmaz" yazılır | `ErrorRegion` "Baglanti durumu okunamadi" | `kind=timeout` aynı bölge | yok | `OpenCodeConnectionPanel.test.tsx::produces no verified verdict and no green badge from a check` |
+| "Baglantiyi kaldir" | anahtar kayıtlı | `POST /api/opencode/credential/forget` (boş gövde, 15 sn) | buton "Kaldiriliyor..." + hepsi disabled | `configured=false`; parmak izi ve zaman damgaları düşer | `ErrorRegion` "Anahtar kaldirilamadi" (düzyazı yine düşürülür); `onRetry` yok | `kind=timeout` aynı bölge | yok | `OpenCodeConnectionPanel.test.tsx::offers no control that reads a stored key back` |
+| "Modelleri yenile" | başka işlem uçuşta değil | `POST /api/opencode/catalog/refresh` (boş gövde, **90 sn**) | buton "Yenileniyor..." + hepsi disabled | katalog durumu + **listenin okunduğu an** + **son deneme** ayrı ayrı; `listing_caveat` birebir; `N listelendi · M secilebilir` | başarısızlık bir *durum*tur: "Listeye erisilemedi" + `detail (HTTP nnn)`; **eski liste ve tarihi silinmez**. Route hatası olursa `ErrorRegion` "Model listesi yenilenemedi" | `kind=timeout` aynı bölge | yok | `OpenCodeConnectionPanel.test.tsx::shows the cache date and the listing caveat`, `::reports a failed refresh without deleting the cache or its date`, `::starts no second refresh while one is in flight` |
+| model radyo grubu (`fieldset` + native `<input type="radio">`) | liste dolu | yalnız React state | — | model başına kimlik, sahip, protokol + eşleme doğrulaması, veri saklama + kaynak + **okunduğu tarih**, eğitim rozeti. **Eşlemesi olmayan model listelenir ama `disabled`'dır** ve "Secilemez: `<reason>`" görünür. Mount'ta **hiçbir model seçili değildir** | — | — | seçim değişince ek onay düşer | `OpenCodeConnectionPanel.test.tsx::lists an unmapped model but refuses to let it be selected, and says why`, `::preselects nothing, so a training model is never the default`, `::says an unknown retention is unknown rather than reassuring`, `::shows the data policy with its source and the date it was read`, `::does not invent a display name, a limit or tool support` |
+| eğitim onay kutusu (`Checkbox`) | seçilen model `requires_training_acknowledgement` | yalnız React state | — | işaretlenmeden "Modeli sec" `isDisabled`; kutunun yanında modelin yayımlanmış veri işleme koşulu + kaynak + tarih yazar | — | — | seçim değişince otomatik düşer | `OpenCodeConnectionPanel.test.tsx::requires an extra sharing consent before a training model can be chosen`, `::drops the consent when the pick changes` |
+| "Modeli sec" | seçili model `selectable`, gerekiyorsa onay işaretli, başka işlem uçuşta değil | `POST /api/opencode/model` `{model_id, training_acknowledged}` (`selectOpenCodeModel`, 15 sn) | buton "Seciliyor..." + hepsi disabled | "Secili model" satırı güncellenir; seçim **backend'de** yaşar, tarayıcıda değil | `ErrorRegion` "Model secilemedi" + **sunucunun gerekçesi birebir** (bu yol anahtar taşımaz, düzyazı korunur); sessiz ikame **yoktur** | `kind=timeout` aynı bölge | yok | `OpenCodeConnectionPanel.test.tsx::keeps a refusal to select as a refusal, with the server's reason`, `::says the selection is permanent but proves nothing about access` |
+| sözleşme notları (statik + backend metni) | bağlantı okundu | yok | — | `auth_header_caveat`, `deferral`, `shape_provenance` **birebir**; "akis: yok · arac cagrisi: yok"; "anahtarin bagli olmasi dosya paylasimi demek degildir" | — | — | — | `OpenCodeConnectionPanel.test.tsx::states that the auth header is an unverified assumption`, `::says streaming and tool calls are absent and why`, `::says a connected key is not permission to share files` |
+| kota ve maliyet bağlamı | bağlantı okundu | yok (`spending`) | — | yayımlanmış limitler olduğu gibi; `limit_behaviour`, `use_balance`, `local_counter_caveat`, `unknown_cost_sentence` birebir; "Butce bu surumde yok" | — | — | — | `OpenCodeConnectionPanel.test.tsx::never calls the subscription unlimited and never turns an unknown cost into zero` |
+
+### 8.3 Dürüstlük kuralları ve nasıl zorlandıkları
+
+Beşi de bir gözden geçirme alışkanlığı değil, koddaki bir yapı:
+
+1. **Yeşil rozet üretilemez.** `CHECK_TONE` tablosunda `ok` tonu **yoktur** ve
+   `check.state` tipinde `verified` **yoktur**. Rozet, tonun eksikliği
+   yüzünden basılamaz.
+2. **Bütçe açılamaz.** `budget_available` TS tarafında `false` *tipidir*;
+   panelde dallanma yoktur, çünkü bu yapının açık olabildiği bir durum yoktur.
+   `streaming_supported` ve `tool_calls_supported` de aynı biçimdedir, bu
+   yüzden "yok" kelimeleri kayamaz.
+3. **"Sınırsız" yazılamaz.** Cümleler backend'den birebir gelir ve backend
+   kendi cümlesini `assert_no_unlimited_claim` ile reddeder; frontend testi
+   ayrıca bütün belgede `sinirsiz`/`unlimited` aramaz olduğunu doğrular.
+4. **Bilinmeyen maliyet sıfır olmaz.** `unknown_cost_sentence` her zaman
+   görünür; panel hiçbir yerde aritmetik yapmaz.
+5. **Yansıtılan anahtar render edilmez.** Credential yolundaki hatalar
+   `withoutServerProse` ile yeniden kurulur: düzyazı yerine kararlı makine
+   kodu konur, `ApiError` kendi güvenli sınıf cümlesine düşer. `code`,
+   `status`, `kind` ve `request_id` korunur — yani **redakte tanı payload'ı
+   `{code,status,kind,request_id,section,timestamp}` olarak değişmez**; düşen
+   tek şey anahtarı taşıyabilecek alandır. Katalog ve model yolları düzyazıyı
+   korur, çünkü o iki istek kimlik bilgisi taşımaz ve "bu modelin protokol
+   eşlemesi yok" cümlesi reddin ta kendisidir.
+
+### 8.4 Bu bölümde bilerek olmayanlar
+
+- **Kaydedilmiş anahtarı gösteren, maskeleyen, kısmen açan veya kopyalayan
+  hiçbir kontrol yok** — çünkü onu döndürecek bir uç nokta da yok. Kullanıcı
+  parmak izini ve iki zaman damgasını görür.
+- **Ücretli bir probe butonu yok.** Gerçek küçük bir çağrının maliyetli
+  olabileceği yazılır, ama bu turda uygulanmaz (ADR-0005 §4).
+- **Tamamlama (completion) çağrısı yok.** O yürütücü paketinin işidir; buraya
+  bir buton koymak "Station kendiliğinden para harcamaz" iddiasına dipnot
+  eklerdi.
+- **Fallback yok.** Adreslenemeyen model bir reddir, sessiz bir ikame değil.
+- **Tarayıcı deposu yok** (SI-24): ne anahtar, ne seçilen model, ne "beni
+  hatırla". Seçim kalıcı bir ayardır ama kalıcılığı backend'dedir.
 
 ## 9. Bölüm kayıt defteri
 
@@ -514,8 +597,27 @@ Bu sözleşmenin kapsamadığı, bilinen ve bilinçli boşluklar:
    Genel Bakis'e döner.
 3. **İstek iptali yok** (§1.5) — zaman aşımı dışında uçuştaki bir istek
    durdurulamaz.
-4. **Tarayıcı QA yok** (ADR-0001 m.4) — bu haritadaki davranışlar Vitest +
-   jsdom ile kanıtlıdır; gerçek tarayıcı doğrulaması Paket J'dedir.
+4. **Tarayıcı QA artık var, ama bu haritanın tamamını kapsamıyor.**
+   *Değişiklik (4 Eylül 2026, ADR-0006):* bu madde daha önce "Tarayıcı QA yok
+   (ADR-0001 m.4) — gerçek tarayıcı doğrulaması Paket J'dedir" diyordu. O
+   cümle yazıldığı tarihte doğruydu; ADR-0001 §4 tarayıcı QA'sını bu döngüde
+   yasaklıyordu. Kullanıcı 4 Eylül 2026'da bunu **açıkça tersine çevirdi** ve
+   ADR-0006 kararı kayda geçti.
+   Bugünkü durum: `apps/station-web/e2e/` altında Playwright + Chromium ile
+   koşan bir tarayıcı paketi vardır ve **gerçek backend'e**, gerçek
+   production build'ine ve gerçek güvenlik başlıklarına karşı çalışır.
+   Kapsadıkları dardır ve bilinçlidir: gerçek CSP altında React Aria
+   inline-style hash'i (A1-R1), gerçek odak sırası ve focus trap, gerçek
+   klavye gezinmesi, `URL.createObjectURL` indirme yolu ve
+   `Content-Disposition` gidiş-dönüşü, composer'ın üç onayı, OpenCode anahtar
+   maskeleme, erişilebilirlik dumanı ve dış ağa **ölçülmüş** sıfır istek.
+   **Kapsamayanlar** aynı ölçüde önemlidir: bu haritadaki hata/loading/timeout
+   sözleşmesinin çoğu hâlâ yalnız Vitest + jsdom ile kanıtlıdır; tarayıcı
+   testleri onların yerine geçmez (ADR-0006 m.1). Gerçek kimlik oluşturma,
+   gerçek `.tcrec` üretimi, gerçek Technocore yazması ve canlı OpenCode
+   çağrısı tarayıcı QA'sında **yasaktır** ve edilmez. Bir tarayıcı testinin
+   geçmesi kullanıcı kabulü değildir; kabul hâlâ Paket J'dedir.
+   Ayrıntı: [`browser-qa.md`](browser-qa.md).
 5. **`outcome_unknown` uzlaştırması dar anlamlıdır** (ADR-0003 §4). Paket E
    kanıt okumasını açtı, ama `reconciliation_required` "kanıt yakalama
    denenebilir" demektir, "yeniden gönder" değil. `ComposerPanel`'in gönderim
@@ -547,6 +649,24 @@ kaybeder; `Input` bir mesajı taşıyamaz). Bileşen koda dokunulmadan önce
 standart `<textarea>` attribute'ları, `rows` prop'u ve `TextField` içinde
 çocuk olarak kullanılan belgelenmiş kompozisyon (etiket ve doğrulama durumu
 alanla birlikte kalsın diye). Yanında başka hiçbir bileşen eklenmedi.
+
+**Paket G de hiçbir bileşen eklemedi; küme 11'de kaldı.** Maskeli anahtar
+girişi için yeni bir bileşen gerekmedi: mevcut `PassphraseField` kalıbı
+(`TextField` + `Label` + `Input type="password"`) zaten tam olarak bu iş için
+incelenmişti; tek değişiklik `autoComplete` union'ının `"off"` ile
+genişletilmesidir. Bir sağlayıcı API anahtarı tarayıcının bildiği anlamda bir
+parola değildir; `"new-password"` bir parola yöneticisini bu değeri üretmeye
+ve saklamaya davet ederdi ve anahtar bu uygulamanın göremediği bir yere
+düşerdi. Union `string`'e açılmadı, üç değere genişletildi ki izin verilen
+değerler çağrı yerinde sayılı kalsın.
+
+Model seçici için `Select`/`Autocomplete` **kullanılmadı**: ikisi de
+allowlist'in dışında ve kümeyi 12-13'e çıkarırdı. Onların yerine
+`IdentityDialogs.tsx`'teki mevcut radio-fieldset kalıbı kullanıldı — üstelik
+bu kalıp burada daha doğru: her satır modelin protokolünü, eşleme
+doğrulamasını, veri saklama koşulunu ve seçilemiyorsa **nedenini** taşımak
+zorunda ve bunlar bir `<option>` etiketine sığmaz. Seçilemeyen model
+`disabled` bir radyo olarak listelenir, nedeni yanında görünür.
 
 **Paket E hiçbir bileşen eklemedi; küme 11'de kaldı.** Kanıt defteri
 `Card` + `Alert` + `Separator` + `Button` + `Checkbox` ve `StatusPill`

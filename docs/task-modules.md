@@ -17,10 +17,10 @@ Bir modül `station_api/modules/registry.py` içinde **derleme zamanında sabit*
 bir kayıttır. Sorumlu kod yerinde durur; registry ona işaret eder.
 
 **Proje 0 taşınmadı.** Keşif fiziksel taşımanın bedelini saydı: en az altı
-test modül yollarını adıyla pinliyor (`OUTBOUND_CLIENT_MODULES`
-`technocore/` dizinini adıyla sabitliyor, `test_write_gate.py` literal yol
-kullanıyor, üç yerde route kümesi denetleniyor) ve karşılığında hiçbir
-davranış kazanılmıyordu. Kayıt, sahibi olan modülleri `owners` alanında
+test modül yollarını adıyla pinliyor (o tarihte `OUTBOUND_CLIENT_MODULES`
+`technocore/` dizinini adıyla sabitliyordu — bugün kaynak köküne göreli tam
+yolla —, `test_write_gate.py` literal yol kullanıyor, üç yerde route kümesi
+denetleniyor) ve karşılığında hiçbir davranış kazanılmıyordu. Kayıt, sahibi olan modülleri `owners` alanında
 adlandırır ve bir test her adın gerçekten bir dosyaya çözüldüğünü doğrular —
 kaybolmuş bir hedefe işaret eden kayıt, kayıt olmayandan kötüdür.
 
@@ -265,9 +265,11 @@ Paket H2'ye ertelenmiştir.
 
 ADR-0004 §2'nin yasakladığı üç kopyalama:
 
-- **Yeni HTTP istemcisi yok.** `OUTBOUND_CLIENT_MODULES` üçte kilitli kalır;
-  `modules/` ve `tasks/` paketlerinde `httpx`, `socket`, `urllib` veya
-  herhangi bir giden istemci import'u yoktur (testle).
+- **Yeni HTTP istemcisi yok.** `modules/` ve `tasks/` paketlerinde `httpx`,
+  `socket`, `urllib` veya herhangi bir giden istemci import'u yoktur (testle).
+  (`OUTBOUND_CLIENT_MODULES` bu yazıldığında üçte kilitliydi; Paket G
+  OpenCode bağlantısı için bilinçli olarak dördüncüyü açtı — orada, buradan
+  değil.)
 - **İkinci vault/signer yok.** İki paket de `station_api.vault` ve
   `station_api.compose` sınırına dokunmaz (testle).
 - **İkinci gate yok.** `tasks/gate.py` `write_gate.evaluate()`'in saf-fonksiyon

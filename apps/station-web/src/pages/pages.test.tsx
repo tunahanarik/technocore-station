@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -10,6 +10,7 @@ import type {
   ConformanceStatus,
   EvidenceList,
   IdentityStatus,
+  OpenCodeStatus,
   TechnocoreStatus,
 } from "../api/types";
 import { ComposeVerifyPage } from "./ComposeVerifyPage";
@@ -351,6 +352,69 @@ const AUDIT_EMPTY: AuditChainStatus = {
  * request with the identity payload would make the other panels render from
  * the wrong shape and quietly pass.
  */
+//: TEST-ONLY OpenCode fixture. No key is configured, so the settings screen
+//: renders its one masked field and the narrowed promise can be asserted.
+const OPENCODE_UNCONFIGURED: OpenCodeStatus = {
+  configured: false,
+  fingerprint_short: "",
+  configured_at: null,
+  updated_at: null,
+  check: {
+    state: "not_configured",
+    reasons: ["Anahtar kaydedilmedi."],
+    detail: "Saglayici anahtari kaydedilmedi.",
+  },
+  selected_model: "",
+  auth_header_caveat:
+    "Kimlik dogrulama basligi resmi belgede yayimlanmamistir. Station yaygin uygulamayi izleyerek 'Authorization: Bearer' gonderir; bu bir varsayimdir ve dogrulanmamistir.",
+  catalog: {
+    state: "never_fetched",
+    fetched_at: null,
+    models_fetched_at: null,
+    detail: "",
+    http_status: 0,
+    models: [],
+    model_count: 0,
+    selectable_count: 0,
+    unmapped_count: 0,
+    listing_caveat:
+      "Bu liste saglayicinin acik katalogudur ve anahtarsiz da yanit verir. Bir modelin listelenmesi, bu hesabin onu cagirabildigi anlamina gelmez.",
+    table_provenance:
+      "Protokol eslemesi bu surumde sabit: 27 satirlik tablo 2026-09-04 tarihinde okundu ve kaynak sayfanin o gunku altbilgisi '2026-09-03' diyordu. Kaynak o tarihten sonra degismis olabilir; Station sayfayi kendiliginden yeniden okumaz.",
+    drift_notice: "",
+  },
+  spending: {
+    budget_available: false,
+    limits: [{ window: "hafta", amount_usd: 30, note: "Haftalik yayimlanmis ust sinir." }],
+    limit_behaviour:
+      "Yayimlanmis sinir dolunca saglayici ucretsiz modellere duser veya tercihe gore Zen bakiyesinden dusurur.",
+    use_balance:
+      "'Use balance' tercihi saglayicinin kendi konsolundadir ve API uzerinden sorgulanamaz. Station bu ayari degistirmez ve engelledigini iddia etmez.",
+    local_counter_caveat:
+      "Yerel sayac yalnizca bu kurulumun gonderdigini sayar. Paylasilan bir abonelikte gercek kullanimi kanitlamaz.",
+    unknown_cost_sentence:
+      "Token ve maliyet bilgisi saglayicidan gelmedi; bilinmiyor. Sifir yazilmaz.",
+  },
+  protocol_context: {
+    protocols: ["responses", "messages", "chat_completions"],
+    streaming_supported: false,
+    tool_calls_supported: false,
+    deferral:
+      "Akis (streaming) ve arac cagrisi bu surumde yoktur: resmi belgede bu iki bicimin sozlesmesi yayimlanmamis, tahmin edilmemistir.",
+    shape_provenance:
+      "Uc protokol ailesinin govde bicimi OpenCode belgelerinde yayimlanmis degildir.",
+  },
+};
+
+function jsonOk(body: unknown): Promise<Response> {
+  return Promise.resolve(
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }),
+  );
+}
+
 function stubIdentity(
   status: IdentityStatus,
   conformance: ConformanceStatus | null = CONFORMANT,
@@ -398,6 +462,10 @@ function stubIdentity(
             headers: { "Content-Type": "application/json" },
           }),
         );
+      }
+
+      if (url.includes("/api/opencode/")) {
+        return jsonOk(OPENCODE_UNCONFIGURED);
       }
 
       if (url.includes("/api/write-gate")) {
@@ -1434,6 +1502,22 @@ describe("Restore-test file picker", () => {
   });
 });
 
+/**
+ * The write gate's own error alert.
+ *
+ * Needed because the settings screen now has two independent readers - the
+ * write gate and the OpenCode connection - and both render an `ErrorRegion`
+ * with a "Yeniden dene" button when the network is down. A page-wide query
+ * for that button would match either one and silently assert about the wrong
+ * component.
+ */
+async function gateErrorRegion(): Promise<HTMLElement> {
+  const title = await screen.findByText("Kapi durumu okunamadi");
+  const region = title.closest('[role="alert"]');
+  if (region === null) throw new Error("gate error region not found");
+  return region as HTMLElement;
+}
+
 describe("Ayarlar ve Yardim surface", () => {
   it("hosts the theme control and says the choice is not persisted", async () => {
     stubIdentity(NO_IDENTITY);
@@ -1468,14 +1552,20 @@ describe("Ayarlar ve Yardim surface", () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new TypeError("Failed to fetch"))));
     render(<SettingsHelpPage status={null} />);
 
-    expect(await screen.findByText("Kapi durumu okunamadi")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Yeniden dene" })).toBeInTheDocument();
+    // Scoped to the gate's own alert: the OpenCode panel below fails on the
+    // same stubbed rejection and offers its own retry, and a page-wide query
+    // would now match both.
+    const region = await gateErrorRegion();
+    expect(within(region).getByRole("button", { name: "Yeniden dene" })).toBeInTheDocument();
   });
 
   it("disables the gate retry while the retry is in flight", async () => {
     // This page had no loading state at all, so its retry could be clicked
     // repeatedly and start a request each time.
-    let calls = 0;
+    // Routed by URL rather than by call ordinal: the OpenCode panel reads its
+    // own endpoint on mount, so counting every fetch would count that one too
+    // and the assertion would stop being about the gate's retry.
+    let gateCalls = 0;
     let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -1483,9 +1573,12 @@ describe("Ayarlar ve Yardim surface", () => {
 
     vi.stubGlobal(
       "fetch",
-      vi.fn(() => {
-        calls += 1;
-        if (calls === 1) return Promise.reject(new TypeError("Failed to fetch"));
+      vi.fn((input: RequestInfo | URL) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes("/api/opencode/")) return jsonOk(OPENCODE_UNCONFIGURED);
+        gateCalls += 1;
+        if (gateCalls === 1) return Promise.reject(new TypeError("Failed to fetch"));
         return gate.then(
           () =>
             new Response(JSON.stringify(NO_IDENTITY.gate), {
@@ -1499,14 +1592,14 @@ describe("Ayarlar ve Yardim surface", () => {
     const user = userEvent.setup();
     render(<SettingsHelpPage status={null} />);
 
-    await screen.findByText("Kapi durumu okunamadi");
-    await user.click(screen.getByRole("button", { name: "Yeniden dene" }));
+    const region = await gateErrorRegion();
+    await user.click(within(region).getByRole("button", { name: "Yeniden dene" }));
 
-    const busy = await screen.findByRole("button", { name: "Yeniden deneniyor..." });
+    const busy = await within(region).findByRole("button", { name: "Yeniden deneniyor..." });
     expect(busy).toBeDisabled();
-    const callsAfterRetry = calls;
+    const callsAfterRetry = gateCalls;
     fireEvent.click(busy);
-    expect(calls).toBe(callsAfterRetry);
+    expect(gateCalls).toBe(callsAfterRetry);
 
     release();
     expect(await screen.findByText("Dis yazma kapali")).toBeInTheDocument();
@@ -1518,16 +1611,62 @@ describe("Ayarlar ve Yardim surface", () => {
     await screen.findByText("Guvenlik kapilari");
 
     const text = container.textContent ?? "";
-    expect(text).toContain("OpenCode Go baglantisi Paket G'de");
+    // The OpenCode row moved from "arrives later" to "is here"; the guide has
+    // not, and the copy must not promote it early.
+    expect(text).toContain("OpenCode Go baglantisi bu pakette acildi");
     expect(text).toContain("kullanim kilavuzu Paket J'de");
   });
 
-  it("offers no secret input anywhere", async () => {
+  /**
+   * The promise this page makes about secrets, and the one narrow hole in it.
+   *
+   * This assertion used to be "no password input at all". Paket G opened the
+   * OpenCode connection here, so the promise was rewritten in the copy and
+   * this test was **narrowed rather than deleted**: the page may contain
+   * exactly one masked field, that field must be the provider API key, and
+   * every other kind of secret field must still be absent. A weaker version
+   * of this test - "at least one password input exists", or no test at all -
+   * would let a second one appear without anybody noticing.
+   */
+  it("permits exactly one masked field, and it is the OpenCode provider key", async () => {
+    stubIdentity(NO_IDENTITY);
+    const { container } = render(<SettingsHelpPage status={APP_STATUS} />);
+    await screen.findByText("Guvenlik kapilari");
+    await screen.findByText("Baglanti denetimi");
+
+    const masked = container.querySelectorAll('input[type="password"]');
+    expect(masked).toHaveLength(1);
+    expect(screen.getByLabelText("OpenCode Go API anahtari")).toBe(masked[0]);
+    // Not bound to a saved-password autofill, and not offered for generation.
+    expect(masked[0]).toHaveAttribute("autocomplete", "off");
+
+    // Still no field for anything the exception does not cover.
+    for (const forbidden of [/seed/i, /private key/i, /recovery/i, /kurtarma/i, /kasa parolasi/i]) {
+      expect(screen.queryByLabelText(forbidden)).toBeNull();
+    }
+    expect(container.querySelectorAll("textarea")).toHaveLength(0);
+  });
+
+  it("says the exception is only the provider key and covers no seed or recovery", async () => {
     stubIdentity(NO_IDENTITY);
     const { container } = render(<SettingsHelpPage status={APP_STATUS} />);
     await screen.findByText("Guvenlik kapilari");
 
-    expect(container.querySelector('input[type="password"]')).toBeNull();
-    expect(container.querySelectorAll("textarea")).toHaveLength(0);
+    const text = container.textContent ?? "";
+    expect(text).toContain("DID seed");
+    expect(text).toContain("hicbir istisna yoktur");
+    expect(text).toContain("Tek istisna asagidaki OpenCode Go saglayici API anahtaridir");
+    expect(text).toContain("kaydedildikten sonra alandan ve bellekten silinir");
+  });
+
+  it("never shows a stored key back, only a fingerprint", async () => {
+    stubIdentity(NO_IDENTITY);
+    render(<SettingsHelpPage status={APP_STATUS} />);
+    await screen.findByText("Baglanti denetimi");
+
+    expect(
+      screen.getByText(/Kaydedilmis anahtari gosteren veya kopyalayan bir kontrol/),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /anahtari (goster|kopyala)/i })).toBeNull();
   });
 });

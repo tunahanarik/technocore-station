@@ -23,11 +23,20 @@ and needing the OS - not a fixture - to refuse.
 
 from __future__ import annotations
 
+import ast
 import socket
 import urllib.request
+from pathlib import Path
 
 import httpx
 import pytest
+from station_api.opencode import client as client_module
+from station_api.opencode.client import OpenCodeClient
+from station_api.opencode.errors import (
+    OpenCodeError,
+    OpenCodeLostResponseError,
+    OpenCodeRequestError,
+)
 from station_api.technocore.client import ReadOnlyTechnocoreClient
 from station_api.technocore.errors import SourceFetchError
 from station_api.technocore.sources import SourceId, get_source
@@ -89,6 +98,65 @@ def test_the_guard_is_not_swallowed_by_the_read_clients_error_handling() -> None
     assert not issubclass(OutboundNetworkBlockedError, httpx.TransportError)
     assert not issubclass(OutboundNetworkBlockedError, httpx.TimeoutException)
     assert not issubclass(OutboundNetworkBlockedError, SourceFetchError)
+
+
+def test_an_opencode_client_with_no_mock_transport_fails_loudly() -> None:
+    """The fourth outbound surface, probed like the other three.
+
+    Worth its own probe rather than trusting the pattern: this is the one
+    client that carries a credential, so a forgotten mock here would not just
+    contact a live service, it would contact one *with a key attached*. The
+    catalog fetch is the free, unauthenticated call and is still refused,
+    which is the point - the guard is about leaving the machine, not about
+    what the request costs.
+    """
+    client = OpenCodeClient(sleep=lambda _: None)
+
+    with pytest.raises(OutboundNetworkBlockedError):
+        client.fetch_catalog()
+
+
+def test_the_guard_is_not_swallowed_by_the_opencode_clients_error_handling() -> None:
+    """The twin of the read client's property, for the client that pays.
+
+    ``fetch_catalog`` turns ``httpx.TransportError`` into an
+    ``OpenCodeRequestError`` and retries once; ``post_completion`` turns the
+    same thing into ``OpenCodeLostResponseError``. Either handler would have
+    absorbed an httpx-shaped block into a plausible three-line failure
+    message and the missing mock would never have been noticed.
+    """
+    for absorbed in (
+        OpenCodeError,
+        OpenCodeRequestError,
+        OpenCodeLostResponseError,
+        httpx.TransportError,
+        httpx.TimeoutException,
+    ):
+        assert not issubclass(OutboundNetworkBlockedError, absorbed)
+
+
+def test_the_opencode_client_catches_nothing_that_could_hide_the_guard() -> None:
+    """The assumption behind the probe above, pinned where it can rot.
+
+    A guard is only as good as the assumption behind it. If ``fetch_catalog``
+    ever grew a bare ``except Exception`` the probe would keep passing while
+    testing nothing, so the handled types are read off the source and
+    checked to be the narrow ones.
+    """
+    source = Path(client_module.__file__ or "").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ExceptHandler):
+            continue
+        assert node.type is not None, "a bare except would swallow the guard"
+        names = (
+            [ast.unparse(element) for element in node.type.elts]
+            if isinstance(node.type, ast.Tuple)
+            else [ast.unparse(node.type)]
+        )
+        for name in names:
+            assert name not in {"Exception", "BaseException", "AssertionError"}, name
 
 
 def test_a_write_client_with_no_mock_transport_fails_loudly() -> None:

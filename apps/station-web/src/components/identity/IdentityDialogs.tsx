@@ -44,12 +44,21 @@ interface DialogProps {
 }
 
 /**
- * A labelled passphrase input. Never bound to a saved-password autofill.
+ * A labelled masked input. Never bound to a saved-password autofill.
  *
  * Exported because the composer asks for the same vault passphrase at the
- * moment it signs, and a second implementation of "the field that holds a
- * passphrase" is exactly where the no-storage, no-autofill rule would drift.
- * The value stays in the caller's local state; this component keeps none.
+ * moment it signs, and the settings surface asks for the OpenCode provider
+ * key. A second implementation of "the field that holds a secret" is exactly
+ * where the no-persistence, no-autofill rule would drift. The value stays in
+ * the caller's local state; this component keeps none.
+ *
+ * `autoComplete` gained `"off"` in Paket G. A provider API key is not a
+ * passphrase for anything the browser has a concept of: `"new-password"`
+ * invites a password manager to offer to generate and save one, which for a
+ * value the user must copy from a provider console is both wrong and a way
+ * for the key to end up somewhere this app cannot see. The union is widened
+ * rather than typed as `string`, so the three permitted values stay
+ * enumerated at the call site.
  */
 export function PassphraseField({
   label,
@@ -61,7 +70,7 @@ export function PassphraseField({
   readonly label: string;
   readonly value: string;
   readonly onChange: (next: string) => void;
-  readonly autoComplete: "new-password" | "current-password";
+  readonly autoComplete: "new-password" | "current-password" | "off";
   readonly describedBy?: string;
 }) {
   return (

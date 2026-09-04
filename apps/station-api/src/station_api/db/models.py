@@ -654,3 +654,92 @@ class RecoveryRecord(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"RecoveryRecord(id={self.id!r}, verified={self.verified_at is not None})"
+
+
+class OpenCodeCredentialMetadata(Base):
+    """Facts *about* the stored provider credential. Never the credential.
+
+    The ``secret_metadata`` pattern, applied to the second thing this
+    application holds that is worth stealing. Three columns and no fourth:
+    where the envelope is (relative to the data directory, never absolute -
+    SI-36), when it was written, and a fingerprint that names the value
+    without revealing it.
+
+    There is no column here, and no endpoint anywhere, that returns or copies
+    the credential itself. ``updated_at`` moves because a provider key is
+    replaceable, which is the one deliberate difference from the audit
+    chain's never-overwrite rule (ADR-0005 7).
+    """
+
+    __tablename__ = "opencode_credential_metadata"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    envelope_relpath: Mapped[str] = mapped_column(Text, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"OpenCodeCredentialMetadata(id={self.id!r})"
+
+
+class OpenCodeCatalogCheck(Base):
+    """One user-initiated read of the public model catalog.
+
+    The ``official_source_snapshot`` shape: what we asked for, what came
+    back, and a bounded excerpt kept for human review and never returned over
+    HTTP. The catalog answers without a credential, so a row here proves a
+    document was readable and nothing at all about whether the stored
+    credential is valid.
+    """
+
+    __tablename__ = "opencode_catalog_check"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: ok | fetch_error | parse_error
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: 0 when the request never produced a status (DNS, TLS, timeout).
+    http_status: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    byte_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    model_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: Bounded and control-character-swept. Kept for human review; never
+    #: returned over HTTP.
+    snapshot_excerpt: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"OpenCodeCatalogCheck(id={self.id!r}, state={self.state!r})"
+
+
+class OpenCodeModelSnapshot(Base):
+    """One catalog row as it arrived, joined to what this build knows.
+
+    ``selectable`` and ``protocol`` are written from the **compile-time**
+    table, never from the document: a fetched catalog cannot make a model
+    addressable, which is the property ADR-0005 5 is about.
+    """
+
+    __tablename__ = "opencode_model_snapshot"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    check_id: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("opencode_catalog_check.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    model_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    owned_by: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    #: The provider's own stamp when it sent one; NULL when it did not.
+    created_stamp: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    selectable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    protocol: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    mapping_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    training_use: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown")
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return (
+            f"OpenCodeModelSnapshot(model_id={self.model_id!r}, "
+            f"selectable={self.selectable!r})"
+        )

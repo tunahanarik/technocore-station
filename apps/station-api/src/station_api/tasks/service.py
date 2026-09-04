@@ -6,9 +6,11 @@ Its dependencies arrive through the constructor - the ``ComposeService``
 pattern - and it creates none of them. Three duplications are ruled out by
 name and this module honours all three:
 
-* **no new HTTP client.** ``OUTBOUND_CLIENT_MODULES`` is locked at three, and
-  nothing in :mod:`station_api.tasks` imports an HTTP client, opens a socket
-  or reaches an outbound registry. The package has no outbound surface at all.
+* **no new HTTP client.** Nothing in :mod:`station_api.tasks` imports an HTTP
+  client, opens a socket or reaches an outbound registry; the package has no
+  outbound surface at all. (``OUTBOUND_CLIENT_MODULES`` was locked at three
+  when this was written and Package G opened a fourth for the OpenCode
+  connection - deliberately, in that package, and not from here.)
 * **no second vault or signer.** Nothing here touches key material. The
   service stores identifiers and verdicts, never bytes that were signed.
 * **no second gate.** :mod:`station_api.tasks.gate` follows

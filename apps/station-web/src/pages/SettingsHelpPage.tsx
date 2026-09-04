@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { type ApiError, fetchWriteGate, toApiError } from "../api/client";
 import type { AppStatus, WriteGateStatus } from "../api/types";
 import { ErrorRegion } from "../components/ErrorRegion";
+import { OpenCodeConnectionPanel } from "../components/opencode/OpenCodeConnectionPanel";
 import { StatusPill } from "../components/StatusPill";
 import { ThemeToggle } from "../components/ThemeToggle";
 
@@ -14,6 +15,17 @@ import { ThemeToggle } from "../components/ThemeToggle";
  * The write-gate block reads the dedicated `/api/write-gate` endpoint - the
  * same evaluation the backend applies before any outward write - rather than
  * restating the roadmap in frontend copy.
+ *
+ * Paket G revised a promise this page used to make. It said, flatly, that
+ * there was deliberately no secret input or display anywhere on this screen,
+ * and a test held it there. That is no longer true: the OpenCode connection
+ * panel below takes a provider API key. The sentence was rewritten rather
+ * than deleted, and the test was **narrowed rather than dropped** - the page
+ * may now contain exactly one masked field and it must be the provider key.
+ * The exception is only ever the provider key: there is still no frontend
+ * field, anywhere in this app, that accepts or shows a DID seed, a private
+ * key or a recovery secret, and ADR-0001 6 authorised exactly this width and
+ * no more.
  */
 
 interface SettingsHelpPageProps {
@@ -159,14 +171,32 @@ export function SettingsHelpPage({ status }: SettingsHelpPageProps) {
             <Alert.Content>
               <Alert.Title>Secret bu bilgisayardan cikmaz</Alert.Title>
               <Alert.Description>
-                Seed yalniz yerelde kalir ve Windows DPAPI ile korunur. Hicbir
-                ayar bu davranisi degistiremez; bu ekranda bilerek hicbir secret
-                giris veya gosterim alani yoktur.
+                <span className="flex flex-col gap-2">
+                  <span>
+                    Seed yalniz yerelde kalir ve Windows DPAPI ile korunur.
+                    Hicbir ayar bu davranisi degistiremez. DID seed&apos;i,
+                    private key ve recovery parolasi icin frontend&apos;de
+                    hicbir istisna yoktur: bunlari kabul eden veya gosteren bir
+                    alan bu ekranda da, uygulamanin hicbir yerinde de
+                    bulunmaz.
+                  </span>
+                  <span>
+                    Tek istisna asagidaki OpenCode Go saglayici API
+                    anahtaridir. Bu ekranin daha once verdigi &quot;hicbir
+                    secret giris alani yoktur&quot; sozu bu paketle bilerek
+                    daraltilarak yeniden yazildi: anahtar maskeli bir alana bir
+                    kez yazilir, ayni-origin yerel servise bir kez iletilir,
+                    kaydedildikten sonra alandan ve bellekten silinir ve hicbir
+                    yoldan geri gosterilemez.
+                  </span>
+                </span>
               </Alert.Description>
             </Alert.Content>
           </Alert>
         </Card.Content>
       </Card>
+
+      <OpenCodeConnectionPanel />
 
       <Card>
         <Card.Header>
@@ -174,10 +204,13 @@ export function SettingsHelpPage({ status }: SettingsHelpPageProps) {
         </Card.Header>
         <Card.Content>
           <p className="text-sm text-muted">
-            OpenCode Go baglantisi Paket G'de, kullanim kilavuzu Paket J'de
-            eklenecek. Su an icin her bolum kendi aciklamasini tasir; sorun
-            bildirirken hata kutusundaki &quot;Tani bilgisini kopyala&quot;
-            ciktisini kullanin.
+            OpenCode Go baglantisi bu pakette acildi; kullanim kilavuzu Paket
+            J&apos;de eklenecek. Su an icin her bolum kendi aciklamasini tasir;
+            sorun bildirirken hata kutusundaki &quot;Tani bilgisini
+            kopyala&quot; ciktisini kullanin. O cikti bilerek redaktedir:
+            yalnizca hata kodu, HTTP durumu, hata sinifi, istek kimligi, bolum
+            adi ve zaman damgasi tasir - saglayici anahtari oraya hicbir
+            kosulda girmez.
           </p>
         </Card.Content>
       </Card>
