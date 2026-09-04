@@ -224,6 +224,45 @@ _PROJECT_ZERO_REQUIREMENTS: tuple[ModuleRequirement, ...] = (
 )
 
 
+#: What Package H1 undertook to establish for the work-scan module, in the
+#: order ADR-0007 argues them. The third is ``implemented=False`` and that is
+#: the honest half again: a scan can propose work and this build cannot price
+#: it, because there is no budget anywhere in the product yet (ADR-0007 8).
+_WORK_SCAN_REQUIREMENTS: tuple[ModuleRequirement, ...] = (
+    ModuleRequirement(
+        key="scan_surface_closed",
+        detail=(
+            "Tarama yalnizca kapali bir adres registry'sinden okur, oda adi "
+            "yazma yolunun politikasindan gecer ve zamanlayici yoktur."
+        ),
+        evidence=EvidenceField.TASK_OUTCOME,
+        stage="H1",
+        implemented=True,
+    ),
+    ModuleRequirement(
+        key="candidate_carries_its_source",
+        detail=(
+            "Her aday birebir alinti ile oda, sira ve zaman referansini "
+            "tasir; tasimayan aday uretilemez."
+        ),
+        evidence=EvidenceField.TASK_OUTCOME,
+        stage="H1",
+        implemented=True,
+    ),
+    ModuleRequirement(
+        key="effort_budget_enforced",
+        detail=(
+            "Bir adayin calisma maliyeti olculur ve bir butce tavaniyla "
+            "karsilastirilir. Bu surumde butce yoktur; tahmin tahmin olarak "
+            "etiketlenir ve hicbir kod yolu bir tavan uygulamaz."
+        ),
+        evidence=EvidenceField.TEST_RESULT,
+        stage="H2",
+        implemented=False,
+    ),
+)
+
+
 #: The complete set. Adding a module means editing this tuple, which is a
 #: reviewable change; nothing computes a record at runtime.
 MODULES: tuple[ModuleRecord, ...] = (
@@ -250,10 +289,19 @@ MODULES: tuple[ModuleRecord, ...] = (
         id=ModuleId.WORK_SCAN,
         name="Is Tara",
         purpose="Kapali kaynak registry'sinden salt okunur is/firsat taramasi.",
-        state=ModuleState.PLANNED,
-        owners=(),
-        requirements=(),
-        available_from="H1",
+        # Package H1 wrote the owning code, so the record stops saying it does
+        # not exist. Flipping this is the deliberate half of opening a
+        # ``planned`` module: the state, the owners and the requirements all
+        # move together, and a reviewer sees one change rather than a record
+        # that quietly disagrees with the tree beside it.
+        state=ModuleState.AVAILABLE,
+        owners=(
+            "station_api.workscan.service",
+            "station_api.workscan.client",
+            "station_api.workscan.candidates",
+            "station_api.workscan.targets",
+        ),
+        requirements=_WORK_SCAN_REQUIREMENTS,
     ),
     ModuleRecord(
         id=ModuleId.AGENT_WORKSPACE,

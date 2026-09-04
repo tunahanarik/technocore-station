@@ -36,6 +36,7 @@ from station_api.routes import identity as identity_routes
 from station_api.routes import opencode as opencode_routes
 from station_api.routes import session as session_routes
 from station_api.routes import technocore as technocore_routes
+from station_api.routes import workscan as workscan_routes
 from station_api.security.middleware import (
     CsrfMiddleware,
     FetchMetadataMiddleware,
@@ -57,6 +58,7 @@ from station_api.technocore.service import TechnocoreService
 from station_api.technocore.write_client import SignedWriteClient
 from station_api.vault import DpapiVault
 from station_api.vault.errors import VaultError
+from station_api.workscan.service import WorkScanService
 
 _log = logging.getLogger(__name__)
 
@@ -187,6 +189,7 @@ def create_app(
     signer: MessageSigner | None = None,
     evidence: EvidenceService | None = None,
     opencode: OpenCodeService | None = None,
+    workscan: WorkScanService | None = None,
 ) -> FastAPI:
     """Build the application.
 
@@ -298,6 +301,14 @@ def create_app(
         engine=engine, data_dir=settings.data_dir
     )
 
+    # The work scan (ADR-0007). Built unconditionally, because building it
+    # contacts nobody: the constructor stores a client and a task service and
+    # makes no request. Nothing here reads a room, fetches the room overview
+    # or starts a timer at launch - there is no timer in the package at all -
+    # and a test counts the outbound attempts during ``create_app`` rather
+    # than taking this comment's word for it.
+    app.state.workscan = workscan or WorkScanService(tasks=app.state.tasks)
+
     app.include_router(session_routes.router)
     app.include_router(api_routes.router)
     app.include_router(identity_routes.router)
@@ -307,6 +318,7 @@ def create_app(
     app.include_router(compose_routes.router)
     app.include_router(evidence_routes.router)
     app.include_router(opencode_routes.router)
+    app.include_router(workscan_routes.router)
 
     # Registered last so it cannot shadow /api or /session.
     if web_dist is not None:

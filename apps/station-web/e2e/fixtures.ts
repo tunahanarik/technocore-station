@@ -297,6 +297,9 @@ export async function gotoSection(page: Page, label: string): Promise<void> {
 /** Every section the navigation offers, in navigation order. */
 export const SECTION_LABELS = [
   "Genel Bakis",
+  // Opened by Paket H1 (ADR-0007 9). Every loop over this list - the
+  // accessibility pass, the CSP pass and the tab order - now covers it.
+  "Is Tara",
   "Kimlik ve Guvenlik",
   "Olustur ve Dogrula",
   "Kaynaklar",

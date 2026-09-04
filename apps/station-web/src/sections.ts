@@ -43,11 +43,14 @@ export const SECTIONS: readonly SectionDefinition[] = [
     ready: true,
   },
   {
-    // Paket H1 (Work Scan) ile acilir. O gelene kadar nav'da gorunmez.
+    // Paket H1 (Work Scan) ile acildi (ADR-0007 9). Kullanicinin sectigi acik
+    // odalar bir kez okunur; zamanlayici, arka plan gorevi ve otomatik
+    // yenileme yoktur ve butun oda evreni hicbir zaman taranmaz.
     id: "work-scan",
     label: "Is Tara",
-    purpose: "Kapali kaynak registry'sinden salt okunur is/firsat taramasi.",
-    ready: false,
+    purpose:
+      "Kullanicinin sectigi acik odalarin salt okunur, tek seferlik taramasi ve kural tabanli aday cikarimi.",
+    ready: true,
   },
   {
     // Paket F / H2 (gorev modulu + agent calisma ortami) ile acilir.

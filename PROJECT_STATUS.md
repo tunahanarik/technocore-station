@@ -1301,15 +1301,51 @@ Tarayici QA: [`ADR-0006`](docs/decisions/0006-tarayici-qa-kapsama-alindi-2026-09
       hook'u tarafindan yazmaya kapali); telafi olarak `tsc -b` kapsiyor ve
       bir suite-discipline testi disiplini zorluyor.
 
-## Sonraki asama: Asama 8 - H1 Work Scan (yararli is bulma)
+### Paket H1 - Work Scan (Asama 8)
 
-Asama 4 ile giden yazma yolu, 5 ile kanit defteri, 6 ile modul registry'si
-ve gorev durum makinesi, 7 ile saglayici baglantisi acildi; fakat **gercek
-servise hicbir istek gonderilmedi** ve **hicbir ucretli cagri yapilmadi** -
-her sey mock tasiyiciya karsi, autouse ag kesici altinda kostu. Kullanicinin
-gercek API anahtari okunmadi, istenmedi ve kullanilmadi.
+Kapsam kararlari:
+[`ADR-0007`](docs/decisions/0007-paket-h1-kapsam-kararlari-2026-09-04.md).
 
-Butce/izin siniri H2'ye, public paylasim H3'e ertelenmis kalir.
+- [x] **Kibble'a hicbir istek atilmadi, istemci yazilmadi.** Okuma
+      endpoint'leri belgelenmis ama `job` semasi, sayfalama, rate limit,
+      kullanim kosullari ve isletmeci **dogrulanamadi**; `/api/board`
+      sayfalamasiz ~77 bin kayitla 60 sn'de timeout oldu. Sema bilinmeden
+      adapter yazmak alan adi uydurmaktir. `support_unverified` kaydi;
+      `adapter_written`/`contacted` turetilmis ozellik ve daima `False`.
+      Servisin kendi cumlesi: "Kibble is not FLOP Network and not
+      Technocore. It settles nothing."
+- [x] **Aday uretimi deterministik**; model cagrisi H2'ye ertelendi.
+      Gerekce yalniz harcama yasagi degil: deterministik cikarimda
+      uydurulacak alan yoktur. Bedeli kullaniciya **gosteriliyor**.
+- [x] **Sekiz oge yapisal olarak zorunlu** — eksik aday insa edilemiyor;
+      "tahmin" etiketi dusurulemez; sekizinci ogede **hicbir boolean yok**
+      ve UI'da "acik/kapali" rozeti yok.
+- [x] **Dorduncu kapali registry + besinci istemci.** `/r/events` kapsam
+      disi (sema `parameters: null`). Ilk kez sorgu dizesi gonderiliyor,
+      bu yuzden hazir sorgu tasiyan URL reddediliyor; basari olcutu status
+      degil **Content-Type**.
+- [x] **Polling yok**, bayatlik esigi **uydurulmadi** (olculen an +
+      sunucunun kendi 3 sn beyani), ring dususu **ayri** sinyal.
+- [x] **Ucuncu otorite seviyesi** (`community`): yollar seviye 1, icerikleri
+      seviye 3. `topic` bir onay degil; `did:key` olmayan `from` "kendi
+      beyan ettigi takma ad".
+- [x] `SUGGESTED` uretilebilir oldu; **`INITIAL_STATE` degismedi**.
+      `PUBLIC_ROOM_SCAN` kaynak kimligi eklendi — kullanicinin kendi gorevi
+      ile taranmis aday iki katmanda ayrisiyor.
+- [x] **1692 pytest** (1555 -> 1692) + **255 Vitest** (233 -> 255) +
+      **58 Playwright** (53 -> 58). Yeni HeroUI bileseni yok. Rapor:
+      [`docs/verification/paket-h1.md`](docs/verification/paket-h1.md).
+- [x] SI-271...SI-281, IMP-386...IMP-402.
+- [ ] **Kalan:** ring dususu telde yok (alan uydurulmadi, yoklugu yazili);
+      sinyal tablosu kaba ve recall'u olculemiyor; tarama 10 oda icin
+      ~6,8 dk surebilir ve iptal kontrolu yok.
+
+## Sonraki asama: Asama 9 - H2 Agent calisma ortami ve Activity Desk
+
+Butce/izin siniri ve model cagrisi H2'nin; public paylasim H3'un.
+
+**Gercek servise hicbir istek gonderilmedi** ve **hicbir ucretli cagri
+yapilmadi** - her sey mock tasiyiciya karsi, iki katmanli ag kesici altinda.
 
 On kosul: kullanici acikca "baslayalim" demeden gercek gonderim yapilmaz.
 

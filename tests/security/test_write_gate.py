@@ -507,7 +507,23 @@ def test_the_lobby_is_refused_as_a_write_target() -> None:
 #: **different authentication model**. It is the only module in the
 #: application that carries a credential outbound.
 #:
-#: This list is the review boundary. A fifth entry means a fifth outbound
+#: Package H1 adds the fifth, and it is here for the same declared reason the
+#: fourth was (ADR-0007 3): a fourth *capability* - a read of anonymous public
+#: room content - with a fourth closed registry (``workscan/targets.py``) and
+#: a failure policy neither of the Technocore clients has. It retries twice
+#: rather than three times, because a scan reads several rooms inside one user
+#: action and a slow room should drop out of that scan rather than make a
+#: person wait; and it is the only client that sends a **query string**, which
+#: is why its parameters are built from typed values in the registry and never
+#: accepted as text.
+#:
+#: It is also the first entry whose module does not live under
+#: ``technocore/`` or ``opencode/``. That costs nothing now that the list is
+#: keyed by full path (IMP-380): ``station_api/workscan/client.py`` is one
+#: file at one location, and a second file with that name anywhere else is a
+#: new outbound surface and is refused.
+#:
+#: This list is the review boundary. A sixth entry means a sixth outbound
 #: surface, and adding one here is the change a reviewer must see.
 OUTBOUND_CLIENT_MODULES: frozenset[str] = frozenset(
     {
@@ -515,6 +531,7 @@ OUTBOUND_CLIENT_MODULES: frozenset[str] = frozenset(
         "station_api/technocore/write_client.py",
         "station_api/technocore/evidence_client.py",
         "station_api/opencode/client.py",
+        "station_api/workscan/client.py",
     }
 )
 
@@ -558,10 +575,10 @@ def http_client_offenders(source_root: Path) -> list[str]:
 def test_httpx_is_imported_only_by_the_reviewed_clients(
     api_source_root: Path,
 ) -> None:
-    """Exactly four outbound clients, at exactly four named paths.
+    """Exactly five outbound clients, at exactly five named paths.
 
     Before Stage 3 this asserted no HTTP client existed anywhere. That was
-    the honest statement while none did. The assertion has been narrowed four
+    the honest statement while none did. The assertion has been narrowed five
     times since, never dropped: any *other* module importing an HTTP client
     is a new outbound surface that nothing has reviewed - and "other" now
     includes an allowed file name at an unreviewed path.
@@ -667,8 +684,10 @@ def test_the_allow_list_is_keyed_by_full_path_and_not_by_a_bare_name(
     )
 
     # And the reverse direction: the write client's name is *not* borrowed
-    # into the new package's allowance.
+    # into either newer package's allowance.
     assert "station_api/opencode/write_client.py" not in OUTBOUND_CLIENT_MODULES
+    assert "station_api/workscan/write_client.py" not in OUTBOUND_CLIENT_MODULES
+    assert "station_api/workscan/evidence_client.py" not in OUTBOUND_CLIENT_MODULES
 
 
 def test_the_write_client_is_not_reachable_from_the_read_path(
