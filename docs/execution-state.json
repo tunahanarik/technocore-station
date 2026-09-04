@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-09-04T20:40:00Z",
+  "updated_utc": "2026-09-04T21:50:00Z",
   "base_sha": "5411171dd2302c6fea5a2af22695503859317c27",
   "note": "Kayit ile gercek Git/GitHub durumu celisirse Git/GitHub kaniti esastir.",
   "stages": [
@@ -123,28 +123,35 @@
     {
       "id": "G",
       "name": "OpenCode Go baglantisi",
-      "status": "implementing",
+      "status": "merged",
       "branch": "stage-g-opencode",
-      "pr": null,
-      "reviewed_sha": null,
-      "tested_sha": null,
-      "merge_sha": null,
-      "findings": [],
+      "pr": 16,
+      "reviewed_sha": "fd008c62d49dd6a4da23a748e59aeb058f0525ed",
+      "tested_sha": "fd008c62d49dd6a4da23a748e59aeb058f0525ed",
+      "merge_sha": "9773a54f16b294cd25a1ff53d714f2ab46f03584",
+      "findings": [
+        "Sozlesme resmi belgeden dogrulandi; auth header'i, govde sekilleri, streaming/tool-call formati BULUNAMADI ve uydurulmadi",
+        "CI yakaladi: .gitignore'daki credentials.* guvenlik kurali ayni adli KAYNAK modulu yuttu; dosya diff'e girmedigi icin en kritik modulu hicbir incelemeci okumamisti. Yeniden adlandirildi (muafiyet verilmedi) + izlenmeyen kaynak dosyayi yakalayan koruma eklendi",
+        "Iki inceleme: PR diffi + hic okunmamis credential modulu. P1'ler: 422 govdesinde anahtar yankisi, allow-list'in cipla dizin adiyla atlatilmasi, dosya/DB ayrismasi (yanlis fingerprint)",
+        "Yalanci korumalar: dort guard mutasyonda hic atesmiyordu; zarf kind/format yarisini hicbir test tutmuyordu (birikmeli mutasyon); tarayici disiplin katmani test.only ile 51'den 1'e inip BASARI raporluyordu",
+        "Tarayici QA kapsama alindi (ADR-0006, kullanici talimatiyla ADR-0001 m.4 tersine cevrildi); A1-R1 CSP hash'i ihlalsiz, sifir dis istek olculdu",
+        "1555 pytest + 233 Vitest + 53 Playwright; CI'da uc is de yesil. GERCEK ANAHTAR OKUNMADI, UCRETLI CAGRI YOK"
+      ],
       "failed_attempts": 0,
-      "next_safe_step": "OpenCode Go baglantisi: DPAPI credential, model katalogu, 3 protokol adaptoru, redaksiyon. GERCEK API ANAHTARI ISTEME, GERCEK HARCAMA YOK."
+      "next_safe_step": null
     },
     {
       "id": "H1",
       "name": "Work Scan",
-      "status": "planned",
-      "branch": null,
+      "status": "implementing",
+      "branch": "stage-h1-work-scan",
       "pr": null,
       "reviewed_sha": null,
       "tested_sha": null,
       "merge_sha": null,
       "findings": [],
       "failed_attempts": 0,
-      "next_safe_step": null
+      "next_safe_step": "Work Scan: kaynaklari secme, gorev onerileri, yapilabilirlik degerlendirmesi. sections.ts'te 'Is Tara' ready:false -> acilacak. GERCEK YAZMA/HARCAMA YOK."
     },
     {
       "id": "H2",
