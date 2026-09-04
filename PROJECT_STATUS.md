@@ -2,8 +2,8 @@
 
 > Ana karar kaynağı: [`Technocore-Station-Proje-Kunyesi.md`](Technocore-Station-Proje-Kunyesi.md)
 > Çalışma kuralları: [`AGENTS.md`](AGENTS.md) · [`CLAUDE.md`](CLAUDE.md)
-> Son güncelleme: **4 Eylül 2026** (Aşama 5 / Paket E — bağımsız inceleme
-> düzeltmeleri)
+> Son güncelleme: **4 Eylül 2026** (Aşama 6 / Paket F — proje/görev modülü
+> temeli; PR #15 bağımsız inceleme düzeltmeleri dâhil)
 
 ## Aşama checklist
 
@@ -13,9 +13,9 @@
 - [x] **Aşama 2B — Conformance** — tamamlandı
 - [x] **Aşama 3 — Salt okunur Technocore** — tamamlandı
 - [x] **Aşama 3.1 — Protokol projeksiyonu düzeltmesi** — tamamlandı
-- [ ] **Aşama 4 — Composer & Participation** — sıradaki
-- [ ] **Aşama 5 — Evidence & Audit**
-- [ ] **Aşama 6 — Project Modules**
+- [x] **Aşama 4 — Composer & Participation** — tamamlandı
+- [x] **Aşama 5 — Evidence & Audit** — tamamlandı
+- [x] **Aşama 6 — Project Modules** — tamamlandı (temel; görünür yüzey H1/H2)
 - [ ] **Aşama 7 — Packaging**
 
 ---
@@ -1125,13 +1125,133 @@ Kapsam kararları:
       `stage=3` diyordu; ikisi de **5** oldu.
       `write_available_from_stage` bilinçli olarak **4** kaldı.
 
-## Sonraki aşama: Aşama 6 — proje/görev modülü temeli (Paket F)
 
-Kapsam: derleme zamanı proje/görev modül registry'si.
+### Paket F — proje/görev modülü temeli (Aşama 6)
 
-Aşama 4 ile giden yazma yolu, Aşama 5 ile kanıt defteri açıldı; fakat
-**gerçek servise hiçbir istek gönderilmedi** — export okuması dahil her şey
-mock taşıyıcıya karşı, autouse ağ kesici altında koştu.
+Kapsam kararları:
+[`ADR-0004`](docs/decisions/0004-paket-f-kapsam-kararlari-2026-09-04.md).
+Uygulanmış hâlin tarifi: [`docs/task-modules.md`](docs/task-modules.md).
+
+Bu bir **temel** paketidir: görünür bir görev yüzeyi açmaz. Görev katmanının
+HTTP route'u yoktur ve `work-scan` / `tasks` / `activity` bölümleri
+`ready: false` kalır (ADR-0004 §9). `apps/station-web` kaynağına
+dokunulmadı.
+
+- [x] **Derleme zamanı registry.** `station_api/modules/` dört kayıt taşır:
+      `project_zero` (`available`) ve H1/H2/H3'ün açacağı üç `planned` kayıt.
+      **Proje 0 taşınmadı** — kayıt `owners` alanıyla kimlik, recovery,
+      conformance, technocore, compose ve evidence modüllerine işaret eder ve
+      bir test her adın gerçekten bir dosyaya çözüldüğünü doğrular.
+      Diskten plugin/import yükleme yolu **yoktur**; bir test iki paketin
+      sözdizim ağacını **dört yazım** için tarar — yasak import, yasak bare ad
+      (`runner = __import__`), yasak attribute (`builtins.__import__`) ve
+      yasak ad alanı (`sys.modules`, `getattr(builtins, ...)`). `compile`'ın
+      yalnız bare adı yasaktır; `re.compile` serbesttir. Taramanın kendisi on
+      sentetik atlatmayla test edilir (künye ADR-017 böylece ilk kez gerçekten
+      uygulanmış oldu).
+- [x] **Çekirdek yeniden kullanıldı, kopyalanmadı.** `station_api/tasks/`
+      yalnız yeni koddur; bağımlılığı constructor'dan alır ve `app.py` onu
+      mevcut `engine` ile kurar. **Yeni HTTP istemcisi yok**
+      (`OUTBOUND_CLIENT_MODULES` üçte kaldı), **ikinci vault/signer yok**,
+      **ikinci gate yok**: `tasks/gate.py` `write_gate.evaluate()`'in
+      saf-fonksiyon kalıbını izler ve onun `CheckState`'ini **import eder**.
+      Üçü de testle sabitlendi.
+- [x] **Dokuz durum, açık geçiş tablosu.** `ALLOWED_TRANSITIONS` makineyi
+      tek yerde yazar (bundan önce kurallar DB kısıtlarına ve bir alışkanlığa
+      dağılmıştı) ve `validate_transition` saf bir fonksiyondur.
+      **Dürüstlük şartı karşılandı:** `suggested` (H1 ister), `running` ve
+      `paused` (H2 ister) tanımlı kalır fakat **hiçbir kod yolundan
+      üretilemez**. Bunu **bir davranış ve bir yapı** testi birlikte sabitler
+      (bağımsız inceleme düzeltmesi, aşağıda): yürüyüş `TaskService`'in her
+      public metodunu introspection ile sürer, tarama ise `.state`'e yazan tek
+      yerin `transition` olduğunu denetler. Beklenen küme testin içinde elle
+      yazılıdır, böylece sabiti düzenlemek oracle'ı büyütmez.
+- [x] **Dört ayrı alan.** Görev çıktısı / test sonucu / kullanıcı kabulü /
+      public paylaşım dört ayrı sütun grubudur (`_ref_id`, `_verified`,
+      `_version_id`, `_detail`, `_recorded_at`) — `EvidenceRecord`'un dört
+      seviye kalıbı. **Public paylaşım alanı temsil edilemez:**
+      `EvidenceRef` onun için kurulamaz, servis reddeder, kapı daima
+      `not_implemented` raporlar — ve yayımı **engellemez** (aksi hâlde hiçbir
+      görev dışarı paylaşılmadan tamamlanamazdı). `ready_to_publish` gerçek
+      kanıttan türer: `verified` varsayılansızdır, doğrulanmamış bir kayıt
+      `blocked`'tır ve "bir kaydın varlığı tek başına başarı değildir" cümlesi
+      testle kanıtlanır.
+- [x] **Deduplication.** `domain_digest(b"technocore-station/task-source/v1",
+      source_id, content_sha256)` → `source_version_id`. Kaynak kimliği
+      **registry enum'undan** gelir; `StrEnum` her `isinstance(str)`
+      kontrolünden geçtiği için çalışma zamanında açık bir enum kontrolü
+      yapılır. İçerik değişince kimlik değişir ve **eski kanıt eşleşmez** —
+      test aynı kanıtı yeni sürüme sunar ve gerekçeli reddi doğrular.
+- [x] **Restart uzlaştırması: okur, yazmaz.** Keşif bulgusu doğrulandı —
+      `WriteOutcomeValue.IN_FLIGHT` Paket D'den beri yazılıyor ve hiçbir
+      başlangıç hook'u okumuyordu. `tasks/reconciliation.py` tek bir `SELECT`
+      yapar. **Sıfır iddiası ölçülerek kanıtlandı:** httpx taşıyıcısı ve
+      `socket.connect` sarılıp denemeler sayıldı; hem taramada hem gerçek
+      `create_app` çağrısında sayı **0**. Defter bayt bayt aynı kalır, satır
+      hâlâ `in_flight`'tır, `resumed_any` **kurucu argümanı olmayan** bir
+      property'dir (bağımsız inceleme düzeltmesi).
+- [x] **Bütçe YOK ve erteleme görünür.** Bütçe alanı açılmadı;
+      `budget_available: Literal[False]` + `budget_detail` ertelemeyi söyler
+      (composer'ın `note_lane_available` kalıbı). Bir test görev/registry
+      paketlerinde bütçe biçimli sütun veya tanımlayıcı olmadığını, bir
+      diğeri de ertelemenin `docs/task-modules.md` §6'da kayıtlı olduğunu
+      denetler. **Kalan yarım gereksinim:** harcama bağlamı Paket G'ye,
+      bütçe/izin sınırı Paket H2'ye ertelendi.
+- [x] **Migration `0007`** (`down_revision="0006"`, tek head), yalnız ekleme:
+      `task_record`, `task_evidence_outcome`, `task_state_transition`. Hiçbir
+      mevcut tablo adı, sütun veya kayıt kimliği değişmedi. Görev
+      tablolarında sütun adı denetimi şema geneli kuraldan daha sıkıdır —
+      `key` parçası da yasaktır.
+- [x] **Şemalar `schemas.py`'de kaldı** (ADR-0004 §8). `test_no_secret_fields.py`
+      `vars(schemas)` tarıyor; modelleri yeni bir modüle koymak üç korumayı
+      sessizce kapsam dışı bırakırdı. Onları dolduran saf projeksiyon
+      `station_api/tasks/views.py`'dedir, böylece modeller kullanılmadan
+      durmaz.
+- [x] **`docs/architecture.md` gerçekle uzlaştırıldı** (ADR-0004 §10). Belge
+      "Conformance, Technocore istemcisi ve Evidence katmanları henüz
+      **yoktur**" diyordu; üçü de merge edilmişti. Durum satırı, paket
+      tablosu, mimari diyagramı, tablo listesi ve "bilinçli olarak
+      yapılmayanlar" bölümü güncellendi.
+- [x] **1331 pytest** (1229 → 1331; **102 yeni test**), üç yeni güvenlik
+      dosyası: `test_module_registry.py` (32), `test_task_states.py` (23),
+      `test_task_evidence.py` (47). Yeni bağımlılık yok, yeni marker yok,
+      yeni HeroUI bileşeni yok, frontend kaynağına dokunulmadı.
+- [x] SI-210…SI-232, IMP-341…IMP-365.
+
+#### Bağımsız inceleme düzeltmeleri (PR #15)
+
+Bağımsız bir düşman incelemesi on bir bulgu çıkardı; hepsi kapatıldı ve her
+düzeltme **mutasyonla** doğrulandı (bozulan kod, kırılan test):
+
+| Bulgu | Ne yanlıştı | Düzeltme |
+|---|---|---|
+| F-1 (P1) | "Hiçbir kod yolu üretemez" testi yalnız `transition()` üzerinden arıyordu; incelemenin dört satırlık `start_running` probu hiçbir testi kırmadı | yürüyüş her public metodu introspection ile sürer **ve** `.state`'e yazan tek yerin `transition` olduğunu bir AST testi sabitler |
+| F-2 (P2) | Oracle sabitin kendisiydi: `PRODUCIBLE_STATES`'e `RUNNING` eklemek hem reddi kaldırıyor hem beklentiyi büyütüyordu | beklenen küme testte elle yazıldı (`EXPECTED_PRODUCIBLE`); sabit ayrı satırda denetlenir |
+| F-3 (P2) | `modules/completion.py`'nin bayat-kanıt dalı hiç test edilmiyordu (`if False` → sıfır kırık) | doğrulanmış ama başka sürüme bağlı referansla dalı doğrudan süren iki test |
+| F-4 (P3) | `_refs_from_row` docstring'i "raise eder" diyordu; gerçekte sütunu okumadan atlıyor | cümle gerçeğe indirildi ve davranış testle sabitlendi |
+| F-5 (P3) | `resumed_any` sıradan bir alandı; `Literal[False]` yalnız Pydantic modelindeydi ve `views.py` değeri hiç okumuyordu | property'ye çevrildi (kurucu argümanı yok) ve projeksiyon değeri rapordan okur |
+| F-6 (P3) | `ref_id` süpürülmüyor ve sınırlanmıyordu; bidi/NUL/406 karakter yanıta kadar ulaşıyordu | süpürülür ve 64'e kesilir; boşa inen işaretçi reddedilir |
+| F-7 (P3) | Dinamik yükleme yasağı `builtins.__import__`, `getattr(builtins, ...)` ve `sys.modules`'u yakalamıyordu | tarama dört yazımı arar; on sentetik atlatma ve dört masum yazım testlidir |
+| F-8 (P3) | Registry ve test docstring'i "iki" diyordu; sayılan üçtü | üçe düzeltildi |
+| F-9 (P3) | `TaskGateStatus(checks=()).ready_to_publish` boş `all()` yüzünden `True` idi | küme eşitliğine çevrildi; boş küme `False` |
+| F-10 (P3) | `cli/__main__.py` hâlâ `stage=3` idi | `6`'ya çekildi; bir test üç üretim çağrısının aynı sayıyı taşımasını ister |
+| F-11 (P3) | Geçersiz `module_id` çıplak `KeyError` üretiyordu (geçersiz kaynak ise temiz ret) | `ModuleRegistryError` (bir `KeyError`) → `TaskError(reason="module_unknown")` |
+
+**Bu pakette bilinçli olarak yapılmayanlar:** görev HTTP route'u ve görünür
+yüzey (H1/H2), öneri üreticisi ve yürütücü, dış paylaşım (H3), bütçe (G/H2),
+kanıt silme route'u (ADR-0003 §7'nin ertelenmiş yarısı, IMP-329).
+## Sonraki aşama: Paket G — OpenCode Go bağlantısı
+
+Kapsam: DPAPI'de credential, katalogdan model listesi, üç protokol adapter'ı,
+redaction. **Gerçek harcama yok.** Harcama bağlamı G'ye, bütçe/izin sınırı
+H2'ye ertelenmiş yarım gereksinim olarak kayıtlıdır (ADR-0004 §7,
+[`docs/task-modules.md`](docs/task-modules.md) §6).
+
+Aşama 4 ile giden yazma yolu, Aşama 5 ile kanıt defteri, Aşama 6 ile modül
+registry'si ve görev durum makinesi açıldı; fakat **gerçek servise hiçbir
+istek gönderilmedi** — export okuması dahil her şey mock taşıyıcıya karşı,
+autouse ağ kesici altında koştu. Paket F'in başlangıç taraması da yalnızca
+yerel veritabanını okur ve bunu bir test sayarak doğrular.
 
 Ön koşul: kullanıcı açıkça "başlayalım" demeden gerçek gönderim yapılmaz.
 

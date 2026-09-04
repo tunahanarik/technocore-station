@@ -22,6 +22,7 @@ geçerlidir. Türetilmiş belgeler:
 | [`docs/read-only-technocore.md`](docs/read-only-technocore.md) | Salt okunur istemci, kaynak registry'si, drift modeli |
 | [`docs/security-invariants.md`](docs/security-invariants.md) | Test edilebilir güvenlik değişmezleri |
 | [`docs/evidence-model.md`](docs/evidence-model.md) | Dört seviyeli kanıt güven modeli |
+| [`docs/task-modules.md`](docs/task-modules.md) | Derleme zamanı modül registry'si, dokuz görev durumu, dört kanıt alanı |
 | [`docs/decisions/README.md`](docs/decisions/README.md) | ADR indeksi |
 
 Her turda önce bu dosyayı, `CLAUDE.md`'yi ve `PROJECT_STATUS.md`'yi oku.

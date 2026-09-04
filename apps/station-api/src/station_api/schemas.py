@@ -635,3 +635,177 @@ class AuditChainResponse(StrictModel):
     first_bad_seq: int | None
     #: The only permitted description of what this mechanism provides.
     claim: str
+
+
+# --- project modules and tasks (Package F) ----------------------------------
+#
+# These models live here rather than in ``station_api/tasks/`` on purpose
+# (ADR-0004 8). All three tests in ``tests/security/test_no_secret_fields.py``
+# walk ``vars(schemas)``; a task model declared in a new module would leave
+# that protection silently out of scope - not a leak, but a lost control, and
+# exactly the kind of quiet regression this project exists to catch. Widening
+# the tests is acceptable, narrowing them is not (INV-06).
+#
+# Nothing here carries a seed, a private key, a passphrase or a vault path. A
+# module id, a source id, a content digest, a state name and a Turkish
+# sentence are all public values.
+
+
+#: The three-valued check state, spelled the same way the write gate spells it.
+TaskCheckState = Literal["passed", "blocked", "not_implemented"]
+
+#: The four fields a result is recorded in. Never collapsed into one boolean.
+TaskEvidenceFieldName = Literal[
+    "task_outcome", "test_result", "user_acceptance", "public_share"
+]
+
+#: All nine states. Six are producible in this release; the other three are
+#: defined, listed, and refused by ``validate_transition`` (ADR-0004 3).
+TaskStateName = Literal[
+    "suggested",
+    "awaiting_approval",
+    "running",
+    "paused",
+    "blocked",
+    "failed",
+    "review_needed",
+    "ready_to_publish",
+    "published",
+]
+
+
+class ModuleCheckStatus(StrictModel):
+    """One module requirement and its verdict.
+
+    ``not_implemented`` is a distinct value for the same reason it is on the
+    write gate: an unbuilt requirement is never counted as passed, and a
+    product gap is never shown as a user error.
+    """
+
+    key: str
+    state: TaskCheckState
+    detail: str
+    #: Which of the four fields carries the evidence for this requirement.
+    evidence_field: TaskEvidenceFieldName
+    #: The package or roadmap stage that delivers the evidence.
+    stage: str
+    #: The evidence consulted, or "" when none was.
+    ref_id: str = ""
+    #: True when the requirement is refused by policy rather than unbuilt -
+    #: "nobody has written it yet" and "this product will not do it" read
+    #: identically in a status column, and only one of them is a queue item.
+    policy_refused: bool = False
+
+
+class ProjectModuleStatus(StrictModel):
+    """One record from the compile-time registry.
+
+    ``planned`` modules are registered so the target layout stays reviewable
+    and are never rendered as features - the ``sections.ts`` rule, applied to
+    the backend registry.
+    """
+
+    id: str
+    name: str
+    purpose: str
+    state: Literal["available", "planned"]
+    #: The package that opens a planned module; "" for available ones.
+    available_from: str
+    #: Dotted paths of the code that already owns this responsibility. Nothing
+    #: was moved: the registry points, the code stays (ADR-0004 1).
+    owners: list[str]
+    checks: list[ModuleCheckStatus]
+    #: Derived from the checks, never stored. False while any check is
+    #: ``not_implemented``.
+    complete: bool
+    blocking_keys: list[str]
+    not_implemented_keys: list[str]
+
+
+class TaskFieldStatus(StrictModel):
+    """One of the four fields, reported on its own.
+
+    Reported per field rather than summed, because summing them is the exact
+    mistake the model exists to prevent: a produced output is not a passed
+    test, and neither is a person's acceptance (ADR-0004 4).
+    """
+
+    evidence_field: TaskEvidenceFieldName
+    state: TaskCheckState
+    detail: str
+    ref_id: str = ""
+
+
+class TaskStatusResponse(StrictModel):
+    """One task, its state, and the four fields kept apart."""
+
+    id: str
+    module_id: str
+    source_id: str
+    #: SHA-256 over the content this task was opened for.
+    content_sha256: str
+    #: The domain-separated binding of source and content. Changing the
+    #: content changes this, and evidence bound to the old value stops
+    #: matching (ADR-0004 5).
+    source_version_id: str
+    title: str
+    state: TaskStateName
+    state_detail: str
+    created_at: datetime
+    updated_at: datetime
+    evidence_fields: list[TaskFieldStatus]
+    #: Derived from three separately verified fields. Never asked for.
+    ready_to_publish: bool
+    blocking_fields: list[str]
+    #: External sharing is Package H3's subject and asks for its own
+    #: single-use consent there. This release opens the field and never fills
+    #: it, and says so rather than leaving it to be inferred.
+    public_share_available: Literal[False] = False
+    public_share_detail: str
+    #: There is no budget in this release and no field that behaves like one.
+    #: The requirement's budget half is deferred to G/H2 and is recorded
+    #: visibly rather than dropped quietly (ADR-0004 7).
+    budget_available: Literal[False] = False
+    budget_detail: str
+
+
+class TaskListResponse(StrictModel):
+    """The tasks, newest first, bounded - and the honest state inventory."""
+
+    tasks: list[TaskStatusResponse]
+    task_count: int
+    #: The states this release can genuinely reach.
+    producible_states: list[TaskStateName]
+    #: Defined, listed in the transition table, and unreachable. Named so a
+    #: reader is never left to discover it by trying.
+    unproducible_states: list[TaskStateName]
+    unproducible_detail: str
+
+
+class UnfinishedWriteStatus(StrictModel):
+    """One send that was committed to and never settled.
+
+    Public protocol values only: a ledger id, a DID, a room, a nonce and the
+    time it was reserved. No canonical text, no signature, no response body.
+    """
+
+    reservation_id: str
+    did: str
+    room: str
+    nonce: str
+    reserved_at: datetime | None
+
+
+class TaskReconciliationResponse(StrictModel):
+    """What the read-only startup scan found.
+
+    ``resumed_any`` is a ``Literal[False]``: this scan reads. It sends no
+    request, changes no row and continues no send, and the shape of the model
+    is where that is stated rather than only the prose (ADR-0004 6).
+    """
+
+    scanned_at: datetime
+    unfinished_count: int
+    entries: list[UnfinishedWriteStatus]
+    resumed_any: Literal[False] = False
+    detail: str

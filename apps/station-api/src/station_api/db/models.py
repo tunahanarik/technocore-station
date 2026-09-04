@@ -473,6 +473,162 @@ class AuditChainMetadata(Base):
         return f"AuditChainMetadata(id={self.id!r})"
 
 
+class TaskRecord(Base):
+    """One task, bound to the module it belongs to and the content it is for.
+
+    ``module_id`` is a value from the compile-time registry
+    (:mod:`station_api.modules.registry`), not a caller-supplied string, and
+    ``source_id`` likewise comes from :class:`~station_api.tasks.sources.TaskSourceId`.
+    ``source_version_id`` is the domain-separated digest over the two of them
+    plus the content hash: when the content changes the identity changes, so
+    evidence recorded against the old bytes stops matching (ADR-0004 5).
+
+    No column holds a seed, a private key, a passphrase or a vault path. A
+    module id, a source id, a digest and a title are all public values.
+    """
+
+    __tablename__ = "task_record"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    #: A ``ModuleId`` value. The registry is fixed at build time.
+    module_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: A ``TaskSourceId`` value.
+    source_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: SHA-256 over the exact content bytes this task was opened for.
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: The domain-separated binding of ``source_id`` and ``content_sha256``.
+    source_version_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    #: One of the nine ``TaskState`` values. Only six are producible in this
+    #: release, and the service refuses the other three (ADR-0004 3).
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"TaskRecord(id={self.id!r}, state={self.state!r})"
+
+
+class TaskEvidenceOutcome(Base):
+    """The four fields of one task, in four separate groups of columns.
+
+    Deliberately **not** four rows and deliberately not one boolean. Task
+    success, test result, user acceptance and public sharing answer four
+    different questions (ADR-0004 4), and the ``EvidenceRecord`` precedent is
+    followed exactly: a group per field, each with its own reference, its own
+    ``verified`` verdict, its own content version and its own timestamp.
+
+    ``public_share_*`` is the level-4 column of this table: present so the
+    absence can be *stated* rather than inferred from a missing key, and never
+    written in this release. External sharing is Package H3's subject.
+
+    ``verified`` is the load-bearing column. A reference with ``verified``
+    false is a record that exists and was not checked, and the gate reports it
+    as blocked - the existence of a result is not the success of one.
+    """
+
+    __tablename__ = "task_evidence_outcome"
+
+    task_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("task_record.id", ondelete="CASCADE"), primary_key=True
+    )
+
+    # --- field 1: the task's own output -----------------------------------
+    task_outcome_ref_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=""
+    )
+    task_outcome_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    task_outcome_version_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=""
+    )
+    task_outcome_detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    task_outcome_recorded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # --- field 2: the check that ran over it -------------------------------
+    test_result_ref_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=""
+    )
+    test_result_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    test_result_version_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=""
+    )
+    test_result_detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    test_result_recorded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # --- field 3: the person who accepted it -------------------------------
+    user_acceptance_ref_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=""
+    )
+    user_acceptance_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    user_acceptance_version_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=""
+    )
+    user_acceptance_detail: Mapped[str] = mapped_column(
+        Text, nullable=False, default=""
+    )
+    user_acceptance_recorded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # --- field 4: external sharing (always empty in this release) ----------
+    public_share_ref_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=""
+    )
+    public_share_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    public_share_version_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=""
+    )
+    public_share_detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    public_share_recorded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"TaskEvidenceOutcome(task_id={self.task_id!r})"
+
+
+class TaskStateTransition(Base):
+    """One state change, appended. The state machine's own ledger.
+
+    Kept because a status column answers "where is this now" and nothing else.
+    A refused transition is not recorded here - nothing happened - but every
+    accepted one is, with the sentence that was shown at the time.
+    """
+
+    __tablename__ = "task_state_transition"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    task_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("task_record.id", ondelete="CASCADE"), nullable=False
+    )
+    #: Empty for the row that records a task being opened.
+    from_state: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    to_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return (
+            f"TaskStateTransition(task_id={self.task_id!r}, "
+            f"to_state={self.to_state!r})"
+        )
+
+
 class RecoveryRecord(Base):
     """A ``.tcrec`` that was exported, and whether it has been restore-tested.
 

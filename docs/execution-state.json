@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-09-03T21:15:00Z",
+  "updated_utc": "2026-09-04T04:20:00Z",
   "base_sha": "5411171dd2302c6fea5a2af22695503859317c27",
   "note": "Kayit ile gercek Git/GitHub durumu celisirse Git/GitHub kaniti esastir.",
   "stages": [
@@ -81,28 +81,47 @@
     {
       "id": "E",
       "name": "Evidence & Audit",
-      "status": "implementing",
+      "status": "merged",
       "branch": "stage-e-evidence",
-      "pr": null,
-      "reviewed_sha": null,
-      "tested_sha": null,
-      "merge_sha": null,
-      "findings": [],
+      "pr": 14,
+      "reviewed_sha": "5ca9266c4b9d1cda6bd5f662d494dc2a22080d6d",
+      "tested_sha": "5ca9266c4b9d1cda6bd5f662d494dc2a22080d6d",
+      "merge_sha": "e6732f83a86bab058e4f90768a85a59f99c3414f",
+      "findings": [
+        "ADR-0003: export okuma yolu SOURCES'a eklenmedi, UCUNCU kapali registry acildi; alti belgelik kume esitligi ve /r/ yasagi aynen geciyor",
+        "Akis tarayici 12 MiB cap, tepe bellek govde boyutundan bagimsiz (tracemalloc ile bagimsiz dogrulandi: 1/8/12/16 MiB -> 177/174/169/167 KiB)",
+        "Alti kanit durumu; line_not_found HICBIR SEY kanitlamaz ve outcome_unknown'i asla not_sent'e cevirmez; yazma tekrari her durumda yok",
+        "HMAC zinciri + ayri DPAPI zarfinda bas; truncation garanti diye sunulmuyor - ayni-kullanici saldirisi testte fiilen uygulanip zincirin intact dondugu gosteriliyor",
+        "Gercek hata yakalandi: SQLite naive datetime donduruyor, ham isoformat MAC'e girseydi HER zincir ilk dogrulamada bozuk okunacakti (IMP-314)",
+        "Bagimsiz inceleme (insan DEGIL): 18 bulgu. P1 uzak hata govdesi arsivi kalici kilitliyordu (500 olarak kaciyordu); yasak-ifade korumasi YALANCIYDI (mutasyonda 156 testin hepsi geciyordu); secret taramasi allow-list'ten uc yoldan atlatiliyordu (canary ile ucdan uca kanitli); determinizm iddiasi yanlisti - hepsi kapatildi",
+        "1229 pytest + 206 Vitest; GERCEK SERVISE HICBIR ISTEK GONDERILMEDI"
+      ],
       "failed_attempts": 0,
-      "next_safe_step": "Mevcut evidence-model/snapshot/compose yuzeyini kesfet; exact yakalama, 4 guven seviyesi, ayri DPAPI zarfinda HMAC zinciri, deterministik export. AC-14."
+      "next_safe_step": null
     },
     {
       "id": "F",
       "name": "Proje/gorev modulu temeli",
-      "status": "planned",
-      "branch": null,
+      "status": "testing",
+      "branch": "stage-f-modules",
       "pr": null,
       "reviewed_sha": null,
       "tested_sha": null,
       "merge_sha": null,
-      "findings": [],
+      "findings": [
+        "ADR-0004: modul = derleme zamani registry kaydi; Proje 0 TASINMADI, kayit owners ile sahibi olan modullere isaret ediyor ve her adin bir dosyaya cozuldugu testle dogrulaniyor",
+        "Kunye ADR-017 ilk kez gercekten uygulandi: modules/ ve tasks/ agaclarinda importlib/pkgutil/__import__/exec/eval/import_module/iter_modules/entry_points yok (AST taramasi)",
+        "Dokuz durum + acik ALLOWED_TRANSITIONS; suggested/running/paused tanimli ama uretilemez. Davranis testi gercek servisi gercek DB uzerinde surup ULASILABILIR KUMEYI hesapliyor ve PRODUCIBLE_STATES ile karsilastiriyor - running'i acan paket sabiti duzenlemek ZORUNDA",
+        "Dort alan dort ayri sutun grubu; public_share TEMSIL EDILEMEZ (EvidenceRef kurulamaz) ve yayimi engellemez; EvidenceRef.verified varsayilansiz - 'bir kaydin varligi tek basina basari degildir' testle kanitli",
+        "Dedup: domain_digest(task-source/v1, source_id, content_sha256); kaynak kimligi registry enum'undan (StrEnum her isinstance(str) kontrolunden gectigi icin calisma zamani enum kontrolu sart); icerik degisince eski kanit gerekceyle REDDEDILIYOR",
+        "Kesif dogrulandi: WriteOutcomeValue.IN_FLIGHT Paket D'den beri yaziliyor ve hicbir startup hook'u okumuyordu. Salt-okuma tarama eklendi; SIFIR iddiasi httpx tasiyicisi + socket.connect sarilip DENEMELER SAYILARAK olculdu (taramada da create_app'te de 0)",
+        "Butce alani ACILMADI; erteleme budget_available: Literal[False] + budget_detail + docs/task-modules.md 6 ile gorunur kilindi ve testle denetleniyor (ADR-0004 7)",
+        "docs/architecture.md gercekle uzlastirildi (ADR-0004 10): belge hala 'Conformance, Technocore istemcisi ve Evidence katmanlari henuz yoktur' diyordu; ucu de merge edilmisti",
+        "1302 pytest (1229 -> 1302; 73 yeni test) + 206 Vitest degismedi; yeni bagimlilik yok, yeni marker yok, yeni HeroUI bileseni yok, apps/station-web kaynagina dokunulmadi",
+        "SI-210...SI-225, IMP-341...IMP-355; migration 0007 yalniz ekleme, tek head"
+      ],
       "failed_attempts": 0,
-      "next_safe_step": null
+      "next_safe_step": "Bagimsiz inceleme (insan DEGIL) ve PR. Gate'ler yesil: ruff x2, mypy strict, 1302 pytest, npm lint/test/build."
     },
     {
       "id": "G",
