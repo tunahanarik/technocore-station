@@ -61,9 +61,14 @@ CurrentSession = Annotated[Session, Depends(require_session)]
 #: Evidence is session-scoped local data; none of it belongs in a cache.
 _NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 
-#: The download stem. The room name and the format are appended through the
+#: The download stem. A constant; the format's suffix is appended through the
 #: sanitiser, never interpolated raw (ADR-0003 9).
 EXPORT_STEM = "technocore-station-kanit"
+
+#: When the export was asked for. A header rather than a field in the
+#: document, so the document itself is byte-identical between two exports of
+#: an unchanged archive (``evidence/export.py``).
+EXPORTED_AT_HEADER = "X-Station-Exported-At"
 
 
 def _service(request: Request) -> EvidenceService:
@@ -117,6 +122,8 @@ def _to_response(view: EvidenceView) -> EvidenceRecordResponse:
         capture_detail=view.capture_detail,
         captured_at=view.captured_at,
         room_generation=view.room_generation,
+        capture_generation=view.capture_generation,
+        generation_changed=view.generation_changed,
         captured_line_offset=view.captured_line_offset,
         captured_line_length=view.captured_line_length,
         stream_sha256=view.stream_sha256,
@@ -243,7 +250,16 @@ def export_records(
     return Response(
         content=result.payload,
         media_type=result.media_type,
-        headers={**_NO_STORE, "Content-Disposition": content_disposition(filename)},
+        headers={
+            **_NO_STORE,
+            "Content-Disposition": content_disposition(filename),
+            # Beside the bytes, not inside them. The body is the archive and
+            # is byte-identical between two exports of an unchanged archive;
+            # when the copy was made is a fact about the copy, it is already
+            # an audit event, and putting it in the document would have made
+            # "export twice and diff" a promise with a footnote.
+            EXPORTED_AT_HEADER: result.exported_at.isoformat(),
+        },
     )
 
 
@@ -270,4 +286,4 @@ async def read_audit(request: Request, session: CurrentSession) -> Response:
     )
 
 
-__all__ = ["EXPORT_STEM", "router"]
+__all__ = ["EXPORTED_AT_HEADER", "EXPORT_STEM", "router"]

@@ -368,7 +368,13 @@ export interface EvidenceRecord {
   readonly capture_state: EvidenceCaptureState;
   readonly capture_detail: string;
   readonly captured_at: string | null;
+  /** The epoch this record was first seen under. Set once, never overwritten. */
   readonly room_generation: string;
+  /** The epoch the stored line was read under, so the two are never mixed. */
+  readonly capture_generation: string;
+  /** Sticky: the room has been seen under more than one epoch, so the two
+   * sides are not comparable however the latest read turned out. */
+  readonly generation_changed: boolean;
   readonly captured_line_offset: number | null;
   readonly captured_line_length: number | null;
   readonly stream_sha256: string;
@@ -399,6 +405,9 @@ export interface EvidenceCaptureResult {
   readonly detail: string;
   /** True only for `line_captured`, and it means level 2 - no more. */
   readonly server_observation: boolean;
+  /** The epoch **this read** published, or "" when it published none - not
+   * the record's frozen baseline, which `/records` returns as
+   * `room_generation` beside `capture_generation`. */
   readonly room_generation: string;
   readonly line_offset: number | null;
   readonly line_length: number | null;

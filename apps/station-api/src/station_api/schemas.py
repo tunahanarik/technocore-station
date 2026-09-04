@@ -527,7 +527,15 @@ class EvidenceRecordResponse(StrictModel):
     ]
     capture_detail: str
     captured_at: datetime | None
+    #: The epoch this record was first seen under. The baseline, never
+    #: overwritten - overwriting it made ``generation_changed`` a one-off.
     room_generation: str
+    #: The epoch the stored line was read under, so a line and a generation
+    #: are never reported side by side while belonging to different rooms.
+    capture_generation: str
+    #: Sticky: the room has been seen under more than one epoch, so the two
+    #: sides are not comparable however the latest read turned out.
+    generation_changed: bool
     captured_line_offset: int | None
     captured_line_length: int | None
     stream_sha256: str
@@ -583,6 +591,11 @@ class EvidenceCaptureResponse(StrictModel):
     detail: str
     #: True only for ``line_captured``, and it means level 2 - no more.
     server_observation: bool
+    #: The epoch **this read** published, or "" when it published none. Not
+    #: the record's baseline: the stored baseline is set once and answers a
+    #: different question ("what epoch was this record first seen under"),
+    #: and it is returned by ``/records`` as ``room_generation`` beside
+    #: ``capture_generation`` and ``generation_changed``.
     room_generation: str
     line_offset: int | None
     line_length: int | None

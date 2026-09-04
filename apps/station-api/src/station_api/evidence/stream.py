@@ -18,11 +18,23 @@ What is kept, and nothing else (ADR-0003 2)
 * a bounded neighbourhood - bounded in lines *and* in bytes, because two
   bounds are needed: three short lines and three 10 MiB lines are both "three
   lines";
-* the running SHA-256 of the whole stream, including the part scanned after
-  the match;
+* the running SHA-256 of **everything this scan read**, including the part
+  read after the match. When the cap stopped the scan that is the scanned
+  prefix and not the whole body, which is why ``truncated`` travels with the
+  digest everywhere it goes: a hash of a prefix described as a hash of the
+  document would be a small lie with a very long life;
 * the line count, and how many lines could not be read.
 
 The full ring is never archived.
+
+Line terminators, and the byte that is not one
+----------------------------------------------
+The reference writes ``orjson.dumps(rec) + b"\\n"``, so ``\\n`` is the only
+terminator this scanner splits on. A body served with CRLF endings therefore
+leaves the ``\\r`` at the end of the payload, and it is **kept**: the stored
+line is the bytes that arrived, and stripping one of them to make the record
+tidier would be the re-serialisation this whole module refuses to do. The
+match still works, because a trailing ``\\r`` is whitespace to a JSON reader.
 
 Parsing to find, raw bytes to keep
 ----------------------------------
@@ -112,7 +124,9 @@ class ScanResult:
     #: Bounded context, each entry already truncated to the per-line ceiling.
     window_before: tuple[bytes, ...] = ()
     window_after: tuple[bytes, ...] = ()
-    #: SHA-256 over every byte read, including everything after the match.
+    #: SHA-256 over every byte this scan read, including everything after the
+    #: match - and **only** that. When ``truncated`` is true the scan stopped
+    #: at the cap, so this covers the scanned prefix rather than the body.
     stream_sha256: str = ""
     scanned_bytes: int = 0
     line_count: int = 0
@@ -179,6 +193,10 @@ def scan_export_stream(
     unreadable = 0
     truncated = False
     skipping_overlong = False
+    # True when the last chunk handled by the drop-everything path below ended
+    # mid-line. That path counts terminators, so a final line without one
+    # would otherwise not be counted at all.
+    open_tail_dropped = False
 
     before: deque[bytes] = deque(maxlen=MAX_WINDOW_LINES)
     after: list[bytes] = []
@@ -226,6 +244,7 @@ def scan_export_stream(
         if found is not None and len(after) >= MAX_WINDOW_LINES:
             buffer.clear()
             line_count += chunk.count(LINE_TERMINATOR)
+            open_tail_dropped = not chunk.endswith(LINE_TERMINATOR)
             if truncated:
                 break
             continue
@@ -263,6 +282,13 @@ def scan_export_stream(
     # a fragment as a record is how a scanner invents evidence.
     if buffer and not truncated and not skipping_overlong:
         take_line(bytes(buffer))
+    elif open_tail_dropped and not truncated:
+        # Same rule, on the path that keeps no buffer: once our line and its
+        # window are in hand the rest of the body is dropped as it arrives and
+        # only its terminators are counted, so a completed stream whose last
+        # line has none was one line short. The line is not read - there is
+        # nothing left to look for - but it existed and is counted.
+        line_count += 1
 
     retained = (
         (0 if found is None else len(found))

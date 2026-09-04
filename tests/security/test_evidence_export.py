@@ -23,6 +23,7 @@ download name, so the name is rebuilt from an allow-list.
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -34,10 +35,12 @@ from station_api.downloads import (
     content_disposition,
     safe_download_filename,
     safe_filename_stem,
+    split_suffix,
 )
 from station_api.evidence.export import (
     CHAIN_SENTENCE,
     EXPORT_FORMATS,
+    MARKDOWN_SCOPE_NOTE,
     ExportConsent,
     ExportRefusedError,
     build_export,
@@ -207,6 +210,74 @@ def test_the_exported_request_bytes_round_trip_exactly(
     assert set(json.loads(view.request_body)) == {"did", "sig", "nonce", "text"}
 
 
+def test_two_exports_taken_at_different_times_are_byte_identical(
+    engine: Engine, data_dir: Path
+) -> None:
+    """The determinism claim, with the clock actually moving between them.
+
+    ``test_the_same_records_produce_the_same_bytes`` above used one fixed
+    consent time for both calls, so it could not see the ``exported_at`` stamp
+    that made every real pair of exports differ. The stamp is in a response
+    header now, and this test uses two different times on purpose.
+    """
+    service = _service_with_records(engine, data_dir)
+    records = service.list_records()  # type: ignore[attr-defined]
+    early = ExportConsent.granted(acknowledged=True, now=FIXED_TIME)
+    later = ExportConsent.granted(
+        acknowledged=True, now=datetime(2027, 1, 1, 3, 4, 5, tzinfo=UTC)
+    )
+
+    for export_format in EXPORT_FORMATS:
+        first = build_export(records, export_format=export_format, consent=early)
+        second = build_export(records, export_format=export_format, consent=later)
+        assert first == second, export_format
+        # Neither consent time is in the file. Asserted on the full instant
+        # rather than on the date: the record's own ``recorded_at`` is in
+        # there and is legitimately today's date.
+        for consent in (early, later):
+            assert consent.requested_at.isoformat().encode() not in first
+
+
+def test_the_service_returns_the_export_time_beside_the_bytes(
+    engine: Engine, data_dir: Path
+) -> None:
+    """Removed from the document, not lost: the route puts it in a header."""
+    service = build_evidence(engine, data_dir)
+    result = service.export(export_format="json", consent=_consent())
+
+    assert result.exported_at == FIXED_TIME
+    assert b"exported_at" not in result.payload
+
+
+def test_both_formats_carry_the_canonical_string_a_signature_covers(
+    engine: Engine, data_dir: Path
+) -> None:
+    """The scope difference between the two formats, resolved and stated.
+
+    JSON carried the canonical string as plain text and Markdown carried only
+    its SHA-256, which made the Markdown export a summary nobody could check
+    anything against - a hash verifies a string you already have. The text is
+    now in both. The raw **bytes** stay in JSON alone, and the Markdown file
+    says so in its own header rather than leaving a reader to notice.
+    """
+    service = _service_with_records(engine, data_dir)
+    records = service.list_records()  # type: ignore[attr-defined]
+    canonical = records[0].canonical
+    assert canonical, "the fixture really produced a canonical string"
+
+    document = loads_strict(build_json_export(records, consent=_consent()))
+    assert document["records"][0]["levels"]["1_imza_kaniti"]["canonical"] == canonical
+
+    markdown = build_markdown_export(records, consent=_consent()).decode("utf-8")
+    assert escape_markdown(canonical) in markdown
+    assert escape_markdown(MARKDOWN_SCOPE_NOTE) in markdown
+    # The bytes are still JSON-only, which is the part that is documented
+    # rather than equalised.
+    for key in ("captured_line_b64url", "request_b64url", "response_b64url"):
+        assert key in str(document["records"][0]["levels"]["2_sunucu_gozlemi"])
+    assert "b64url" not in markdown
+
+
 def test_an_empty_archive_still_exports_a_well_formed_file() -> None:
     assert loads_strict(build_json_export([], consent=_consent()))["record_count"] == 0
     assert b"kayit yok" in build_markdown_export([], consent=_consent())
@@ -247,15 +318,33 @@ def test_dangerous_imported_text_is_inert_in_the_markdown_export(
 
     ``safe_display`` alone would have let all of this through: it removes
     control and bidi characters and escapes no markup whatsoever.
+
+    The assertions are made against the document with every backslash-escaped
+    pair removed, rather than as plain substring checks. ``"<img" not in
+    payload`` was satisfied by an escaper that deleted the ``<`` **and** by one
+    that escaped it, and it was also satisfied by this document not containing
+    the message at all - which is what it was really testing until the
+    canonical string was added to this format.
     """
     service = _service_with_records(engine, data_dir, text_body=DANGEROUS_TEXT)
     payload = build_markdown_export(
         service.list_records(), consent=_consent()  # type: ignore[attr-defined]
     ).decode("utf-8")
 
-    assert "](javascript:" not in payload
-    assert "<img" not in payload
-    assert "onerror=alert(1)" not in payload or "\\(" in payload
+    # The message really is in this file, so the assertions below are about
+    # something. It is there in exactly its inert form.
+    assert escape_markdown(DANGEROUS_TEXT) in payload
+
+    bare = re.sub(r"\\(.)", "", payload)
+    # Not one unescaped angle bracket, square bracket, parenthesis or backtick
+    # survives out of the message: the tag never opens, the link never forms.
+    assert "<img" not in bare
+    assert "](javascript:" not in bare
+    assert "`kod`" not in bare
+    # ``onerror=alert(1)`` is still *present* - it is inert because the tag
+    # around it never opens, not because anything was deleted. An export that
+    # dropped it would be an archive of a message the user did not send.
+    assert "onerror=alert(1)" in payload.replace("\\", "")
 
 
 def test_a_bidi_override_cannot_reach_the_export() -> None:
@@ -319,6 +408,72 @@ def test_the_filename_sanitiser_removes_every_header_weapon(hostile: str) -> Non
         assert forbidden not in name, f"{forbidden!r} survived in {name!r}"
     assert header == f'attachment; filename="{name}"'
     assert header.count('"') == 2
+
+
+def test_the_header_keeps_the_extension_on_a_long_name() -> None:
+    """The safety net was eating the thing it was protecting.
+
+    ``content_disposition`` re-sanitised the complete name as though it were a
+    stem, so ``MAX_STEM_CHARS`` cut a three-hundred-character name at eighty -
+    taking ``.json`` off the end. Only ``safe_download_filename`` was under
+    test; the function whose output goes on the wire was not.
+    """
+    for suffix in (".json", ".md", ".tcrec"):
+        long_name = safe_download_filename("a" * 300, suffix=suffix)
+        header = content_disposition(long_name)
+
+        assert header.endswith(f'{suffix}"'), header
+        assert header.count('"') == 2
+        assert len(header) < 200
+
+
+def test_the_header_is_idempotent_over_an_already_safe_name() -> None:
+    """Sanitising twice must not change a name the caller already cleaned."""
+    for stem, suffix in (
+        ("technocore-station-kanit", ".json"),
+        ("technocore-station-z6MkTESTONLY", ".tcrec"),
+        ("a.b.c", ".md"),
+    ):
+        name = safe_download_filename(stem, suffix=suffix)
+        assert content_disposition(name) == f'attachment; filename="{name}"'
+
+
+def test_a_dot_that_is_not_an_extension_stays_part_of_the_stem() -> None:
+    """A long trailing run after a dot is a name, not a file type."""
+    stem, suffix = split_suffix("kanit." + "z" * 40)
+    assert suffix == ""
+    assert stem == "kanit." + "z" * 40
+
+    assert split_suffix("kanit.json") == ("kanit", ".json")
+    assert split_suffix("kanit") == ("kanit", "")
+
+
+@pytest.mark.parametrize(
+    "reserved",
+    ["CON", "con", "NUL", "nul.json", "AUX", "PRN", "COM1", "lpt9", "Com4.md"],
+)
+def test_a_windows_device_name_is_not_handed_to_the_browser(reserved: str) -> None:
+    """``CON.json`` does not name a file on Windows; it names a device.
+
+    The allow-list rebuilt the name out of safe characters and then handed
+    back one that the operating system refuses to open, which is a confusing
+    failure in a save dialog rather than a dangerous one - and free to remove.
+    """
+    stem = safe_filename_stem(reserved)
+    assert stem.split(".")[0].lower() not in {
+        "con",
+        "prn",
+        "aux",
+        "nul",
+        "com1",
+        "com4",
+        "lpt9",
+    }
+    assert reserved.split(".")[0].lower() in stem.lower(), "still recognisable"
+
+    name = safe_download_filename(reserved, suffix=".json")
+    assert name.endswith(".json")
+    assert content_disposition(name) == f'attachment; filename="{name}"'
 
 
 def test_a_name_that_sanitises_to_nothing_falls_back() -> None:

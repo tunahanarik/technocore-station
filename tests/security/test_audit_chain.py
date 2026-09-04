@@ -413,6 +413,12 @@ def test_a_missing_envelope_is_unavailable_and_never_a_pass(
 
     assert report.verdict is ChainVerdict.UNAVAILABLE
     assert not report.is_intact
+    # "Could not check" and "there is nothing to check" are different facts.
+    # Reporting zero links beside the first one read as an empty chain to
+    # anybody who did not also read the verdict - which is precisely the
+    # reading a chain of five links must never produce.
+    assert report.link_count == chain.count()
+    assert report.link_count >= 5
 
 
 def test_a_chain_with_a_different_material_does_not_verify(

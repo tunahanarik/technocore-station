@@ -11,9 +11,12 @@ Until Package E that header was one raw f-string::
     f'attachment; filename="{filename}"'
 
 Safe as written, because the only variable part was the base58 tail of a DID.
-Package E puts a **room name** and a caller-chosen label in a download name,
-so the assumption that made it safe stops holding, and the gap is closed with
-a helper rather than with a second f-string that happens to be careful.
+Both of today's callers are still narrow - the recovery download interpolates
+that same DID tail, and the evidence export uses a module constant - so this
+helper is not defusing a live injection. It exists because "the only variable
+part is a DID tail" is a property of the two call sites, held nowhere in the
+code, checked by nobody, and one refactor away from being false. Rebuilding
+the name from an allow-list makes it a property of the header instead.
 
 What the header can be made to do
 ---------------------------------
@@ -56,8 +59,24 @@ _LEADING = "-._"
 #: shorter so the suffix always survives and a dialog can show the end.
 MAX_STEM_CHARS = 80
 
+#: Longest suffix treated as a suffix. Beyond this the trailing dot is not an
+#: extension, it is part of a name that happens to contain a dot, and cutting
+#: there would invent an extension nobody asked for.
+MAX_SUFFIX_CHARS = 16
+
 #: What a name that sanitises to nothing becomes.
 DEFAULT_STEM = "indirme"
+
+#: Windows device names. Opening ``CON.json`` in a directory does not open a
+#: file in that directory - the name is reserved at the OS level, with or
+#: without an extension, in any letter case. A download whose name is one of
+#: these is at best a confusing failure in the user's save dialog, so it is
+#: given a prefix and stops being one.
+_RESERVED_DEVICE_NAMES = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{digit}" for digit in range(10)}
+    | {f"lpt{digit}" for digit in range(10)}
+)
 
 
 def safe_filename_stem(stem: str, *, fallback: str = DEFAULT_STEM) -> str:
@@ -65,12 +84,18 @@ def safe_filename_stem(stem: str, *, fallback: str = DEFAULT_STEM) -> str:
 
     ``".."`` cannot survive: the dots are kept as characters but every
     separator is gone, and a stem that reduces to nothing but dots falls back.
+    A stem that lands on a Windows device name is prefixed rather than
+    rejected, so the user still recognises the file they asked for.
     """
     swept = _ALLOWED.sub("-", stem)
     swept = _RUNS.sub("-", swept).strip(_LEADING)
     swept = swept[:MAX_STEM_CHARS].strip(_LEADING)
     if not swept or set(swept) <= set("."):
         return fallback
+    # The reservation applies to the part before the first dot, so ``nul.txt``
+    # is as reserved as ``nul``.
+    if swept.split(".")[0].lower() in _RESERVED_DEVICE_NAMES:
+        return f"{fallback}-{swept}"[:MAX_STEM_CHARS]
     return swept
 
 
@@ -89,20 +114,40 @@ def safe_download_filename(
     return f"{safe_filename_stem(stem, fallback=fallback)}{clean_suffix}"
 
 
+def split_suffix(filename: str) -> tuple[str, str]:
+    """Split a complete name into its stem and its extension.
+
+    The extension is the part after the **last** dot, and only when it is
+    short enough to be one. Without this split the safety net below re-read a
+    whole name as a stem and truncated it at :data:`MAX_STEM_CHARS`, which
+    quietly took the extension off any name longer than eighty characters -
+    a header advertising ``.json`` that ends without it is exactly the kind of
+    surprise this module exists to remove.
+    """
+    stem, dot, suffix = filename.rpartition(".")
+    if not dot or len(suffix) > MAX_SUFFIX_CHARS:
+        return filename, ""
+    return stem, f".{suffix}"
+
+
 def content_disposition(filename: str) -> str:
     """The header value for one attachment.
 
     The name is sanitised **here** as well as by the caller. Redundant by
     design: this is the function whose output goes on the wire, and a caller
-    that forgets is the case worth surviving.
+    that forgets is the case worth surviving - so it takes a complete name
+    apart and rebuilds both halves rather than trusting either.
     """
-    return f'attachment; filename="{safe_download_filename(filename, suffix="")}"'
+    stem, suffix = split_suffix(filename)
+    return f'attachment; filename="{safe_download_filename(stem, suffix=suffix)}"'
 
 
 __all__ = [
     "DEFAULT_STEM",
     "MAX_STEM_CHARS",
+    "MAX_SUFFIX_CHARS",
     "content_disposition",
     "safe_download_filename",
     "safe_filename_stem",
+    "split_suffix",
 ]

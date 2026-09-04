@@ -79,8 +79,14 @@ class AuditEventName(StrEnum):
     EVIDENCE_WRITE_REFUSED = "evidence_write_refused"
     CAPTURE_ATTEMPTED = "capture_attempted"
     EVIDENCE_EXPORTED = "evidence_exported"
-    EVIDENCE_DELETED = "evidence_deleted"
     CHAIN_STARTED = "chain_started"
+    # ``evidence_deleted`` is deliberately **absent**. ADR-0003 7 has two
+    # halves: evidence is never pruned automatically, and a deletion a user
+    # asks for is itself an audit event. The first half is implemented; the
+    # second is not - there is no deletion route, and a name in this enum that
+    # nothing can ever record would be a reader's evidence for a feature that
+    # does not exist. The deferral is recorded in ``docs/decisions/README.md``
+    # (IMP-329) rather than hinted at here.
 
 
 class ChainVerdict(StrEnum):
@@ -107,7 +113,9 @@ class ChainReport:
     """The result of one verification pass. Facts, then one verdict."""
 
     verdict: ChainVerdict
-    #: Links present in the database.
+    #: Links present in the database. Counted on every verdict, ``UNAVAILABLE``
+    #: included: how many links there are and whether any of them could be
+    #: checked are two different facts, and merging them loses the first.
     link_count: int
     #: Links the head says there should be, or ``None`` when there is no head.
     head_count: int | None
@@ -292,9 +300,13 @@ class AuditChain:
         try:
             material = self._envelope.load_material()
         except AuditEnvelopeError as exc:
+            # The rows are counted even though none of them could be checked.
+            # Reporting ``link_count=0`` beside "could not verify" read as an
+            # empty chain to anyone who did not also read the verdict, which
+            # is the one reading a chain of five links must never produce.
             return ChainReport(
                 verdict=ChainVerdict.UNAVAILABLE,
-                link_count=0,
+                link_count=self.count(),
                 head_count=None,
                 first_bad_seq=None,
                 detail=f"Zincir dogrulanamadi: {exc}",

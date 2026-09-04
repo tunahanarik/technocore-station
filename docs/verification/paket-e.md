@@ -130,10 +130,10 @@ aynı** (IMP-323).
 
 | Kapı | Sonuç |
 |---|---|
-| pytest | **1179 geçti** (1049 → 1179) |
+| pytest | **1229 geçti** (1049 → 1179 → inceleme düzeltmeleriyle 1229) |
 | Vitest | **206 geçti** (155 → 206) |
 | ruff (iki koşu) | geçti |
-| mypy strict | `mypy src` **76 dosya** / `mypy --config-file` (CI) **78 dosya** — ikisi de 0 hata |
+| mypy strict | `mypy src` **77 dosya** / `mypy --config-file` (CI) **79 dosya** — ikisi de 0 hata |
 | eslint / build (tsc+vite) | geçti / geçti |
 | `git diff --check` | 0 |
 
@@ -186,8 +186,66 @@ geriye tarihlendirir ya da yazmanın bir sürüm sonra geldiğini iddia ederdi.
 
 ## Bağımsız inceleme sonucu
 
-(PR üzerinde doldurulacak — temiz bağlamlı reviewer subagent koşulacak; bu
-insan güvenlik incelemesi değildir, ADR-0001 §5 kalan risk.)
+Temiz bağlamlı, yazardan ayrı bir Claude reviewer subagent'ı head `e34ec23`
+diffini inceledi, kapıları kendi koştu ve karşı-problarını **fiilen
+çalıştırdı** (tracemalloc ile bellek ölçümü, altı ayrı zincir kırma, 20
+saldırgan Markdown girdisi, deponun kendi canary seed'iyle uçtan uca secret
+sızıntı probu, kendi katlama kuralıyla yasak-ifade taraması, ve **mutasyon
+testi**). **18 bulgu**; hepsi merge öncesi kapatıldı.
+
+### En ciddi ikisi
+
+**P1 — uzak hata gövdesi arşivi kalıcı kilitliyordu.** Uzak sunucunun hata
+gövdesinden çıkarılan alıntı `capture_detail`'e giriyor, o da export'un
+yasak-ifade kontrolünden geçiyordu. İncelemeci 429 yanıtına "sunucu kanıtı"
+içeren bir gövde koydu: JSON ve Markdown export'ların **ikisi de kalıcı
+olarak** reddedildi, tekrar denemek düzeltmedi, üstelik `ForbiddenClaimError`
+bir `ValueError` olduğu için hiçbir handler yakalamadı ve temiz bir 400
+yerine **500** olarak çıktı. Silme route'u da olmadığı için kullanıcının
+tüm kanıt arşivi dışa aktarılamaz hale geliyordu — yani uzak bir sunucu tek
+bir hata gövdesiyle yerel bir işlevi öldürebiliyordu.
+
+Kök neden bir kavram karışıklığıydı: koruma **ürünün kendi iddialarına**
+uygulanmalıyken bitmiş export belgesine uygulanıyordu, o belge ise uzak
+metni ve kullanıcının mesajını da içeriyor. Artık iki ayrı sözleşme var —
+**iddia** (ürünün yazdığı cümleler) fail-closed denetlenir; **veri** (uzak
+alıntı, kullanıcı mesajı) yazıldığı tek kapıda nötrlenir ve arşivlenir.
+`ForbiddenClaimError` sarılıp 400 olur, asla 500. SI-191'in yanlış olan
+kısmı düzeltildi, silinmedi.
+
+**P2 — yasak-ifade koruması YALANCIYDI.** Mutasyon testi
+`assert_no_forbidden_claim`'i no-op yaptığında **156 testin hepsi geçti**;
+`tests/` altında bu mekanizmayı adlandıran tek satır yoktu. Var olan test
+yalnız ürünün kendi metinlerinin temiz olduğunu doğruluyordu, bir ihlalin
+**reddedildiğini** değil. Artık iki mutasyon kontrolü kayıtlı: iddia
+denetimi kapatılınca **4**, nötrleme kapatılınca **8** test kırmızıya
+dönüyor; ayrıca `evidence` paketindeki her string literal statik olarak
+taranıyor, böylece yeni bir etiket kirli gelemiyor.
+
+### Diğer bulgular
+
+| Bulgu | Düzeltme |
+|---|---|
+| **F2/F3/F4:** secret taraması allow-list'ten **üç yoldan** atlatılıyordu — deponun kendi canary'siyle uçtan uca kanıtlı: `did:key:z` arkasına saklanan seed ve 43 karakterlik seed + 43 dolgu = 86 (imza kılığı) **kaydedildi**; 65 karakterlik hex hiç yakalanmıyordu | Şekil allow-list'i sıkılaştırmayla kurtarılamazdı — 86 base64url karakterde dolgulu bir seed *imza şeklinin ta kendisidir*. Allow-list artık **çağıranın beyan ettiği tam değerler**; beyan edilen değer yine public şekli geçmek zorunda, yani seed beyan ederek aklanamıyor. Deny kuralları `{64,}`/`{43,}` oldu. Üç prob da regresyon testi |
+| **F5:** "bayt bayt deterministik" iddiası **yanlıştı** — gövdedeki `exported_at` yüzünden 50 ms arayla iki export farklı | Cümleyi koşullu hale getirmek yerine `exported_at` gövdeden çıkarılıp `X-Station-Exported-At` header'ına taşındı; iddia artık **koşulsuz doğru**. Export zamanı kopyaya ait bir olgudur, zaten audit olayıdır ve her kayıt kendi `recorded_at`'ini taşır |
+| **F7:** `content_disposition` uzun adlarda uzantıyı düşürüyordu | Uzantı ayrılıp stem ayrı sanitize ediliyor; test **tele giden fonksiyon** üzerinden |
+| **F8:** `generation_changed` yapışkan değildi; gen 7'de yakalanan satır gen 8 değerinin yanında export ediliyordu ve imza anındaki generation hiç kaydedilmiyordu | Migration `0006`: `room_generation` donmuş taban, `capture_generation` satırın okunduğu dönemi damgalar, `generation_changed` yapışkan. Satır yalnız `LINE_CAPTURED`'da saklanıyor |
+| **F9-F13, F15-F17:** cap aşımında hash'in taranan öneke ait olması, sonlandırıcısız son satırın sayılmaması, CRLF `\r` tutulması, non-ASCII rakam kabulü, `unavailable`'da `link_count=0`, docstring abartısı, Windows aygıt adları, `safe_display`'in sessiz düşürmesi | Hepsi düzeltildi veya gerçeğe indirildi; `escape_markdown` artık `sweep_untrusted` kullanıyor (hiçbir şey silinmiyor) |
+| **F14:** `EVIDENCE_DELETED` ölü enum; ADR-0003 §7'nin "silme açık kullanıcı eylemidir" yarısı uygulanmamıştı | Enum kaldırıldı ve ertelemenin kendisi **görünür** kaydedildi — UI'sız yıkıcı bir route'un gerekçesi yok ve F1'in düzeltmesi aciliyeti kaldırdı |
+| **F18:** JSON canonical'ı taşıyor, Markdown taşımıyordu (yalnız SHA-256) | Metin eşitlendi (yalnız hash taşıyan bir özet yeniden doğrulanamaz), ham bayt blob'ları JSON'a özel kaldı ve Markdown dosyası bunu kendi başlığında söylüyor |
+
+Dört mevcut test **güçlendirildi**, hiçbiri zayıflatılmadı. Bunlardan biri
+boşa koşuyordu: `test_dangerous_imported_text_is_inert_in_the_markdown_export`
+mesajı Markdown'da hiç aramıyordu.
+
+Düzeltmeler sonrası tam suite: **1229 pytest** + **206 Vitest**.
+
+**Bilinen sınır:** migration `0006` `generation_changed`'i `capture_state`'ten
+geri dolduruyor. Dönemi değişip sonra yeniden yakalanmış (yani `capture_state`
+zaten `line_not_found`'a düşmüş) bir geliştirme kaydı varsa o satırın yapışkan
+bayrağı kurtarılamaz ve `false` okunur. Üretim verisi yok; kabul edildi.
+
+Bu inceleme bir **insan güvenlik incelemesi değildir** (ADR-0001 §5).
 
 ## Sınırlar
 

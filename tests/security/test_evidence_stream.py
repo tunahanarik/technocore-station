@@ -37,6 +37,7 @@ from station_api.technocore.evidence_client import (
     EvidenceClient,
     EvidenceFetchError,
     ExportRead,
+    _generation,
 )
 from station_api.technocore.evidence_targets import (
     EXPORT_LANE_TEMPLATE,
@@ -348,6 +349,68 @@ def test_the_running_hash_covers_the_whole_stream_including_after_the_match() ->
     assert result.scanned_bytes == len(body)
 
 
+def test_the_hash_at_the_cap_covers_the_scanned_prefix_and_says_so() -> None:
+    """The other half of the sentence above, which was missing.
+
+    Past the cap the digest is over the bytes that were read, which is a
+    **prefix** of the body. Calling that "the hash of the whole stream" would
+    be a small, durable lie, so ``truncated`` travels with it and the
+    documents now describe the prefix.
+    """
+    body = ndjson([our_line(), *[other_line(index) for index in range(2, 500)]])
+    cap = len(body) // 2
+    result = scan_export_stream([body], match=OURS, cap=cap)
+
+    assert result.truncated
+    assert result.scanned_bytes == cap
+    assert result.stream_sha256 == hashlib.sha256(body[:cap]).hexdigest()
+    assert result.stream_sha256 != hashlib.sha256(body).hexdigest()
+
+
+def test_the_last_line_is_counted_after_the_window_is_complete() -> None:
+    """Once our line and its window are in hand the rest is dropped.
+
+    Dropped, but still counted - and the counting was done by counting
+    terminators, so a completed body whose last line has none came back one
+    line short. Two hundred and one lines were reported as two hundred, which
+    is the kind of number a person checks a scan against.
+    """
+    lines = [our_line(), *[other_line(index) for index in range(2, 202)]]
+    assert len(lines) == 201
+
+    terminated = scan_export_stream([ndjson(lines)], match=OURS)
+    assert terminated.line_count == 201
+
+    # Same body, last line unterminated. The reference heals a torn tail on
+    # its next append, so this is an ordinary thing to read.
+    torn = ndjson(lines[:-1]) + lines[-1]
+    assert scan_export_stream([torn], match=OURS).line_count == 201
+
+
+def test_a_crlf_stream_keeps_the_carriage_return_in_the_stored_bytes() -> None:
+    """Documented rather than normalised, because the bytes are the evidence.
+
+    The reference writes ``orjson.dumps(rec) + b"\\n"``, so ``\\n`` is the only
+    terminator this scanner splits on. A body served with CRLF endings leaves
+    the ``\\r`` at the end of the payload and it is **kept**: stripping a byte
+    to tidy the record is the re-serialisation the export lane exists to
+    avoid. The match still works - a trailing CR is whitespace to JSON.
+    """
+    mine = our_line()
+    body = b"".join(line + b"\r\n" for line in [other_line(1), mine, other_line(4)])
+
+    result = scan_export_stream([body], match=OURS)
+
+    assert result.found
+    assert result.line == mine + b"\r"
+    assert result.line_length == len(mine) + 1
+    # The offset still addresses the stored bytes inside the body exactly.
+    assert result.line_offset is not None
+    assert body[result.line_offset : result.line_offset + result.line_length] == (
+        mine + b"\r"
+    )
+
+
 def test_an_unterminated_final_record_is_read_only_on_a_complete_scan() -> None:
     """A torn tail is a record; a fragment at the cap is not.
 
@@ -450,6 +513,52 @@ def test_the_generation_header_is_kept_as_digits_or_dropped() -> None:
     )
     assert odd.generation == ""
     assert GENERATION_HEADER == "X-Room-Generation"
+
+
+@pytest.mark.parametrize(
+    "published",
+    [
+        # Written as escapes: a bare Arabic-Indic seven in source is exactly
+        # the confusable the linter is right to object to, and the point of
+        # the test is that these are *not* the ASCII digits they resemble.
+        "\u0667",  # ARABIC-INDIC DIGIT SEVEN
+        "\u0669\u0668",  # ninety-eight, in the same set
+        "\u07c7",  # NKO DIGIT SEVEN
+        "7\u0667",  # a mixture, which is the worst of the three
+        "\uff17",  # FULLWIDTH DIGIT SEVEN
+    ],
+)
+def test_a_non_ascii_digit_generation_is_dropped(published: str) -> None:
+    """"Plain digits" means ASCII digits, and now the code agrees.
+
+    ``str.isdigit`` is true for Arabic-Indic and several other digit sets, so
+    a header of U+0667 was kept as a generation. It is compared for equality
+    against a value recorded earlier, which makes it a second spelling of
+    seven that never equals the first - a room that silently reads as a
+    different epoch for ever, on a value the server chooses.
+
+    The header is built as **bytes**, because that is how one arrives: httpx
+    refuses to construct a non-ASCII header value from a ``str`` and decodes
+    an incoming one as UTF-8, so the ``str`` route would test the client
+    library rather than this rule.
+    """
+    assert published.isdigit(), "the probe is a digit string to Python"
+
+    response = httpx.Response(
+        200,
+        content=b"",
+        headers=[(GENERATION_HEADER.encode(), published.encode("utf-8"))],
+    )
+    assert response.headers[GENERATION_HEADER] == published, "it really arrives"
+    assert _generation(response) == ""
+
+
+def test_an_ascii_digit_generation_still_arrives() -> None:
+    """The narrowing above did not close the door it was guarding."""
+    response = httpx.Response(
+        200, content=b"", headers={GENERATION_HEADER: TEST_ONLY_GENERATION}
+    )
+    assert _generation(response) == TEST_ONLY_GENERATION
 
 
 def test_a_body_larger_than_the_cap_is_reported_truncated_not_buffered() -> None:

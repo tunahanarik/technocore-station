@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Iterator
+from datetime import datetime
 
 import httpx
 import pytest
@@ -23,7 +24,7 @@ from station_api.app import create_app
 from station_api.config import Settings
 from station_api.evidence.language import find_forbidden_phrases
 from station_api.routes.compose import send_message
-from station_api.routes.evidence import capture_line
+from station_api.routes.evidence import EXPORTED_AT_HEADER, capture_line
 from station_api.technocore.client import ReadOnlyTechnocoreClient
 from station_api.technocore.service import TechnocoreService
 from station_api.technocore.write_client import SignedWriteClient
@@ -245,18 +246,29 @@ def test_the_export_is_byte_identical_on_a_second_request(
 ) -> None:
     """Deterministic across requests, not merely across calls in one process.
 
-    The exported-at stamp is a wall clock, so the two documents differ only
-    there; everything about the records themselves is identical.
+    Compared as **bytes**, with nothing deleted first. The earlier version of
+    this test removed ``exported_at`` from both documents before comparing,
+    which was honest about the code and quietly conceded that the promise the
+    export makes - "diff two exports and see nothing" - was not true of the
+    file a user actually gets. The stamp moved to a header, so the promise is
+    now true of the bytes and this test can be about the bytes.
     """
     client, csrf = api
     headers = {"X-Station-CSRF": csrf}
-    body = {"format": "json", "acknowledged": True}
 
-    first = client.post("/api/evidence/export", headers=headers, json=body).json()
-    second = client.post("/api/evidence/export", headers=headers, json=body).json()
+    for export_format in ("json", "markdown"):
+        body = {"format": export_format, "acknowledged": True}
+        first = client.post("/api/evidence/export", headers=headers, json=body)
+        second = client.post("/api/evidence/export", headers=headers, json=body)
 
-    del first["exported_at"], second["exported_at"]
-    assert first == second
+        assert first.content == second.content, export_format
+        assert b"exported_at" not in first.content
+        # The time is still reported, beside the file rather than inside it.
+        stamps = {
+            first.headers[EXPORTED_AT_HEADER],
+            second.headers[EXPORTED_AT_HEADER],
+        }
+        assert all(datetime.fromisoformat(stamp).tzinfo is not None for stamp in stamps)
 
 
 @windows_only

@@ -70,7 +70,14 @@ class EvidenceView:
     capture_detail: str
     captured_at: datetime | None
     export_url: str
+    #: The epoch this record was first seen under. The baseline, never
+    #: overwritten.
     room_generation: str
+    #: The epoch ``captured_line`` was read under, so the two can never be
+    #: reported side by side while belonging to different rooms.
+    capture_generation: str
+    #: Sticky: this room has been seen under more than one epoch.
+    generation_changed: bool
     captured_line: bytes | None
     captured_line_offset: int | None
     captured_line_length: int | None
@@ -177,6 +184,8 @@ def to_view(row: EvidenceRecord) -> EvidenceView:
         captured_at=row.captured_at,
         export_url=row.export_url,
         room_generation=row.room_generation,
+        capture_generation=row.capture_generation,
+        generation_changed=row.generation_changed,
         captured_line=row.captured_line,
         captured_line_offset=row.captured_line_offset,
         captured_line_length=row.captured_line_length,

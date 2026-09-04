@@ -49,6 +49,10 @@ from station_api.evidence.export import (
     ExportRefusedError,
     build_export,
 )
+from station_api.evidence.language import (
+    ForbiddenClaimError,
+    neutralise_forbidden_claims,
+)
 from station_api.evidence.records import EvidenceView, encode_window, to_view
 from station_api.evidence.secret_scan import SecretPatternRefusedError, require_no_secrets
 from station_api.evidence.states import CAPTURE_DETAIL, CaptureState
@@ -90,6 +94,9 @@ class CaptureOutcome:
     state: CaptureState
     evidence_id: str
     detail: str
+    #: The epoch **this read** published, or "" when it published none. The
+    #: record's frozen baseline is a different value answering a different
+    #: question, and lives on the row (``room_generation``).
     generation: str = ""
     line_offset: int | None = None
     line_length: int | None = None
@@ -110,6 +117,10 @@ class ExportResult:
     media_type: str
     suffix: str
     record_count: int
+    #: When the file was asked for. Carried **beside** the bytes rather than
+    #: inside them, which is what makes ``payload`` byte-identical between two
+    #: exports of the same archive (:mod:`station_api.evidence.export`).
+    exported_at: datetime
 
 
 class EvidenceService:
@@ -172,7 +183,12 @@ class EvidenceService:
                     "canonical": canonical,
                     "request_body": request_body,
                     "response_body": response_body,
-                }
+                },
+                # The only high-entropy values a signed body legitimately
+                # carries, named by the caller that produced them. A shape
+                # allow-list could not do this job: at 86 base64url characters
+                # a padded seed and a real signature are the same shape.
+                public_values=frozenset({did, signature, nonce}),
             )
         except SecretPatternRefusedError as exc:
             # Recorded without the offending value: the refusal is the event,
@@ -211,7 +227,13 @@ class EvidenceService:
                     capture_detail="",
                     captured_at=None,
                     export_url="",
+                    # No generation is known at send time: Station does not
+                    # read the room's export in order to publish to it, and
+                    # writing a value here that no read produced would be an
+                    # invention. The baseline is set by the first capture.
                     room_generation="",
+                    capture_generation="",
+                    generation_changed=False,
                     captured_line=None,
                     captured_line_offset=None,
                     captured_line_length=None,
@@ -260,7 +282,11 @@ class EvidenceService:
                 read=None,
             )
 
-        state = _classify(read, expected_generation=view.room_generation)
+        state = _classify(
+            read,
+            expected_generation=view.room_generation,
+            generation_already_changed=view.generation_changed,
+        )
         return self._settle(view, state, detail="", read=read)
 
     def _settle(
@@ -272,9 +298,16 @@ class EvidenceService:
         read: ExportRead | None,
     ) -> CaptureOutcome:
         """Persist one capture attempt and its audit link, together."""
+        # ``detail`` and ``failure_detail`` can both carry an excerpt from a
+        # remote body. It is neutralised at the door it came through
+        # (``evidence_client._error_excerpt``); it is neutralised again here
+        # because this is where it becomes part of a sentence in *our* voice,
+        # and the guarantee that matters is about this string, not about the
+        # path it took to get here.
         sentence = safe_display(detail) if detail else CAPTURE_DETAIL[state]
         if read is not None and read.failure_detail:
             sentence = f"{CAPTURE_DETAIL[state]} {read.failure_detail}"
+        sentence = neutralise_forbidden_claims(sentence)
         now = datetime.now(UTC)
 
         with Session(self._engine) as session, session.begin():
@@ -285,12 +318,18 @@ class EvidenceService:
             row.capture_state = state.value
             row.capture_detail = sentence
             row.captured_at = now
+            if state is CaptureState.GENERATION_CHANGED:
+                # Sticky. A room that has been seen under two epochs stays
+                # incomparable; the next read must not report the weaker,
+                # more alarming ``line_not_found`` about a different room.
+                row.generation_changed = True
             if read is not None:
                 row.export_url = read.url
-                # A generation is only recorded when one was actually
-                # published. Overwriting a known generation with "" would
-                # erase the very value the next comparison needs.
-                if read.generation:
+                # The baseline is written **once**. A generation is only
+                # recorded when one was actually published, and overwriting a
+                # known one - with "" or with a newer epoch - erases the value
+                # the next comparison needs.
+                if read.generation and not row.room_generation:
                     row.room_generation = read.generation
                 scan = read.scan
                 row.stream_sha256 = scan.stream_sha256
@@ -298,10 +337,17 @@ class EvidenceService:
                 row.stream_truncated = scan.truncated
                 row.stream_line_count = scan.line_count
                 row.unreadable_lines = scan.unreadable_lines
-                if scan.line is not None:
+                # Only a real observation replaces the stored line, and it is
+                # stamped with the epoch it was read under. A line found while
+                # the room reports a different generation is *not* stored: the
+                # state says the two sides are incomparable, and keeping bytes
+                # from that read would put them beside a baseline they do not
+                # belong to.
+                if state is CaptureState.LINE_CAPTURED and scan.line is not None:
                     row.captured_line = scan.line
                     row.captured_line_offset = scan.line_offset
                     row.captured_line_length = scan.line_length
+                    row.capture_generation = read.generation
                     row.captured_window = encode_window(
                         scan.window_before + scan.window_after
                     )
@@ -378,7 +424,13 @@ class EvidenceService:
             payload = build_export(
                 selected, export_format=export_format, consent=consent
             )
-        except ExportRefusedError as exc:
+        except (ExportRefusedError, ForbiddenClaimError) as exc:
+            # ``ForbiddenClaimError`` is a ``ValueError``, and a ValueError that
+            # escapes here reaches the route as an unhandled exception and the
+            # user as a 500. It cannot be raised by anything a user or a server
+            # supplies any more - it means one of *our* fixed sentences carries
+            # a forbidden claim - but a bug in our own wording is still a
+            # refusal to state plainly, not a crash to guess at.
             raise EvidenceError(str(exc)) from exc
 
         self._chain.record(
@@ -391,10 +443,16 @@ class EvidenceService:
             media_type=EXPORT_MEDIA_TYPE[export_format],
             suffix=EXPORT_SUFFIX[export_format],
             record_count=len(selected),
+            exported_at=consent.requested_at,
         )
 
 
-def _classify(read: ExportRead, *, expected_generation: str) -> CaptureState:
+def _classify(
+    read: ExportRead,
+    *,
+    expected_generation: str,
+    generation_already_changed: bool = False,
+) -> CaptureState:
     """Turn one completed read into exactly one of the six states.
 
     Precedence, and every step of it is a decision:
@@ -403,15 +461,22 @@ def _classify(read: ExportRead, *, expected_generation: str) -> CaptureState:
     2. a **changed generation** wins next, even over a found line: the two
        sides are from different epochs of the room and are not comparable,
        which is a stronger statement than "found";
-    3. a found line is a server observation;
-    4. a truncated scan beats "not found", because a partial scan did not
+    3. a room already **known** to have changed epoch stays incomparable, even
+       when this read published no generation at all. Without this the verdict
+       was a one-off: the third capture of a moved room fell through to
+       ``line_not_found``, which reads as "your message is not there" and is
+       said about a room that is not the same room;
+    4. a found line is a server observation;
+    5. a truncated scan beats "not found", because a partial scan did not
        look everywhere;
-    5. unreadable lines beat "not found" for the same reason;
-    6. only then is absence reported - and absence still proves nothing.
+    6. unreadable lines beat "not found" for the same reason;
+    7. only then is absence reported - and absence still proves nothing.
     """
     if not read.ok:
         return CaptureState.FETCH_FAILED
     if expected_generation and read.generation and read.generation != expected_generation:
+        return CaptureState.GENERATION_CHANGED
+    if generation_already_changed:
         return CaptureState.GENERATION_CHANGED
     if read.scan.found:
         return CaptureState.LINE_CAPTURED

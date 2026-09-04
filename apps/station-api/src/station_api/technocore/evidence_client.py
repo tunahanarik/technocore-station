@@ -47,6 +47,7 @@ from datetime import UTC, datetime
 
 import httpx
 
+from station_api.evidence.language import neutralise_forbidden_claims
 from station_api.evidence.stream import (
     CHUNK_BYTES,
     MAX_STREAM_BYTES,
@@ -262,15 +263,29 @@ def _generation(response: httpx.Response) -> str:
     one, and a missing one makes the capture incomparable rather than equal.
     """
     raw = response.headers.get(GENERATION_HEADER, "").strip()
-    return raw if raw.isdigit() and len(raw) <= 32 else ""
+    # ``str.isdigit`` is true for Arabic-Indic and other non-ASCII digits, and
+    # a generation is compared for equality against a value recorded earlier -
+    # so U+0667 ARABIC-INDIC DIGIT SEVEN and "7" would be two different
+    # generations that both read as seven to a person. "plain digits" means
+    # ASCII digits, and the check now says so instead of implying it.
+    ascii_digits = raw.isascii() and raw.isdigit()
+    return raw if ascii_digits and len(raw) <= 32 else ""
 
 
 def _error_excerpt(response: httpx.Response) -> str:
-    """A bounded, swept sentence from an error body.
+    """A bounded, swept, language-neutralised sentence from an error body.
 
     Read under its own small cap and never joined into anything larger: this
     is a failure path, and a failure path that buffers a hostile body is a
     second bug waiting for the first one.
+
+    This is the one door remote prose comes through, so it is where the claim
+    registry is applied to it. The excerpt is quoted inside a sentence this
+    product wrote ("the server answered 429: ..."), which means a body saying
+    "sunucu kaniti" would be putting a forbidden claim in our mouth. It is
+    replaced rather than refused: the excerpt is a courtesy, and a remote
+    server must not be able to decide that a record can never be exported
+    again (the failure this replaced - see ``evidence/language.py``).
     """
     chunks: list[bytes] = []
     total = 0
@@ -286,7 +301,8 @@ def _error_excerpt(response: httpx.Response) -> str:
     if not body:
         return "(bos yanit)"
     text = body.decode("utf-8", errors="replace")
-    return safe_display(text[: MAX_ERROR_EXCERPT_CHARS * 2])[:MAX_ERROR_EXCERPT_CHARS]
+    swept = safe_display(text[: MAX_ERROR_EXCERPT_CHARS * 2])[:MAX_ERROR_EXCERPT_CHARS]
+    return neutralise_forbidden_claims(swept)
 
 
 __all__ = [

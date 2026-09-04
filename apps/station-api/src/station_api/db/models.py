@@ -358,8 +358,25 @@ class EvidenceRecord(Base):
     )
     #: The fixed export URL the capture read. Built from the closed registry.
     export_url: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    #: The room's conversation epoch, kept as digits.
+    #: The room's conversation epoch as first observed, kept as digits. Set
+    #: once and **never overwritten**: it is the baseline every later capture
+    #: is compared against, and overwriting it with the epoch that differed
+    #: made ``generation_changed`` a one-off - the third capture compared the
+    #: new room against itself and reported ``line_not_found``, which reads as
+    #: "your message is not there" about a room that is not the same room.
     room_generation: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    #: The epoch the currently stored ``captured_line`` was read under. Equal
+    #: to ``room_generation`` in the ordinary case; it exists so a line and
+    #: the generation beside it can never belong to different epochs.
+    capture_generation: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=""
+    )
+    #: Sticky. Once a room has been seen under a different epoch the two sides
+    #: are not comparable, and a later read must not walk that back into a
+    #: weaker, more alarming state.
+    generation_changed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
     #: Our own record's raw exported bytes, without the line terminator.
     captured_line: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     captured_line_offset: Mapped[int | None] = mapped_column(Integer, nullable=True)

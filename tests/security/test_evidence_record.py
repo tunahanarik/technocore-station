@@ -27,6 +27,7 @@ from station_api.compose.nonce import NonceReserver
 from station_api.db.models import AuditEvent, EvidenceRecord, MessageNonceReservation
 from station_api.evidence.secret_scan import (
     SecretRule,
+    declared_public_values,
     is_public_protocol_value,
     scan_text,
 )
@@ -246,16 +247,38 @@ def test_the_allow_list_runs_before_the_deny_rules() -> None:
     refuse every record this product produces, and the natural fix for that
     is to loosen the deny rules until real traffic passes - which is how a
     scanner ends up detecting nothing.
+
+    What the allow-list is has changed: it is the caller's **declared values**,
+    not a set of shapes, because at 86 base64url characters a padded seed and
+    a real signature are the same shape. The shape check survives as the
+    guard on a declaration - a caller cannot launder a secret by naming it.
     """
     signature = "z" * 85 + "A"
+    nonce = "1757000000000"
     assert is_public_protocol_value(signature)
     assert is_public_protocol_value(TEST_ONLY_DID)
-    assert is_public_protocol_value("1757000000000")
+    assert is_public_protocol_value(nonce)
 
     body = json.dumps(
-        {"did": TEST_ONLY_DID, "sig": signature, "nonce": "1757000000000", "text": "hi"}
+        {"did": TEST_ONLY_DID, "sig": signature, "nonce": nonce, "text": "hi"}
     )
-    assert scan_text(body, where="request") is None
+    public = frozenset({TEST_ONLY_DID, signature, nonce})
+    assert scan_text(body, where="request", public_values=public) is None
+
+    # Without the declaration the same body is refused, which is the point:
+    # nothing about the *shape* of an 86-character run makes it public.
+    assert scan_text(body, where="request") is not None
+
+    # And a declaration is not enough on its own. A seed named as though it
+    # were a signature is not a public protocol value and is not honoured.
+    assert not is_public_protocol_value(TEST_ONLY_SEED_CANARY)
+    laundered = frozenset({TEST_ONLY_SEED_CANARY})
+    assert declared_public_values(laundered) == frozenset()
+    finding = scan_text(
+        f"iste: {TEST_ONLY_SEED_CANARY}", where="canonical", public_values=laundered
+    )
+    assert finding is not None
+    assert finding.rule is SecretRule.HEX_64
 
 
 def test_a_sixty_four_hex_run_refuses_the_write() -> None:
@@ -270,6 +293,64 @@ def test_a_seed_length_base64url_run_refuses_the_write() -> None:
     )
     assert finding is not None
     assert finding.rule is SecretRule.BASE64URL_43
+
+
+def _stored_canonicals(engine: Engine) -> list[str]:
+    with Session(engine) as session:
+        return [row.canonical for row in session.scalars(select(EvidenceRecord))]
+
+
+@pytest.mark.parametrize(
+    ("label", "smuggled"),
+    [
+        # A 64-hex seed contains no "0", so it is a valid base58btc tail. The
+        # DID allow-rule used to accept a tail of up to 64 characters and then
+        # never look inside the token, which put the canary straight through.
+        ("did tail", f"did:key:z{TEST_ONLY_SEED_CANARY}"),
+        # The same 32 bytes in base64url, padded out to the signature length.
+        # An 86-character base64url run *is* the signature shape; nothing
+        # about the token says which of the two it is.
+        ("signature padding", TEST_ONLY_SEED_CANARY_B64URL + "A" * 43),
+        # 65 hex characters. The deny rule's boundary lookarounds cancelled
+        # each other out at any length but exactly 64, so a longer run - the
+        # easiest possible evasion - matched nothing at all.
+        ("longer hex run", TEST_ONLY_SEED_CANARY + "a"),
+    ],
+)
+def test_a_seed_cannot_be_smuggled_past_the_allow_list(
+    engine: Engine, data_dir: Path, label: str, smuggled: str
+) -> None:
+    """Three bypasses, end to end through the real write path.
+
+    Each one is asserted twice: the scanner reports a finding, and - the part
+    that actually matters - the canary is not in the database afterwards. A
+    scan that returns the right verdict while the value lands anyway would
+    pass the first assertion on its own.
+    """
+    assert scan_text(f"iste: {smuggled}", where="canonical") is not None
+
+    service = build_evidence(engine, data_dir)
+    outcome = _record(
+        service, engine, canonical=f"mb-station-test-only|1|{smuggled}"
+    )
+
+    assert not outcome.recorded, label  # type: ignore[attr-defined]
+    assert service.list_records() == ()
+    assert _stored_canonicals(engine) == []
+    assert TEST_ONLY_SEED_CANARY not in outcome.detail  # type: ignore[attr-defined]
+    assert TEST_ONLY_SEED_CANARY_B64URL not in outcome.detail  # type: ignore[attr-defined]
+
+
+def test_the_did_allow_rule_admits_only_the_published_multibase_length() -> None:
+    """The three characters of slack that made the DID bypass possible.
+
+    ``{1,64}`` allowed a tail of exactly the length of a hex-spelled seed. A
+    real ``did:key`` tail is one length and only one.
+    """
+    assert is_public_protocol_value(TEST_ONLY_DID)
+    assert not is_public_protocol_value(f"did:key:z{TEST_ONLY_SEED_CANARY}")
+    assert not is_public_protocol_value(TEST_ONLY_DID + "a")
+    assert not is_public_protocol_value(TEST_ONLY_DID[:-1])
 
 
 def test_a_registered_value_refuses_the_write() -> None:
@@ -428,6 +509,120 @@ def test_a_changed_generation_makes_the_record_incomparable(
     assert second.state is CaptureState.GENERATION_CHANGED
     assert not second.is_server_observation
     assert "karsilastirilamaz" in second.detail
+
+
+def test_a_changed_generation_is_sticky_and_the_baseline_is_frozen(
+    engine: Engine, data_dir: Path
+) -> None:
+    """Three captures, not two, because the third is where it went wrong.
+
+    The first capture set the baseline. The second saw a different epoch and
+    reported ``generation_changed`` - and then **overwrote the baseline with
+    the new epoch**, so the third capture compared the new room against itself
+    and reported ``line_not_found``: "your message is not there", said about a
+    room that is not the same room. A verdict that can only ever be reached
+    once is a notification, not a state.
+    """
+    mine = _mine()
+    service = build_evidence(
+        engine, data_dir, transport=export_transport(ndjson([mine]))
+    )
+    outcome = _record(service, engine, nonce="1757000000000", signature="z" * 85 + "A")
+    evidence_id = outcome.evidence_id  # type: ignore[attr-defined]
+
+    first = service.capture(evidence_id=evidence_id, markers=MARKERS)
+    assert first.state is CaptureState.LINE_CAPTURED
+
+    moved = build_evidence(
+        engine,
+        data_dir,
+        transport=export_transport(
+            ndjson([mine]), generation=TEST_ONLY_GENERATION_NEXT
+        ),
+    )
+    second = moved.capture(evidence_id=evidence_id, markers=MARKERS)
+    assert second.state is CaptureState.GENERATION_CHANGED
+
+    third = moved.capture(evidence_id=evidence_id, markers=MARKERS)
+    assert third.state is CaptureState.GENERATION_CHANGED, (
+        "the room is still a different room on the third read"
+    )
+    assert not third.is_server_observation
+
+    view = moved.list_records()[0]
+    assert view.generation_changed is True
+    assert view.room_generation == TEST_ONLY_GENERATION, "the baseline is frozen"
+    # The stored line and the epoch beside it belong together, and neither
+    # was replaced by a read that the product itself calls incomparable.
+    assert view.captured_line == mine
+    assert view.capture_generation == TEST_ONLY_GENERATION
+
+
+def test_a_changed_generation_stays_changed_when_the_header_disappears(
+    engine: Engine, data_dir: Path
+) -> None:
+    """Stickiness is not just an artefact of the frozen baseline.
+
+    A server that stops publishing the header leaves nothing to compare, and
+    the comparison alone would fall through to ``line_not_found``. The record
+    remembers instead.
+    """
+    mine = _mine()
+    service = build_evidence(
+        engine, data_dir, transport=export_transport(ndjson([mine]))
+    )
+    outcome = _record(service, engine, nonce="1757000000000", signature="z" * 85 + "A")
+    evidence_id = outcome.evidence_id  # type: ignore[attr-defined]
+    service.capture(evidence_id=evidence_id, markers=MARKERS)
+
+    moved = build_evidence(
+        engine,
+        data_dir,
+        transport=export_transport(
+            ndjson([mine]), generation=TEST_ONLY_GENERATION_NEXT
+        ),
+    )
+    assert (
+        moved.capture(evidence_id=evidence_id, markers=MARKERS).state
+        is CaptureState.GENERATION_CHANGED
+    )
+
+    silent = build_evidence(
+        engine, data_dir, transport=export_transport(ndjson([]), generation="")
+    )
+    after = silent.capture(evidence_id=evidence_id, markers=MARKERS)
+
+    assert after.state is CaptureState.GENERATION_CHANGED
+    assert "karsilastirilamaz" in after.detail
+
+
+def test_a_capture_records_the_generation_its_line_was_read_under(
+    engine: Engine, data_dir: Path
+) -> None:
+    """A line and a generation are two facts, so they get two columns."""
+    service = build_evidence(
+        engine, data_dir, transport=export_transport(ndjson([_mine()]))
+    )
+    outcome = _record(service, engine, nonce="1757000000000", signature="z" * 85 + "A")
+    service.capture(evidence_id=outcome.evidence_id, markers=MARKERS)  # type: ignore[attr-defined]
+
+    view = service.list_records()[0]
+    assert view.capture_generation == TEST_ONLY_GENERATION
+    assert view.room_generation == view.capture_generation
+    assert view.generation_changed is False
+
+
+def test_a_record_that_was_never_captured_carries_no_generation_at_all(
+    engine: Engine, data_dir: Path
+) -> None:
+    """Nothing is invented at send time: Station does not read to publish."""
+    service = build_evidence(engine, data_dir)
+    outcome = _record(service, engine)
+
+    view = service.get(outcome.evidence_id)  # type: ignore[attr-defined]
+    assert view.room_generation == ""
+    assert view.capture_generation == ""
+    assert view.generation_changed is False
 
 
 def test_a_truncated_scan_is_not_an_absent_record(

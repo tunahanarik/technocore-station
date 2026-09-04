@@ -24,6 +24,28 @@ every comparison go through :func:`fold` - case-folded, diacritics stripped,
 dotless i mapped onto ``i`` - which maps the two spellings onto one. The
 entries below are therefore written in the folded form: it is what they are
 compared as, and storing the pretty spelling would only hide that.
+
+A claim is refused; data carrying the same words is neutralised
+---------------------------------------------------------------
+The first version of this module applied :func:`assert_no_forbidden_claim` to
+whole export payloads, on the reasoning that "none of these phrases is
+Technocore's". That reasoning was wrong, and wrong in the worst direction: a
+remote error body is excerpted into ``capture_detail``, a user's own message
+text is archived verbatim, and either one can contain the words. The result
+was a record that refused **both** export formats for good, on every retry,
+with no route that could remove it - a remote server, or the user's own
+sentence, deciding that the archive may never leave the machine again.
+
+The distinction the module now draws is the one that was always meant:
+
+* a **claim** is a sentence this product writes. Those are fixed strings, and
+  a forbidden phrase in one of them is a bug in our wording, so it fails
+  closed (:func:`assert_no_forbidden_claim`).
+* **data** is text that merely passed through us - a remote excerpt, a message
+  body. It is escaped and swept where it is rendered, and where it is folded
+  into one of *our* sentences it is neutralised first
+  (:func:`neutralise_forbidden_claims`), so a remote server cannot put words
+  in this product's mouth. It is never a reason to refuse a file.
 """
 
 from __future__ import annotations
@@ -94,16 +116,22 @@ def find_forbidden_phrases(text: str) -> tuple[str, ...]:
 
 
 class ForbiddenClaimError(ValueError):
-    """Text carrying a forbidden claim was about to leave this process."""
+    """One of *this product's own* sentences carries a forbidden claim.
+
+    Never raised because of imported text. A remote excerpt or a message body
+    is data: it is neutralised by :func:`neutralise_forbidden_claims` before
+    it can join one of our sentences, and it never refuses a write or an
+    export. See the module docstring for why that split exists.
+    """
 
 
 def assert_no_forbidden_claim(text: str, *, where: str) -> None:
-    """Fail closed rather than publish an over-claim.
+    """Fail closed rather than publish an over-claim of our own.
 
-    Used on the surfaces a person keeps: the export file and the audit
-    detail. A refusal here is a bug in this product's own wording, never
-    something a remote document can trigger - remote text is swept and
-    excerpted, and none of these phrases is Technocore's.
+    Called on strings this product authors - the audit-chain sentence, the
+    capture sentences, the level names, an audit detail assembled from fixed
+    words and a room name. A refusal here is a bug in our wording and there
+    is nothing a user or a server can do to cause one.
     """
     found = find_forbidden_phrases(text)
     if found:
@@ -112,12 +140,89 @@ def assert_no_forbidden_claim(text: str, *, where: str) -> None:
         )
 
 
+#: What replaces a forbidden phrase found inside imported text. It says that
+#: something was removed rather than removing it silently, and it carries no
+#: forbidden phrase of its own.
+NEUTRALISED_MARK = "[yasakli ifade cikarildi]"
+
+#: Used when the precise replacement below cannot be trusted to have removed
+#: every occurrence. Dropping the whole excerpt is the fail-closed answer: the
+#: excerpt is an explanatory courtesy, and losing it costs a sentence.
+NEUTRALISED_ALL = "(uzak metin yasakli ifade tasiyordu; tamami cikarildi)"
+
+
+def _fold_spans(text: str) -> tuple[str, tuple[tuple[int, int], ...]]:
+    """Fold ``text`` while remembering where each folded character came from.
+
+    :func:`fold` normalises in ways that change length - NFKD expands, case
+    folding can expand, combining marks disappear, whitespace runs collapse -
+    so an offset in the folded string says nothing about the original. This
+    walks the source one character at a time and records the source span each
+    folded character was produced from, which is what makes it possible to
+    remove a matched phrase from the **original** text rather than from a
+    normalised copy nobody would want to read.
+    """
+    folded: list[str] = []
+    spans: list[tuple[int, int]] = []
+    for index, character in enumerate(text):
+        for produced in fold(character):
+            if produced == " " and folded and folded[-1] == " ":
+                # A collapsed whitespace run: extend the span of the space
+                # already emitted rather than emitting a second one.
+                start, _ = spans[-1]
+                spans[-1] = (start, index + 1)
+                continue
+            folded.append(produced)
+            spans.append((index, index + 1))
+    return "".join(folded), tuple(spans)
+
+
+def _mask_forbidden_spans(text: str) -> str:
+    """Replace every folded match with :data:`NEUTRALISED_MARK`."""
+    folded, spans = _fold_spans(text)
+    hits: list[tuple[int, int]] = []
+    for needle in _FOLDED:
+        start = 0
+        while (index := folded.find(needle, start)) >= 0:
+            hits.append((spans[index][0], spans[index + len(needle) - 1][1]))
+            start = index + len(needle)
+
+    result = text
+    for begin, end in sorted(hits, reverse=True):
+        result = result[:begin] + NEUTRALISED_MARK + result[end:]
+    return result
+
+
+def neutralise_forbidden_claims(text: str) -> str:
+    """Make imported text safe to fold into one of this product's sentences.
+
+    Returns ``text`` unchanged when it carries no forbidden phrase, which is
+    the overwhelmingly common case and costs one folded scan.
+
+    When it does carry one, the phrase is replaced in place. The replacement
+    is then **re-checked with the authoritative scanner**: the span-tracking
+    fold above and :func:`fold` are two implementations of one normalisation,
+    and if they ever disagreed the precise pass could leave a phrase standing.
+    In that case the whole excerpt is dropped. Neutralising imported text can
+    lose an explanatory sentence; it can never refuse a write or an export.
+    """
+    if not find_forbidden_phrases(text):
+        return text
+    masked = _mask_forbidden_spans(text)
+    if find_forbidden_phrases(masked):  # pragma: no cover - defensive
+        return NEUTRALISED_ALL
+    return masked
+
+
 __all__ = [
     "AUDIT_CHAIN_CLAIM",
     "FORBIDDEN_PHRASES",
+    "NEUTRALISED_ALL",
+    "NEUTRALISED_MARK",
     "PERMITTED_ALTERNATIVES",
     "ForbiddenClaimError",
     "assert_no_forbidden_claim",
     "find_forbidden_phrases",
     "fold",
+    "neutralise_forbidden_claims",
 ]

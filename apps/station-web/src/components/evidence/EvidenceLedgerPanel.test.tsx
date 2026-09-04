@@ -99,6 +99,8 @@ const RECORD: EvidenceRecord = {
   capture_detail: "",
   captured_at: null,
   room_generation: "7",
+  capture_generation: "",
+  generation_changed: false,
   captured_line_offset: null,
   captured_line_length: null,
   stream_sha256: "",
