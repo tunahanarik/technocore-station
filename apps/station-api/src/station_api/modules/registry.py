@@ -21,12 +21,13 @@ Four things, and each one is checkable:
   (:class:`~station_api.modules.fields.EvidenceField`);
 * whether this build can produce that evidence at all (``implemented``).
 
-The fourth is the honest half. Two of Proje 0's charter outputs cannot be
-produced by this product as built, and one of them cannot be produced *ever*
-under the current policy: output 5 asks for a signed greeting in the lobby, and
-the lobby is in ``DENIED_ROOMS`` (IMP-281, INV-05). A registry that reported
-that requirement as merely "not done yet" would be describing a queue; it is
-a refusal, and it says so.
+The fourth is the honest half. **Three** of Proje 0's nine charter outputs
+cannot be produced by this product as built - ``profile_note_published``,
+``lobby_greeting_sent`` and ``module_marked_complete`` - and one of those three
+cannot be produced *ever* under the current policy: output 5 asks for a signed
+greeting in the lobby, and the lobby is in ``DENIED_ROOMS`` (IMP-281, INV-05).
+A registry that reported that requirement as merely "not done yet" would be
+describing a queue; it is a refusal, and it says so.
 
 No dynamic loading
 ------------------
@@ -42,6 +43,23 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from station_api.modules.fields import EvidenceField
+
+
+class ModuleRegistryError(KeyError):
+    """An identifier that is not in the compile-time registry.
+
+    A ``KeyError`` subclass, so the older assertion that an unregistered name
+    "raises ``KeyError``" still holds, and a *named* exception, so a caller can
+    turn it into a shown refusal instead of letting a bare ``KeyError`` become
+    an armoured 500. The message is safe to show: it names no path, no input
+    and no registry contents.
+
+    ``KeyError.__str__`` reprs its argument (``"'...'"``), which would put
+    stray quotes into a user-visible sentence, so it is overridden.
+    """
+
+    def __str__(self) -> str:
+        return str(self.args[0]) if self.args else ""
 
 
 class ModuleId(StrEnum):
@@ -260,8 +278,21 @@ _BY_ID: dict[ModuleId, ModuleRecord] = {record.id: record for record in MODULES}
 
 
 def get_module(module_id: ModuleId) -> ModuleRecord:
-    """Look up a module. Raises ``KeyError`` for anything not registered."""
-    return _BY_ID[module_id]
+    """Look up a module, or refuse by name.
+
+    Raises :class:`ModuleRegistryError` - a ``KeyError`` - for anything that is
+    not in the compile-time set, including an unhashable value. The named type
+    is what lets :mod:`station_api.tasks.service` answer an unknown module the
+    same way it answers an unknown source: one shown refusal with a reason,
+    rather than one refusal and one uncaught exception (ADR-0004 2).
+    """
+    try:
+        return _BY_ID[module_id]
+    except (KeyError, TypeError) as exc:
+        raise ModuleRegistryError(
+            "Kayitli olmayan bir modul kimligi istendi. Modul kumesi derleme "
+            "zamaninda sabittir ve calisma zamaninda genisletilemez."
+        ) from exc
 
 
 def requirement_keys(module_id: ModuleId) -> tuple[str, ...]:
@@ -274,6 +305,7 @@ __all__ = [
     "POLICY_REFUSED_REQUIREMENTS",
     "ModuleId",
     "ModuleRecord",
+    "ModuleRegistryError",
     "ModuleRequirement",
     "ModuleState",
     "get_module",

@@ -1,4 +1,5 @@
-"""SI-219 .. SI-225 - four fields, real evidence, a versioned identity, no writes.
+"""SI-219 .. SI-225, SI-227 .. SI-229, SI-231 - four fields, real evidence,
+a versioned identity, no writes.
 
 Four rules from ADR-0004, each with the failure it exists to prevent:
 
@@ -18,8 +19,11 @@ Four rules from ADR-0004, each with the failure it exists to prevent:
 from __future__ import annotations
 
 import ast
+import inspect
 import socket
 from collections.abc import Iterator
+from dataclasses import fields
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -40,11 +44,19 @@ from station_api.modules.fields import (
     EvidenceFieldError,
     EvidenceRef,
 )
-from station_api.modules.registry import ModuleId, get_module
-from station_api.tasks.gate import TaskGateInput
+from station_api.modules.registry import ModuleId, ModuleRegistryError, get_module
+from station_api.tasks.gate import TaskGateInput, TaskGateStatus
 from station_api.tasks.gate import evaluate as evaluate_gate
-from station_api.tasks.reconciliation import scan_unfinished_writes
-from station_api.tasks.service import TaskError, TaskService, TaskView
+from station_api.tasks.reconciliation import (
+    ReconciliationReport,
+    scan_unfinished_writes,
+)
+from station_api.tasks.service import (
+    MAX_REF_ID_CHARS,
+    TaskError,
+    TaskService,
+    TaskView,
+)
 from station_api.tasks.sources import (
     TASK_SOURCE_DOMAIN,
     TaskSourceError,
@@ -53,7 +65,7 @@ from station_api.tasks.sources import (
     source_version_id,
 )
 from station_api.tasks.states import TaskState
-from station_api.tasks.views import BUDGET_DETAIL, to_task_status
+from station_api.tasks.views import BUDGET_DETAIL, to_reconciliation, to_task_status
 
 from tests.conftest import TEST_PORT
 
@@ -153,6 +165,93 @@ def test_the_service_refuses_to_record_public_share(service: TaskService) -> Non
         )
 
     assert caught.value.reason == "evidence_field_refused"
+
+
+def test_an_evidence_pointer_is_swept_and_bounded_like_every_other_string(
+    service: TaskService,
+) -> None:
+    """SI-227 (F-6). ``ref_id`` was the one caller string that went in raw.
+
+    ``detail`` and ``title`` were swept and cut at 200; ``ref_id`` went
+    untouched into the row and out again through ``TaskFieldStatus.ref_id``, so
+    a right-to-left override, a NUL and a 406-character value all survived -
+    ``String(64)`` is not enforced by SQLite. There is no route in front of
+    this yet, which is exactly why it is closed before H1/H2 inherit it.
+    """
+    # A right-to-left override, a NUL and 406 characters, in one value.
+    hostile = "TEST-ONLY\u202eref\x00" + "A" * 406
+    assert len(hostile) > MAX_REF_ID_CHARS
+
+    view = service.record_evidence(
+        _open(service).id,
+        field=EvidenceField.TASK_OUTCOME,
+        ref_id=hostile,
+        verified=True,
+    )
+
+    stored = view.refs[0].ref_id
+    assert "\u202e" not in stored
+    assert "\x00" not in stored
+    assert stored.startswith("TEST-ONLY")
+    assert len(stored) <= MAX_REF_ID_CHARS
+    # And the swept value is what the response model would carry.
+    payload = to_task_status(view, service.gate(view.id))
+    outcome = next(
+        field
+        for field in payload.evidence_fields
+        if field.evidence_field == "task_outcome"
+    )
+    assert outcome.ref_id == stored
+
+
+def test_a_pointer_that_sweeps_down_to_nothing_is_refused(
+    service: TaskService,
+) -> None:
+    """An empty pointer is a reference to nowhere wearing a reference's shape."""
+    view = _open(service)
+
+    with pytest.raises(TaskError) as caught:
+        service.record_evidence(
+            view.id,
+            field=EvidenceField.TASK_OUTCOME,
+            ref_id="\u200b  \u202e",
+            verified=True,
+        )
+
+    assert caught.value.reason == "evidence_field_refused"
+    assert service.get(view.id).refs == ()
+
+
+def test_a_public_share_row_written_directly_is_passed_by(
+    service: TaskService, engine: Engine
+) -> None:
+    """What ``_refs_from_row`` actually does with a column nothing writes (F-4).
+
+    The docstring used to say such a row "would raise here". It would not: the
+    field is skipped before its columns are read, so the row is passed by. The
+    behaviour is the safe one - no reference this release calls impossible is
+    ever built - and the sentence now says that instead of a louder thing that
+    was not true.
+    """
+    from station_api.db.models import TaskEvidenceOutcome
+
+    view = _open(service)
+    with Session(engine) as session, session.begin():
+        row = session.get(TaskEvidenceOutcome, view.id)
+        assert row is not None
+        row.public_share_ref_id = "TEST-ONLY-written-behind-the-service"
+        row.public_share_verified = True
+        row.public_share_version_id = view.source_version_id
+
+    after = service.get(view.id)
+
+    assert after.refs == ()
+    assert [ref.field for ref in after.refs] == []
+    # The gate is unmoved: the field is not implemented whatever the row holds.
+    assert service.gate(view.id).check_for(EvidenceField.PUBLIC_SHARE).state is (
+        CheckState.NOT_IMPLEMENTED
+    )
+    assert service.gate(view.id).ready_to_publish is False
 
 
 def test_public_share_is_always_not_implemented_and_never_passed(
@@ -267,6 +366,110 @@ def test_unimplemented_requirements_are_never_counted_as_passed(
             assert check.satisfied is False
 
 
+def test_an_empty_gate_status_is_not_ready_to_publish() -> None:
+    """The vacuous-truth hole, closed at the dataclass (F-9).
+
+    ``evaluate`` never returns an empty status, but the type did not stop one
+    being built, and ``ready_to_publish`` was an ``all()`` over the checks that
+    happened to be present - so a status with no checks answered ``True``. Of
+    all the properties in this product, that is the worst one to have a
+    default of "yes". It now asks whether the three publication fields are
+    each *present and passed*, so absence blocks exactly like failure.
+    """
+    empty = TaskGateStatus(checks=())
+
+    assert empty.ready_to_publish is False
+    assert empty.blocking_fields == (
+        "task_outcome",
+        "test_result",
+        "user_acceptance",
+    )
+
+
+def test_a_gate_status_missing_one_field_entirely_still_blocks() -> None:
+    """Not only the empty case: a partial status is partial, not finished."""
+    full = evaluate_gate(
+        TaskGateInput(
+            source_version_id="v1",
+            refs=tuple(
+                EvidenceRef(
+                    field=field,
+                    ref_id="TEST-ONLY",
+                    verified=True,
+                    source_version_id="v1",
+                )
+                for field in sorted(PUBLICATION_FIELDS)
+            ),
+        )
+    )
+    assert full.ready_to_publish is True
+
+    dropped = TaskGateStatus(
+        checks=tuple(
+            check
+            for check in full.checks
+            if check.field is not EvidenceField.USER_ACCEPTANCE
+        )
+    )
+
+    assert dropped.ready_to_publish is False
+    assert dropped.blocking_fields == ("user_acceptance",)
+
+
+def test_a_module_check_refuses_evidence_bound_to_another_content_version() -> None:
+    """``completion.py``'s stale-evidence branch, driven directly (F-3).
+
+    ``tasks/gate.py`` had this covered and ``modules/completion.py`` did not:
+    turning its version comparison into ``if False`` broke no test, because
+    every case that reached it also had ``verified`` false or the same version.
+    Here the reference is verified and bound to *another* version, so the
+    version check is the only thing that can block it - and if it stopped
+    checking, the requirement would report ``passed``.
+    """
+    record = get_module(ModuleId.PROJECT_ZERO)
+    stale = EvidenceRef(
+        field=EvidenceField.TASK_OUTCOME,
+        ref_id="TEST-ONLY-stale",
+        verified=True,
+        source_version_id="TEST-ONLY-old-version",
+        detail="TEST-ONLY eski surum icin uretildi.",
+    )
+
+    completion = evaluate_module(
+        record, refs=(stale,), source_version_id="TEST-ONLY-new-version"
+    )
+    check = next(
+        item for item in completion.checks if item.key == "identity_local_only"
+    )
+
+    assert check.state is CheckState.BLOCKED
+    assert check.satisfied is False
+    assert "identity_local_only" in completion.blocking_keys
+    assert "baska bir icerik surumune ait" in check.detail
+    # The pointer is still shown: a reader is told *which* evidence went stale.
+    assert check.ref_id == "TEST-ONLY-stale"
+
+
+def test_the_same_reference_passes_once_its_version_matches() -> None:
+    """The other side of the same branch, so the test cannot pass vacuously."""
+    record = get_module(ModuleId.PROJECT_ZERO)
+    ref = EvidenceRef(
+        field=EvidenceField.TASK_OUTCOME,
+        ref_id="TEST-ONLY-stale",
+        verified=True,
+        source_version_id="TEST-ONLY-old-version",
+    )
+
+    completion = evaluate_module(
+        record, refs=(ref,), source_version_id="TEST-ONLY-old-version"
+    )
+    check = next(
+        item for item in completion.checks if item.key == "identity_local_only"
+    )
+
+    assert check.state is CheckState.PASSED
+
+
 def test_a_module_check_passes_only_on_verified_evidence() -> None:
     """The pure function, exercised directly on both sides of the rule."""
     record = get_module(ModuleId.PROJECT_ZERO)
@@ -350,6 +553,54 @@ def test_a_source_identifier_must_come_from_the_registry() -> None:
             "operator_request",  # type: ignore[arg-type]
             content_sha256(TEST_ONLY_CONTENT),
         )
+
+
+def test_an_unregistered_module_is_a_shown_refusal_and_not_a_bare_key_error(
+    service: TaskService,
+) -> None:
+    """SI-231 (F-11). One class of bad input, one class of refusal.
+
+    ``open_task`` refused an invalid *source* with ``TaskError`` and let an
+    invalid *module* out as a bare ``KeyError`` from the registry dictionary.
+    Same kind of mistake by the caller, two different fates: one shown, one an
+    armoured 500 for whatever surface H1 puts in front of this.
+    """
+    with pytest.raises(TaskError) as unknown_module:
+        service.open_task(
+            module_id="billing",  # type: ignore[arg-type]
+            source=TaskSourceId.OPERATOR_REQUEST,
+            content=TEST_ONLY_CONTENT,
+        )
+
+    with pytest.raises(TaskError) as unknown_source:
+        service.open_task(
+            module_id=ModuleId.PROJECT_ZERO,
+            source="operator_request",  # type: ignore[arg-type]
+            content=TEST_ONLY_CONTENT,
+        )
+
+    assert unknown_module.value.reason == "module_unknown"
+    assert unknown_source.value.reason == "source_invalid"
+    # The sentence is safe to show: no path, no registry contents, no repr.
+    message = str(unknown_module.value)
+    assert message.startswith("Kayitli olmayan")
+    assert "'" not in message and "billing" not in message
+
+
+def test_the_registry_still_raises_a_key_error_for_an_unknown_identifier() -> None:
+    """The named error is a ``KeyError``, so the older assertion still holds.
+
+    ``get_module`` is a mapping lookup and reads like one; widening its type
+    would have made ``test_an_unregistered_module_cannot_be_looked_up`` a
+    weaker test. ``ModuleRegistryError`` subclasses ``KeyError`` instead, so
+    the refusal gained a name without any assertion losing one.
+    """
+    assert issubclass(ModuleRegistryError, KeyError)
+
+    with pytest.raises(ModuleRegistryError):
+        get_module("billing")  # type: ignore[arg-type]
+    with pytest.raises(KeyError):
+        get_module("billing")  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
@@ -518,6 +769,47 @@ def test_the_scan_resumes_nothing_and_says_so(engine: Engine) -> None:
     assert report.resumed_any is False
     assert "Hicbir istek gonderilmedi" in report.detail
     assert "Devam karari kullanicinindir" in report.detail
+
+
+def test_resumed_any_cannot_be_constructed_as_true(engine: Engine) -> None:
+    """SI-229 (F-5). "Structurally False" now means what it says.
+
+    It was a dataclass field with a ``False`` default, so it was only a
+    default: ``ReconciliationReport(..., resumed_any=True)`` constructed fine,
+    and the ``Literal[False]`` that made the claim true lived on the Pydantic
+    model, one layer away. It is a read-only property now - there is no
+    constructor argument left to set.
+    """
+    with pytest.raises(TypeError):
+        ReconciliationReport(
+            scanned_at=datetime.now(UTC),
+            unfinished=(),
+            detail="TEST-ONLY",
+            resumed_any=True,  # type: ignore[call-arg]
+        )
+
+    assert "resumed_any" not in {field.name for field in fields(ReconciliationReport)}
+
+
+def test_the_projection_reads_resumed_any_rather_than_defaulting_it(
+    engine: Engine,
+) -> None:
+    """The response says ``False`` because the scan said so, not by omission.
+
+    ``to_reconciliation`` never mentioned ``resumed_any``; the model's own
+    default filled it in. That is a weaker statement than the document made,
+    and the two ends now hold each other up.
+    """
+    _seed_unfinished(engine)
+    report = scan_unfinished_writes(engine)
+
+    payload = to_reconciliation(report)
+
+    assert payload.resumed_any is False
+    assert payload.unfinished_count == report.unfinished_count
+
+    source = inspect.getsource(to_reconciliation)
+    assert "resumed_any=report.resumed_any" in source
 
 
 def test_an_empty_ledger_scans_to_an_empty_report(engine: Engine) -> None:

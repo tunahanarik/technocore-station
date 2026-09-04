@@ -1,4 +1,4 @@
-"""SI-210 .. SI-214 - the module registry is closed, compiled in, and honest.
+"""SI-210 .. SI-214, SI-230, SI-232 - the registry is closed, compiled in, honest.
 
 ADR-0004 1 settles what a "module" is in this product: a registry record, not
 a directory. These tests hold that decision in place from both sides. The
@@ -8,10 +8,11 @@ gone is a silent widening, which is the lesson
 ``test_every_reviewed_client_module_actually_exists`` already learned on the
 outbound clients.
 
-They also pin the part that is uncomfortable to write down: two of Proje 0's
-nine charter outputs cannot be produced by this build, and one of them is
-refused by policy rather than merely unbuilt. A registry that reported the
-lobby greeting as "pending" would be describing a queue that will never move.
+They also pin the part that is uncomfortable to write down: **three** of Proje
+0's nine charter outputs cannot be produced by this build, and one of those
+three is refused by policy rather than merely unbuilt. A registry that
+reported the lobby greeting as "pending" would be describing a queue that will
+never move.
 """
 
 from __future__ import annotations
@@ -40,16 +41,34 @@ pytestmark = pytest.mark.security
 #: the same hole in a different file.
 PACKAGE_F_DIRS = ("modules", "tasks")
 
-#: Names that would turn a compile-time registry into a loader. Imports and
-#: call targets are both checked, because ``from importlib import
-#: import_module`` and ``importlib.import_module`` are the same decision.
-DYNAMIC_LOADING_IMPORTS = ("importlib", "pkgutil", "runpy", "imp", "pkg_resources")
+#: Modules that would turn a compile-time registry into a loader. ``builtins``
+#: is here because it is the doorway to the attribute spelling of every banned
+#: name: ``builtins.__import__`` and ``getattr(builtins, "ex" + "ec")`` are the
+#: same decision as typing ``__import__``, and the first version of this scan
+#: caught neither.
+DYNAMIC_LOADING_IMPORTS = (
+    "importlib",
+    "pkgutil",
+    "runpy",
+    "imp",
+    "pkg_resources",
+    "builtins",
+)
 
-#: Builtins that turn text into code. Matched as *bare* names only, because
-#: ``re.compile`` is a pattern compiler and has nothing to do with this rule -
-#: banning the attribute spelling too would have made the test unrunnable for
-#: a reason that has no security content.
+#: Builtins that turn text into code.
 DYNAMIC_LOADING_BUILTINS = ("__import__", "exec", "eval", "compile")
+
+#: The three of those whose *attribute* spelling is banned as well.
+#: ``compile`` is deliberately absent, and only ``compile``: ``re.compile`` is
+#: a pattern compiler with nothing to do with this rule, and banning
+#: ``.compile`` would have failed the test for a reason with no security
+#: content. Nothing else on the list has an innocent attribute spelling.
+DYNAMIC_LOADING_ATTRIBUTE_BUILTINS = ("__import__", "exec", "eval")
+
+#: The import machinery reachable without importing anything: poking
+#: ``sys.modules`` replaces a module object in place, and ``__builtins__``
+#: reaches the same namespace ``builtins`` does.
+DYNAMIC_LOADING_NAMESPACES = ("sys.modules", "__builtins__", "builtins")
 
 #: Loader entry points. Matched in either spelling: ``from importlib import
 #: import_module`` and ``importlib.import_module`` are the same decision.
@@ -62,6 +81,12 @@ DYNAMIC_LOADING_FUNCTIONS = (
     "spec_from_file_location",
     "module_from_spec",
 )
+
+#: The schema stage every entry point must open the database at. Written out
+#: rather than imported: the number says which release the file on disk was
+#: written for, and a constant that derived it from one of the call sites
+#: would agree with whichever one drifted (F-10).
+CURRENT_SCHEMA_STAGE = 6
 
 #: Proje 0's completion outputs, charter 7.2, in charter order. Written out
 #: here rather than imported so a silent reordering or deletion in the
@@ -87,15 +112,67 @@ def _package_f_sources(api_source_root: Path) -> list[Path]:
     return paths
 
 
-def _forbidden_call(node: ast.Call) -> str:
-    """The banned name this call uses, or "" when it uses none."""
-    target = node.func
-    if isinstance(target, ast.Name):
-        if target.id in DYNAMIC_LOADING_BUILTINS + DYNAMIC_LOADING_FUNCTIONS:
-            return target.id
-    elif isinstance(target, ast.Attribute) and target.attr in DYNAMIC_LOADING_FUNCTIONS:
-        return target.attr
-    return ""
+def _dynamic_loading_offenders(source: str, label: str) -> list[str]:
+    """Every dynamic-loading construct in one Python source string.
+
+    Four spellings, because the first version of this scan only recognised
+    two - a banned import and a banned *call* - and the reviewer walked past
+    it three different ways (F-7):
+
+    * a banned import, in either ``import x`` or ``from x import y`` form;
+    * a banned **name**, wherever it appears. ``runner = __import__`` and
+      ``runner(name)`` on the next line is not a call to ``__import__`` as far
+      as the syntax tree is concerned;
+    * a banned **attribute**: ``builtins.__import__``, ``mod.exec``,
+      ``importlib.import_module``. ``compile`` is exempt here and nowhere
+      else, so ``re.compile`` still passes;
+    * a banned **namespace**: ``sys.modules[...] = ...`` swaps a module
+      without importing anything, and ``getattr(builtins, "ex" + "ec")``
+      builds the name at runtime. Both are matched on the unparsed
+      expression, which is what makes the assembled-string spelling visible.
+    """
+    offenders: list[str] = []
+    tree = ast.parse(source, filename=label)
+
+    def banned_import(name: str) -> bool:
+        return any(
+            name == banned or name.startswith(f"{banned}.")
+            for banned in DYNAMIC_LOADING_IMPORTS
+        )
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if banned_import(alias.name):
+                    offenders.append(f"{label}: import {alias.name}")
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if banned_import(module):
+                offenders.append(f"{label}: import {module}")
+            for alias in node.names:
+                if alias.name in (
+                    DYNAMIC_LOADING_FUNCTIONS + DYNAMIC_LOADING_BUILTINS
+                ):
+                    offenders.append(f"{label}: import {module}.{alias.name}")
+        elif isinstance(node, ast.Name):
+            if node.id in DYNAMIC_LOADING_BUILTINS + DYNAMIC_LOADING_FUNCTIONS:
+                offenders.append(f"{label}: name {node.id}")
+            elif node.id in DYNAMIC_LOADING_NAMESPACES:
+                offenders.append(f"{label}: namespace {node.id}")
+        elif isinstance(node, ast.Attribute):
+            if node.attr in (
+                DYNAMIC_LOADING_ATTRIBUTE_BUILTINS + DYNAMIC_LOADING_FUNCTIONS
+            ):
+                offenders.append(f"{label}: attribute .{node.attr}")
+            else:
+                unparsed = ast.unparse(node)
+                if any(
+                    unparsed == namespace or unparsed.startswith(f"{namespace}.")
+                    for namespace in DYNAMIC_LOADING_NAMESPACES
+                ):
+                    offenders.append(f"{label}: namespace {unparsed}")
+
+    return sorted(set(offenders))
 
 
 # ---------------------------------------------------------------------------
@@ -135,27 +212,63 @@ def test_no_module_is_ever_loaded_from_disk(api_source_root: Path) -> None:
     offenders: list[str] = []
 
     for path in _package_f_sources(api_source_root):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                names = [alias.name for alias in node.names]
-            elif isinstance(node, ast.ImportFrom):
-                names = [node.module or ""]
-            elif isinstance(node, ast.Call):
-                found = _forbidden_call(node)
-                if found:
-                    offenders.append(f"{path.name}: call {found}")
-                continue
-            else:
-                continue
-            for name in names:
-                if any(
-                    name == banned or name.startswith(f"{banned}.")
-                    for banned in DYNAMIC_LOADING_IMPORTS
-                ):
-                    offenders.append(f"{path.name}: import {name}")
+        offenders.extend(
+            _dynamic_loading_offenders(path.read_text(encoding="utf-8"), path.name)
+        )
 
     assert offenders == [], f"dynamic module loading in the registry: {offenders}"
+
+
+@pytest.mark.parametrize(
+    ("label", "source"),
+    [
+        ("import-then-attribute", "import builtins\nbuiltins.__import__('os')\n"),
+        ("assembled-name", "getattr(builtins, 'ex' + 'ec')('x = 1')\n"),
+        ("module-table-poke", "import sys\nsys.modules['station_api.x'] = None\n"),
+        ("module-table-read", "loaded = sys.modules['station_api.x']\n"),
+        ("builtins-dunder", "__builtins__['exec']('x = 1')\n"),
+        ("bare-reference", "runner = __import__\nrunner('os')\n"),
+        ("aliased-import", "import importlib.util as u\nu.spec_from_file_location\n"),
+        ("from-import", "from importlib import import_module\n"),
+        ("attribute-eval", "value = helper.eval('1 + 1')\n"),
+        ("plain-exec", "exec('x = 1')\n"),
+    ],
+)
+def test_the_dynamic_loading_scan_catches_the_indirect_spellings(
+    label: str, source: str
+) -> None:
+    """The scan, checked against the ways around it (F-7).
+
+    The comment beside ``DYNAMIC_LOADING_BUILTINS`` used to justify matching
+    bare names only by pointing at ``re.compile`` - true of ``compile`` and of
+    nothing else on the list. ``builtins.__import__``, an assembled
+    ``getattr``, a bare reference and a ``sys.modules`` poke all walked
+    through. Each of them is a case here, so the claim the documents make
+    about this test is a claim something checks.
+    """
+    assert _dynamic_loading_offenders(source, label), label
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import re\nPATTERN = re.compile('a')\n",
+        "from dataclasses import dataclass\n",
+        "value = getattr(row, column_name)\n",
+        "state = record.state\n",
+    ],
+)
+def test_the_dynamic_loading_scan_leaves_the_innocent_spellings_alone(
+    source: str,
+) -> None:
+    """A scan that flags everything is a scan somebody turns off.
+
+    ``re.compile`` is the case that shaped the rule, and ``getattr`` with a
+    computed column name is the pattern ``tasks/service.py`` is built on -
+    already fenced by
+    ``test_the_only_computed_attribute_names_come_from_the_field_enum``.
+    """
+    assert _dynamic_loading_offenders(source, "innocent") == []
 
 
 def test_the_only_computed_attribute_names_come_from_the_field_enum(
@@ -273,7 +386,7 @@ def test_planned_modules_name_the_package_that_opens_them() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The nine charter outputs, and the two that cannot be produced
+# The nine charter outputs, and the three that cannot be produced
 # ---------------------------------------------------------------------------
 
 
@@ -441,6 +554,55 @@ def test_the_task_tables_have_no_secret_shaped_columns(engine: Engine) -> None:
                 offenders.append(f"{table}.{name}")
 
     assert offenders == [], f"secret-shaped columns in the task tables: {offenders}"
+
+
+#: The two calls that carry the release number: the one that stamps it into
+#: ``app_metadata`` and the one that shows it to the user.
+STAGE_BEARING_CALLS = ("initialise_database", "ServiceStatus")
+
+
+def _stage_call_sites(root: Path) -> dict[str, int]:
+    """``<dir>/<file>`` to the stage number it names, for every such call."""
+    sites: dict[str, int] = {}
+    for path in root.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            called = node.func.id if isinstance(node.func, ast.Name) else ""
+            if called not in STAGE_BEARING_CALLS:
+                continue
+            stages = [
+                keyword.value.value
+                for keyword in node.keywords
+                if keyword.arg == "stage"
+                and isinstance(keyword.value, ast.Constant)
+                and isinstance(keyword.value.value, int)
+            ]
+            if stages:
+                sites[f"{path.parent.name}/{path.name}:{called}"] = stages[0]
+    return sites
+
+
+def test_every_entry_point_names_the_same_release_stage(
+    api_source_root: Path, repo_root: Path
+) -> None:
+    """SI-232 (F-10). One release, one stage number, four call sites.
+
+    ``launcher.py``, ``routes/api.py`` and the test fixture all said ``6``;
+    ``cli/__main__.py`` still opened the database at ``stage=3``, three
+    releases behind, and nothing said so. The number is stamped into
+    ``app_metadata`` and shown on ``/api/app/status``, so an application that
+    presents itself as an older release than the one under test is a small lie
+    - and this suite has already refused that shape of lie once, one file over.
+    """
+    application = _stage_call_sites(api_source_root / "station_api")
+    fixtures = _stage_call_sites(repo_root / "tests")
+
+    assert len(application) >= 3, application
+    assert fixtures, "the suite should migrate at the stage under test"
+    assert set(application.values()) == {CURRENT_SCHEMA_STAGE}, application
+    assert CURRENT_SCHEMA_STAGE in set(fixtures.values()), fixtures
 
 
 def test_migration_0007_changed_no_existing_table(engine: Engine) -> None:

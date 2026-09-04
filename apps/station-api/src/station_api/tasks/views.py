@@ -125,10 +125,19 @@ def to_task_list(
 
 
 def to_reconciliation(report: ReconciliationReport) -> TaskReconciliationResponse:
-    """The read-only scan's result. ``resumed_any`` is structurally False."""
+    """The read-only scan's result.
+
+    ``resumed_any`` is **copied from the report** rather than defaulted here.
+    Letting the response model's own ``Literal[False]`` default fill it in
+    would have meant the field was ``False`` because this function never set
+    it, which is a different - and weaker - statement than "the scan said so".
+    On the report it is a property with no constructor argument, so the two
+    ends of the claim now hold each other up.
+    """
     return TaskReconciliationResponse(
         scanned_at=report.scanned_at,
         unfinished_count=report.unfinished_count,
+        resumed_any=report.resumed_any,
         entries=[
             UnfinishedWriteStatus(
                 reservation_id=entry.reservation_id,

@@ -70,20 +70,39 @@ class TaskGateStatus:
     checks: tuple[TaskCheck, ...]
 
     @property
-    def ready_to_publish(self) -> bool:
-        """All three publication fields passed. Derived, never stored."""
-        return all(
-            check.satisfied
+    def _passed_publication_fields(self) -> frozenset[EvidenceField]:
+        return frozenset(
+            check.field
             for check in self.checks
-            if check.field in PUBLICATION_FIELDS
+            if check.field in PUBLICATION_FIELDS and check.satisfied
         )
 
     @property
+    def ready_to_publish(self) -> bool:
+        """All three publication fields **present** and passed.
+
+        Written as a set equality rather than ``all(...)`` on purpose. An empty
+        ``all()`` is ``True``, so a status carrying no checks at all - which
+        :func:`evaluate` never builds, but the dataclass does not forbid -
+        would otherwise report a task with zero evidence as ready to publish.
+        The one place in this product where a vacuous truth is most expensive
+        is the one place it must not be reachable (F-9).
+        """
+        return self._passed_publication_fields == frozenset(PUBLICATION_FIELDS)
+
+    @property
     def blocking_fields(self) -> tuple[str, ...]:
+        """Every publication field this status does not report as passed.
+
+        Derived from the required set, not from the checks, so a field that is
+        *missing* from the status blocks exactly as loudly as one that failed.
+        Ordered by the enum, so the sentence a caller builds is stable.
+        """
+        passed = self._passed_publication_fields
         return tuple(
-            check.field.value
-            for check in self.checks
-            if check.field in PUBLICATION_FIELDS and not check.satisfied
+            field.value
+            for field in EvidenceField
+            if field in PUBLICATION_FIELDS and field not in passed
         )
 
     def check_for(self, field: EvidenceField) -> TaskCheck:

@@ -37,11 +37,31 @@ sunulmaz.
 
 **Diskten yükleme yoktur.** Plugin dizini, entry-point grubu, ada göre import
 ve metinden kod üretimi — hiçbiri yok. Bir güvenlik testi iki paketin
-sözdizim ağacını yürüyerek `importlib`, `pkgutil`, `__import__`, `exec`,
-`eval`, `import_module`, `iter_modules`, `entry_points` ve benzerlerini arar
-(künye ADR-017, AGENTS.md §2.9).
+sözdizim ağacını yürüyerek dört yazımı birden arar (künye ADR-017,
+AGENTS.md §2.9):
 
-### Proje 0'ın dokuz çıktısı ve ikisinin dürüst durumu
+| Yazım | Örnek | Neden ayrı |
+|---|---|---|
+| yasak import | `import importlib`, `from importlib import import_module` | ilk sürümün yakaladığı tek şey buydu |
+| yasak **ad** | `runner = __import__` | atama bir çağrı değildir; sözdizim ağacı `Call` görmez |
+| yasak **attribute** | `builtins.__import__`, `mod.exec` | `__import__`/`exec`/`eval` için attribute yazımı da yasak |
+| yasak **ad alanı** | `sys.modules[...] = ...`, `getattr(builtins, 'ex'+'ec')` | hiçbir şey import etmeden import makinesine ulaşır |
+
+`compile`'ın **yalnız** bare adı yasaktır, attribute yazımı değil: `re.compile`
+bir desen derleyicisidir ve bu kuralla ilgisi yoktur. Bu istisna listedeki
+başka hiçbir ad için geçerli değil — eski yorum tek bir adın gerekçesini
+listenin tamamı için yazıyordu ve inceleme üç ayrı yoldan yanından geçti.
+`test_the_dynamic_loading_scan_catches_the_indirect_spellings` bu dört yazımın
+her birini taramaya besler; `..._leaves_the_innocent_spellings_alone` ise
+`re.compile` ve hesaplanmış `getattr` sütun adının temiz kaldığını denetler.
+
+**Kayıtsız modül kimliği gösterilebilir bir rettir.** `get_module` çıplak
+`KeyError` yerine `ModuleRegistryError` (bir `KeyError` alt sınıfı) yükseltir
+ve `TaskService` onu `TaskError(reason="module_unknown")`'a çevirir —
+geçersiz kaynağın `source_invalid` ile reddedildiği gibi. Aynı sınıf hatanın
+biri gösterilebilir ret, diğeri zırhlı 500 üretmez.
+
+### Proje 0'ın dokuz çıktısı ve üçünün dürüst durumu
 
 Künye §7.2'nin dokuz maddesi registry'de gereksinim olarak durur. Üçü bu
 sürümde **üretilemez** ve `not_implemented` raporlar — asla `passed`:
@@ -89,15 +109,24 @@ yeniden türetmesi demek olurdu — fakat **hiçbir kod yolu onları üretemez**
 `validate_transition` hedef `UNPRODUCIBLE_STATES` içindeyse geçişi adıyla
 reddeder.
 
-Bunu iki test sabitler:
+Bunu **dört** test sabitler; hangisinin neyi tuttuğu ayrı ayrı yazılıdır,
+çünkü ilk sürümde tek bir cümle üç ayrı iddiayı birden üstleniyordu ve
+üçünden yalnız biri doğruydu:
 
-- `test_no_code_path_can_produce_an_unproducible_state` — gerçek servisi
-  gerçek veritabanı üzerinde makinenin sunduğu her geçişten sürer, **ulaşılan
-  durumların kümesini toplar** ve `PRODUCIBLE_STATES` ile karşılaştırır.
-  Gelecekte biri `running`'i sabiti düzenlemeden açarsa test kırılır; sabiti
-  hiçbir şey açmadan düzenlerse de kırılır.
-- `test_the_service_refuses_a_direct_request_for_an_unbuilt_state` — üç durum
-  için doğrudan istek `state_not_producible` ile reddedilir.
+| Test | Ne tutar | Neyi tutmaz |
+|---|---|---|
+| `test_no_code_path_can_produce_an_unproducible_state` | `TaskService`'in **her public metodunu** introspection ile bulur, annotation'larının izin verdiği her argümanla sürer ve ulaşılan durumları **doğrudan tablodan** okur | çağrılamayan bir üreticiyi (adı olmayan, argümanı tanınmayan) — o durumda test *hata* verir, atlamaz |
+| `test_only_the_transition_method_writes_a_task_state` | `modules/` + `tasks/` sözdizim ağacında `.state`'e yazan **tek** yerin `TaskService.transition` olduğunu (atama, `setattr` ve artırmalı atama dâhil) | çalışma zamanı davranışını — bu yapısal yarıdır |
+| `test_the_service_refuses_a_direct_request_for_an_unbuilt_state` | üç durum için doğrudan isteğin `state_not_producible` ile reddedildiğini | dolaylı yolları |
+| `test_the_state_write_scan_would_see_a_second_writer` | yapısal taramanın gerçekten ateşlediğini (sentetik ikinci yazıcı besleyerek) | üretim kodunu |
+
+**Oracle sabitten bağımsızdır.** `UNPRODUCIBLE_STATES` `PRODUCIBLE_STATES`'ten
+türetilir ve `validate_transition` tam olarak o türetilmiş kümeye bakar; yani
+`PRODUCIBLE_STATES`'e `running` eklemek hem reddi kaldırır hem beklenen kümeyi
+büyütür. İnceleme bunu mutasyonla gösterdi: eski test kırılmıyordu. Beklenen
+küme artık testin içinde `EXPECTED_PRODUCIBLE` olarak **elle yazılıdır** (ADR-0004
+§3'ten), sabit ise ayrı bir satırda denetlenir. "Sabiti hiçbir şey açmadan
+düzenlemek de kırar" cümlesi bu yüzden artık doğrudur.
 
 Bu, `CheckState.NOT_IMPLEMENTED`'ın kuralının durum makinesine uygulanmış
 hâlidir: erişilemez bir durum, sessizce erişilebilirmiş gibi durmaz.
@@ -130,6 +159,28 @@ değil. Eksik bir check `not_implemented` raporlar, `passed` değil.
 `ready_to_publish` **kanıttan türer**: üç yayım alanının üçü de bu görevin
 kendi içerik sürümüne karşı ayrı ayrı doğrulanmış olmalıdır. Durum elle
 istenemez; `evidence_incomplete` ile reddedilir.
+
+**Boş kontrol kümesi "hazır" değildir.** `TaskGateStatus.ready_to_publish`
+önce `all(...)` idi; boş bir `all()` `True` döndüğü için `TaskGateStatus(checks=())`
+hiç kanıtı olmayan bir görevi yayıma hazır sayıyordu. `evaluate()` asla boş
+dönmüyordu, ama tip de engellemiyordu. Artık üç yayım alanının **var olup
+geçtiği** küme eşitliğiyle sorulur: yokluk, başarısızlık kadar yüksek sesle
+engeller. `blocking_fields` de aynı gerekli kümeden türetilir.
+
+**Kanıt işaretçisi de süpürülür ve sınırlanır.** `detail` ve `title`
+`sweep_untrusted(...)[:200]`'den geçiyordu; `ref_id` ham geçiyordu ve bidi
+override, NUL ve 406 karakterlik bir değer `TaskFieldStatus.ref_id`'ye kadar
+ulaşıyordu (`String(64)` var ama SQLite dayatmıyor). `ref_id` artık süpürülüp
+`MAX_REF_ID_CHARS` = 64'e kesilir; hiçbir şeye inen bir işaretçi
+`evidence_field_refused` ile reddedilir. Bugün önünde route yok — H1/H2
+devralacağı için şimdi kapatıldı.
+
+**Bayat sürüm kontrolü iki yolda da testlidir.** `tasks/gate.py` ve
+`modules/completion.py` aynı karşılaştırmayı ayrı ayrı yapar. İkincisi
+kapsanmıyordu: karşılaştırmasını `if False` yapmak hiçbir testi kırmıyordu,
+çünkü oraya varan her durumda `verified` zaten `False`'tu.
+`test_a_module_check_refuses_evidence_bound_to_another_content_version`
+doğrulanmış ama **başka sürüme bağlı** bir referansla o dalı doğrudan sürer.
 
 ---
 
@@ -169,7 +220,14 @@ koşar (`app.state.task_reconciliation`), tek bir `SELECT` yapar ve:
   **sıfır** olduğunu ölçer (gerçek `create_app` çağrısıyla birlikte);
 - **hiçbir satırı değiştirmez.** Defter taramadan önce ve sonra bayt bayt
   aynıdır ve satır hâlâ `in_flight`'tır;
-- **hiçbir gönderimi sürdürmez.** `resumed_any` yapısal olarak `False`'tur.
+- **hiçbir gönderimi sürdürmez.** `ReconciliationReport.resumed_any` bir alan
+  değil, `Literal[False]` dönen bir **property**'dir: kurucu argümanı yoktur,
+  yani `ReconciliationReport(..., resumed_any=True)` `TypeError` verir. Daha
+  önce varsayılanı `False` olan sıradan bir alandı ve `Literal[False]` olan
+  yalnız Pydantic modeliydi — "yapısal" cümlesi bir katman öteyi tarif
+  ediyordu. `tasks/views.py` de değeri artık **rapordan okur**
+  (`resumed_any=report.resumed_any`); modelin kendi varsayılanına bırakmak
+  "F alanı hiç doldurmadı" demekti, "tarama öyle söyledi" değil.
 
 Devam kararı kullanıcınındır ve devam edilirse bütün kontroller baştan koşar
 (ADR-0003 §4'ün daralmasıyla aynı biçim: yakalama denenebilir, yeniden
@@ -251,3 +309,11 @@ Hiçbir sütun adında `seed`, `secret`, `key`, `private`, `mnemonic`,
 `key` parçasını da kapsayacak şekilde şema geneli kuraldan **daha sıkıdır**.
 Saklanan her değer bir registry kimliği, bir digest, public bir işaretçi veya
 Türkçe bir cümledir.
+
+**Aşama numarası tek bir sayıdır.** `launcher.py` ve `cli/__main__.py`
+veritabanını açarken, `routes/api.py` ise `/api/app/status` üzerinden
+gösterirken aynı numarayı taşır. `cli/__main__.py` üç sürüm geride
+(`stage=3`) kalmıştı ve hiçbir şey bunu söylemiyordu; uygulamanın kendini test
+edilen sürümden eski göstermesi küçük bir yalandır.
+`test_every_entry_point_names_the_same_release_stage` üç üretim çağrısını da
+tarar ve hepsinin `CURRENT_SCHEMA_STAGE` ile aynı olmasını ister.

@@ -102,7 +102,7 @@ birlikte.
 
 | Kapı | Sonuç |
 |---|---|
-| pytest | **1302 geçti** (1229 → 1302; +73: registry 17, durumlar 20, kanıt 36) |
+| pytest | **1331 geçti** (1229 → 1302 → inceleme düzeltmeleriyle 1331) |
 | Vitest | **206 geçti** (frontend'e dokunulmadı) |
 | ruff (iki koşu) | geçti |
 | mypy strict | 0 hata |
@@ -137,8 +137,77 @@ yalandır ve tam da kimse geri okumadığı için fark edilmez. O da 6 oldu.
 
 ## Bağımsız inceleme sonucu
 
-(PR üzerinde doldurulacak — temiz bağlamlı reviewer subagent koşulacak; bu
-insan güvenlik incelemesi değildir, ADR-0001 §5 kalan risk.)
+Temiz bağlamlı, yazardan ayrı bir Claude reviewer subagent'ı head `d7d8541`
+diffini inceledi, kapıları kendi koştu ve **18 mutasyon** çalıştırdı.
+**11 bulgu**; hepsi merge öncesi kapatıldı.
+
+### P1 — koruma yalancıydı
+
+"Hiçbir kod yolu `suggested`/`running`/`paused` üretemez" iddiası aslında
+**yalnız `transition()` için** sabitlenmişti: erişilebilirlik yürüyüşü
+enine aramayı tek metot üzerinden yapıyordu. İncelemeci servise durumu
+doğrudan yazan üç satırlık bir `start_running()` ekledi ve **hiçbir test
+kırılmadı**. Ürün doğruydu — kırılan korumanın kendisiydi, ve H2 `running`'i
+`transition` dışından açsaydı suite onu sessizce onaylayacaktı. Bu, Paket
+E'de bulunan yalancı korumanın kardeşi.
+
+Düzeltme iki yarımdan oluşuyor. **Davranışsal:** yürüyüş artık
+`TaskService`'in **her public metodunu** `dir()` + `get_type_hints()` ile
+sayıyor ve her metodu, annotation'larının kabul ettiği bütün değerlerle
+(dokuz durum, dört kanıt alanı, iki bool) sürüyor; durumlar
+`service.get()`'ten değil doğrudan tablodan okunuyor; tanınmayan bir
+annotation `AssertionError` fırlatıyor, yani yeni bir üretici sessizce
+sürülmeden kalamıyor. **Yapısal:** bir AST taraması `modules/` ve `tasks/`
+ağaçlarında `.state`'e yazan tek yerin `service.py:transition` olmasını
+şart koşuyor. İncelemecinin probu artık **iki testi** kırıyor.
+
+### P2 — test kendi kehanetini doğruluyordu
+
+Üretilemeyen durumlar kümesi üretilebilirlerden türetiliyor ve reddin
+kendisi de aynı kümeye bakıyordu; dolayısıyla sabiti genişletmek hem reddi
+kaldırıyor hem beklentiyi büyütüyordu. Mutasyonda o test kırılmadı.
+Beklenen küme artık testte ADR-0004 §3'ten **elle yazılıyor** ve sabitle
+eşitliği ayrı bir satırda iddia ediliyor — iki iddia ayrılabilir hale geldi.
+Belgeyi geri çekmek yerine iddiayı gerçek kılmak seçildi.
+
+### P2 — test edilmeyen dal
+
+`modules/completion.py`'deki bayat-kanıt kontrolü `if False:` yapıldığında
+**sıfır test kırılıyordu**; ikizi (`tasks/gate.py`) test edildiği için
+değişmez listesi iki yolu da kapsıyormuş gibi görünüyordu. Artık kendi
+testi var, boşuna geçmesin diye eşleşen-sürüm ikiziyle birlikte.
+
+### Diğer bulgular
+
+| Bulgu | Düzeltme |
+|---|---|
+| `_refs_from_row` docstring'i "böyle bir satır burada hata fırlatır" diyordu; gerçekte **sessizce atlanıyor** | Cümle gerçeğe indirildi ve davranış testle sabitlendi |
+| `resumed_any` "yapısal olarak False" değildi — yalnız varsayılandı ve projeksiyon onu hiç okumuyordu | `@property -> Literal[False]`, constructor argümanı yok; projeksiyon artık okuyor |
+| `ref_id` süpürülmüyor ve sınırlanmıyordu (bidi override, NUL ve 406 karakter yanıt modeline ulaşıyordu) | `sweep_untrusted` + 64 karakter sınırı; hiçliğe süpürülen bir işaretçi reddediliyor |
+| Dinamik yükleme yasağı atlatılabiliyordu (`builtins.__import__` attribute yazımı, `getattr` ile parçalı ad, `sys.modules` poke) | Tarama dört yazıma genişletildi; `compile` muafiyeti yalnız attribute formunda; on sentetik bypass ve dört masum yazım parametrik test |
+| Kod "iki çıktı üretilemez" diyordu, kendi assertion'ı **üç** sayıyordu | Üçe düzeltildi |
+| Boş `checks` ile `ready_to_publish` boş `all()` yüzünden `True` oluyordu | Küme eşitliğine çevrildi |
+| `cli/__main__.py` hâlâ `stage=3` damgalıyordu | 6 oldu; üç üretim çağrı yerinin aynı aşamayı söylediğini bir test sabitliyor |
+| Geçersiz `module_id` **çıplak `KeyError`** fırlatıyordu (zırhlı 500), geçersiz kaynak ise gösterilebilir ret veriyordu | `ModuleRegistryError(KeyError)` + `module_unknown` reddi; `KeyError` alt sınıflandığı için eski iddia tam güçte kaldı |
+
+### Kıramadıkları
+
+Başlangıç taramasının **sıfır giden istek** ve **sıfır yazma** iddiası
+incelemecinin kendi sayaçlarıyla — async transport, `connect_ex`, WAL ve
+SHM dosyalarının SHA-256'sı ve `PRAGMA user_version` dahil — doğrulandı ve
+paketin kendi testinden **daha geniş** çıktı. Dedup kimliği dört saldırıya
+dayandı. `isinstance(TaskSourceId)` kontrolü düz `str`, `__eq__` override
+eden `str` alt sınıfı, aynı üyeli başka bir `StrEnum` ve alt sınıflama
+denemelerinin hiçbirinden geçmedi. `public_share` doğrudan DB yazımıyla
+bile gate'e sızmadı. Şemalar `schemas.py`'de kaldığı için üç secret testi
+yedi yeni modeli de kapsıyor. `architecture.md` güncellemesi dürüst: eski
+yanlış cümle **alıntılanıp** düzeltilmiş, sessizce silinmemiş.
+
+On sekiz mutasyonun on beşi doğru testleri kırmızıya döndürdü; kalan üçü
+yukarıdaki P1/P2 bulgularıydı.
+
+Düzeltmeler sonrası tam suite: **1331 pytest** + **206 Vitest**.
+Bu inceleme bir **insan güvenlik incelemesi değildir** (ADR-0001 §5).
 
 ## Sınırlar
 

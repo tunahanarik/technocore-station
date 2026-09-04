@@ -3,7 +3,7 @@
 > Ana karar kaynağı: [`Technocore-Station-Proje-Kunyesi.md`](Technocore-Station-Proje-Kunyesi.md)
 > Çalışma kuralları: [`AGENTS.md`](AGENTS.md) · [`CLAUDE.md`](CLAUDE.md)
 > Son güncelleme: **4 Eylül 2026** (Aşama 6 / Paket F — proje/görev modülü
-> temeli)
+> temeli; PR #15 bağımsız inceleme düzeltmeleri dâhil)
 
 ## Aşama checklist
 
@@ -1143,9 +1143,12 @@ dokunulmadı.
       conformance, technocore, compose ve evidence modüllerine işaret eder ve
       bir test her adın gerçekten bir dosyaya çözüldüğünü doğrular.
       Diskten plugin/import yükleme yolu **yoktur**; bir test iki paketin
-      sözdizim ağacını tarayarak `importlib`/`pkgutil`/`__import__`/`exec`/
-      `eval`/`import_module`/`iter_modules`/`entry_points` arar (künye
-      ADR-017 böylece ilk kez gerçekten uygulanmış oldu).
+      sözdizim ağacını **dört yazım** için tarar — yasak import, yasak bare ad
+      (`runner = __import__`), yasak attribute (`builtins.__import__`) ve
+      yasak ad alanı (`sys.modules`, `getattr(builtins, ...)`). `compile`'ın
+      yalnız bare adı yasaktır; `re.compile` serbesttir. Taramanın kendisi on
+      sentetik atlatmayla test edilir (künye ADR-017 böylece ilk kez gerçekten
+      uygulanmış oldu).
 - [x] **Çekirdek yeniden kullanıldı, kopyalanmadı.** `station_api/tasks/`
       yalnız yeni koddur; bağımlılığı constructor'dan alır ve `app.py` onu
       mevcut `engine` ile kurar. **Yeni HTTP istemcisi yok**
@@ -1158,11 +1161,11 @@ dokunulmadı.
       dağılmıştı) ve `validate_transition` saf bir fonksiyondur.
       **Dürüstlük şartı karşılandı:** `suggested` (H1 ister), `running` ve
       `paused` (H2 ister) tanımlı kalır fakat **hiçbir kod yolundan
-      üretilemez**. Bunu bir **davranış** testi sabitler —
-      `test_no_code_path_can_produce_an_unproducible_state` gerçek servisi
-      gerçek veritabanı üzerinde sürer, ulaşılan durum kümesini hesaplar ve
-      `PRODUCIBLE_STATES` ile karşılaştırır. `running`'i açan bir paket sabiti
-      düzenlemek **zorunda** kalır.
+      üretilemez**. Bunu **bir davranış ve bir yapı** testi birlikte sabitler
+      (bağımsız inceleme düzeltmesi, aşağıda): yürüyüş `TaskService`'in her
+      public metodunu introspection ile sürer, tarama ise `.state`'e yazan tek
+      yerin `transition` olduğunu denetler. Beklenen küme testin içinde elle
+      yazılıdır, böylece sabiti düzenlemek oracle'ı büyütmez.
 - [x] **Dört ayrı alan.** Görev çıktısı / test sonucu / kullanıcı kabulü /
       public paylaşım dört ayrı sütun grubudur (`_ref_id`, `_verified`,
       `_version_id`, `_detail`, `_recorded_at`) — `EvidenceRecord`'un dört
@@ -1185,7 +1188,8 @@ dokunulmadı.
       yapar. **Sıfır iddiası ölçülerek kanıtlandı:** httpx taşıyıcısı ve
       `socket.connect` sarılıp denemeler sayıldı; hem taramada hem gerçek
       `create_app` çağrısında sayı **0**. Defter bayt bayt aynı kalır, satır
-      hâlâ `in_flight`'tır, `resumed_any` yapısal olarak `False`'tur.
+      hâlâ `in_flight`'tır, `resumed_any` **kurucu argümanı olmayan** bir
+      property'dir (bağımsız inceleme düzeltmesi).
 - [x] **Bütçe YOK ve erteleme görünür.** Bütçe alanı açılmadı;
       `budget_available: Literal[False]` + `budget_detail` ertelemeyi söyler
       (composer'ın `note_lane_available` kalıbı). Bir test görev/registry
@@ -1208,11 +1212,30 @@ dokunulmadı.
       **yoktur**" diyordu; üçü de merge edilmişti. Durum satırı, paket
       tablosu, mimari diyagramı, tablo listesi ve "bilinçli olarak
       yapılmayanlar" bölümü güncellendi.
-- [x] **1302 pytest** (1229 → 1302; **73 yeni test**), üç yeni güvenlik
-      dosyası: `test_module_registry.py` (17), `test_task_states.py` (20),
-      `test_task_evidence.py` (36). Yeni bağımlılık yok, yeni marker yok,
+- [x] **1331 pytest** (1229 → 1331; **102 yeni test**), üç yeni güvenlik
+      dosyası: `test_module_registry.py` (32), `test_task_states.py` (23),
+      `test_task_evidence.py` (47). Yeni bağımlılık yok, yeni marker yok,
       yeni HeroUI bileşeni yok, frontend kaynağına dokunulmadı.
-- [x] SI-210…SI-225, IMP-341…IMP-355.
+- [x] SI-210…SI-232, IMP-341…IMP-365.
+
+#### Bağımsız inceleme düzeltmeleri (PR #15)
+
+Bağımsız bir düşman incelemesi on bir bulgu çıkardı; hepsi kapatıldı ve her
+düzeltme **mutasyonla** doğrulandı (bozulan kod, kırılan test):
+
+| Bulgu | Ne yanlıştı | Düzeltme |
+|---|---|---|
+| F-1 (P1) | "Hiçbir kod yolu üretemez" testi yalnız `transition()` üzerinden arıyordu; incelemenin dört satırlık `start_running` probu hiçbir testi kırmadı | yürüyüş her public metodu introspection ile sürer **ve** `.state`'e yazan tek yerin `transition` olduğunu bir AST testi sabitler |
+| F-2 (P2) | Oracle sabitin kendisiydi: `PRODUCIBLE_STATES`'e `RUNNING` eklemek hem reddi kaldırıyor hem beklentiyi büyütüyordu | beklenen küme testte elle yazıldı (`EXPECTED_PRODUCIBLE`); sabit ayrı satırda denetlenir |
+| F-3 (P2) | `modules/completion.py`'nin bayat-kanıt dalı hiç test edilmiyordu (`if False` → sıfır kırık) | doğrulanmış ama başka sürüme bağlı referansla dalı doğrudan süren iki test |
+| F-4 (P3) | `_refs_from_row` docstring'i "raise eder" diyordu; gerçekte sütunu okumadan atlıyor | cümle gerçeğe indirildi ve davranış testle sabitlendi |
+| F-5 (P3) | `resumed_any` sıradan bir alandı; `Literal[False]` yalnız Pydantic modelindeydi ve `views.py` değeri hiç okumuyordu | property'ye çevrildi (kurucu argümanı yok) ve projeksiyon değeri rapordan okur |
+| F-6 (P3) | `ref_id` süpürülmüyor ve sınırlanmıyordu; bidi/NUL/406 karakter yanıta kadar ulaşıyordu | süpürülür ve 64'e kesilir; boşa inen işaretçi reddedilir |
+| F-7 (P3) | Dinamik yükleme yasağı `builtins.__import__`, `getattr(builtins, ...)` ve `sys.modules`'u yakalamıyordu | tarama dört yazımı arar; on sentetik atlatma ve dört masum yazım testlidir |
+| F-8 (P3) | Registry ve test docstring'i "iki" diyordu; sayılan üçtü | üçe düzeltildi |
+| F-9 (P3) | `TaskGateStatus(checks=()).ready_to_publish` boş `all()` yüzünden `True` idi | küme eşitliğine çevrildi; boş küme `False` |
+| F-10 (P3) | `cli/__main__.py` hâlâ `stage=3` idi | `6`'ya çekildi; bir test üç üretim çağrısının aynı sayıyı taşımasını ister |
+| F-11 (P3) | Geçersiz `module_id` çıplak `KeyError` üretiyordu (geçersiz kaynak ise temiz ret) | `ModuleRegistryError` (bir `KeyError`) → `TaskError(reason="module_unknown")` |
 
 **Bu pakette bilinçli olarak yapılmayanlar:** görev HTTP route'u ve görünür
 yüzey (H1/H2), öneri üreticisi ve yürütücü, dış paylaşım (H3), bütçe (G/H2),

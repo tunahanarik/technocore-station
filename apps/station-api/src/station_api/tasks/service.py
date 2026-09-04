@@ -51,7 +51,12 @@ from station_api.modules.fields import (
     EvidenceFieldError,
     EvidenceRef,
 )
-from station_api.modules.registry import ModuleId, get_module
+from station_api.modules.registry import (
+    ModuleId,
+    ModuleRecord,
+    ModuleRegistryError,
+    get_module,
+)
 from station_api.tasks.gate import TaskGateInput, TaskGateStatus
 from station_api.tasks.gate import evaluate as evaluate_gate
 from station_api.tasks.sources import (
@@ -76,6 +81,17 @@ MAX_TASKS = 500
 #: than rejected: control and bidi characters become spaces and the rest is
 #: kept, then bounded to what the column holds.
 MAX_TITLE_CHARS = 200
+
+#: Longest stored evidence pointer, and the width of every ``*_ref_id`` column.
+#:
+#: A pointer is not prose, but it is still a *caller-supplied string* that
+#: reaches a stored row and, from there, ``TaskFieldStatus.ref_id``. It was the
+#: one caller-supplied string on this surface that was neither swept nor
+#: bounded: a bidi override, a NUL or a 406-character value went through
+#: untouched, because SQLite does not enforce ``String(64)``. It is now swept
+#: and bounded exactly like ``title`` and ``detail`` (F-6). There is no HTTP
+#: route yet; H1/H2 inherit this surface, which is why it is closed now.
+MAX_REF_ID_CHARS = 64
 
 
 class TaskError(Exception):
@@ -135,10 +151,18 @@ def _field_columns(field: EvidenceField) -> tuple[str, str, str, str, str]:
 def _refs_from_row(row: TaskEvidenceOutcome | None) -> tuple[EvidenceRef, ...]:
     """Rebuild the references one task recorded.
 
-    ``public_share`` is skipped structurally rather than filtered afterwards:
-    :class:`EvidenceRef` refuses to be constructed for it, so a row that
-    somehow carried one would raise here instead of quietly becoming a
-    reference this release says cannot exist.
+    ``public_share`` is skipped **before its columns are read**. That is a
+    weaker statement than the one this docstring used to make, and the weaker
+    one is the true one: a row written straight into the database with a
+    ``public_share_ref_id`` is not surfaced and is not raised over - it is
+    passed by, and this function returns the three fields that can exist.
+
+    Silence is the safe side here (nothing this release says is impossible
+    becomes a reference), and the loud side is covered elsewhere: no code path
+    writes that column, :class:`EvidenceRef` cannot be constructed for the
+    field at all, and the gate reports it ``not_implemented`` regardless of
+    what the row holds. A direct database edit is outside this product's
+    threat model in either case.
     """
     if row is None:
         return ()
@@ -162,6 +186,21 @@ def _refs_from_row(row: TaskEvidenceOutcome | None) -> tuple[EvidenceRef, ...]:
             )
         )
     return tuple(refs)
+
+
+def _module_or_refusal(module_id: ModuleId) -> ModuleRecord:
+    """Look a module up, or refuse the way every other bad input is refused.
+
+    ``open_task`` answered an invalid *source* with ``TaskError`` and an
+    invalid *module* with a bare ``KeyError`` out of the registry (F-11). Two
+    inputs of the same class, one shown refusal and one armoured 500: whichever
+    surface H1 puts in front of this would have had to learn the difference by
+    hitting it. Both are ``TaskError`` with a reason now.
+    """
+    try:
+        return get_module(module_id)
+    except ModuleRegistryError as exc:
+        raise TaskError(str(exc), reason="module_unknown") from exc
 
 
 def _to_view(row: TaskRecord, outcome: TaskEvidenceOutcome | None) -> TaskView:
@@ -203,7 +242,7 @@ class TaskService:
         a task that opened in a state no producer can reach would be the first
         lie the state machine told.
         """
-        record = get_module(module_id)
+        record = _module_or_refusal(module_id)
         content_hash = content_sha256(content)
         try:
             version_id = source_version_id(source, content_hash)
@@ -279,10 +318,24 @@ class TaskService:
         )
 
     def module_completion(self, task_id: str) -> ModuleCompletion:
-        """Which of the module's requirements this task's evidence satisfies."""
+        """Which of the module's requirements this task's evidence satisfies.
+
+        A stored ``module_id`` that no longer resolves is refused the same way
+        an unknown one passed to ``open_task`` is. ``ModuleId(...)`` raises
+        ``ValueError`` for a value outside the enum and ``get_module`` raises
+        for one inside it that was dropped from the registry; both are the same
+        situation to a reader, so both get the same reason.
+        """
         view = self.get(task_id)
+        try:
+            module_id = ModuleId(view.module_id)
+        except ValueError as exc:
+            raise TaskError(
+                "Bu gorev kayitli olmayan bir modul kimligi tasiyor.",
+                reason="module_unknown",
+            ) from exc
         return evaluate_module(
-            get_module(ModuleId(view.module_id)),
+            _module_or_refusal(module_id),
             refs=view.refs,
             source_version_id=view.source_version_id,
         )
@@ -303,12 +356,16 @@ class TaskService:
         ``verified`` has no default here either. A caller that wanted to say
         "something was produced" and let the reader assume the rest would have
         to type ``verified=False``, which is what the gate then reports.
+
+        ``ref_id`` is swept and bounded the same way ``detail`` is. A pointer
+        that swept down to nothing is refused rather than stored: an empty
+        pointer would be a reference to nowhere wearing a reference's shape.
         """
         view = self.get(task_id)
         try:
             ref = EvidenceRef(
                 field=field,
-                ref_id=ref_id,
+                ref_id=sweep_untrusted(ref_id).strip()[:MAX_REF_ID_CHARS].strip(),
                 verified=verified,
                 source_version_id=view.source_version_id,
                 detail=sweep_untrusted(detail).strip()[:MAX_TITLE_CHARS],
@@ -423,6 +480,7 @@ class TaskService:
 
 
 __all__ = [
+    "MAX_REF_ID_CHARS",
     "MAX_TASKS",
     "MAX_TITLE_CHARS",
     "TaskError",

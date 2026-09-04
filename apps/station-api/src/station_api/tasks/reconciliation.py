@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Literal
 
 from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
@@ -83,13 +84,24 @@ class ReconciliationReport:
     scanned_at: datetime
     unfinished: tuple[UnfinishedWrite, ...]
     detail: str
-    #: Stated as a value, not only in prose, so a caller cannot report this
-    #: scan as having done something. It is always ``False``.
-    resumed_any: bool = False
 
     @property
     def unfinished_count(self) -> int:
         return len(self.unfinished)
+
+    @property
+    def resumed_any(self) -> Literal[False]:
+        """Always ``False``, and deliberately **not a field**.
+
+        As a field with a ``False`` default it was only a default: nothing
+        stopped ``ReconciliationReport(..., resumed_any=True)`` from being
+        constructed, so "structurally False" was a sentence about the Pydantic
+        model and not about this dataclass (F-5). A read-only property has no
+        constructor argument to override, which is what the claim was always
+        supposed to mean: this scan sends nothing, changes nothing and
+        continues nothing, so there is no value here to set.
+        """
+        return False
 
 
 def scan_unfinished_writes(engine: Engine | None) -> ReconciliationReport:
