@@ -50,8 +50,10 @@ satırından giden adrese ulaşan hiçbir kod yolu yoktur.
 | `manual` | `/llms.txt` | 2 | hayır | Prose; kanıt ve uyarı |
 | `skill` | `/skill.md` | 2 | hayır | Prose; kanıt ve uyarı |
 
-**Bu listede olmayan hiçbir yol bu registry'den istenmez.** `/rooms`,
-`/kv/*`, `/say*`, `/set*` ve `/r/events` kapsam dışıdır.
+**Bu listede olmayan hiçbir yol bu registry'den istenmez.** `/kv/*`,
+`/say*`, `/set*` ve `/r/events` kapsam dışıdır. `/rooms` **bu**
+registry'nin dışındadır ve Paket H1'de ayrı bir registry'de açılmıştır; bkz.
+aşağıdaki tablo.
 
 ### `/r/*` cümlesi ne zaman ve neden değişti
 
@@ -63,6 +65,7 @@ silinmedi**; iki aşamada iki kez daraltıldı ve ikisi de burada yazılıdır.
 |---|---|---|
 | Paket D | `POST /r/{room}` **yazma** lane'i açıldı; ayrı bir kapalı registry (`write_targets.py`) ve ayrı bir istemci ile | ADR-0002 §1, §3 |
 | Paket E | `GET /r/{room}/export` **kanıt okuma** lane'i açıldı; üçüncü bir kapalı registry (`evidence_targets.py`) ve üçüncü bir istemci ile | ADR-0003 §1 |
+| Paket H1 | `GET /rooms` ve `GET /r/{room}` **tarama okuma** lane'leri açıldı; dördüncü bir kapalı registry (`workscan/targets.py`) ve beşinci bir istemci ile. `/r/events` **hâlâ kapsam dışıdır**: openapi girdisi `parameters: null` ve sözleşmesi yalnız düzyazıda | ADR-0007 §3 |
 
 Değişmeyen şey, cümlenin gerçekte koruduğu özelliktir: **bu registry** hâlâ
 altı sabit belgedir, hiçbir girdisi oda parametresi taşımaz ve bir test hem
@@ -70,10 +73,19 @@ küme eşitliğini hem de `"/r/" not in source.path` iddiasını sabitler. Yani
 "salt-okuma izleme yolu bir odayı adresleyemez" hâlâ yapısal bir olgudur;
 değişen, o yolun *tek* yol olmaktan çıkmasıdır.
 
-Oda içeriği hâlâ **serbestçe okunmaz**: kanıt okuması yalnız kullanıcı
-isteğiyle, yalnız kendi gönderdiğimiz bir kaydın odası için çalışır, aynı
-`DENIED_ROOMS` politikasına tabidir (lobby dâhil) ve akış üstünde 12 MiB
+Oda içeriği hâlâ **serbestçe okunmaz**, fakat Paket H1'den sonra bu cümlenin
+kapsamı daraldı ve daraldığı yer burada yazılıdır. Kanıt okuması yalnız
+kullanıcı isteğiyle, yalnız kendi gönderdiğimiz bir kaydın odası için çalışır,
+aynı `DENIED_ROOMS` politikasına tabidir (lobby dâhil) ve akış üstünde 12 MiB
 tavanla taranır. Ayrıntı: [`evidence-model.md`](evidence-model.md) §3.
+
+Paket H1'in tarama okuması **hiç yazmadığımız** odaları da okuyabilir, ve bu
+yüzden kendi sınırlarını taşır: kapsam **kullanıcının o istekte seçtiği oda
+kümesidir** (bütün oda evreni taranmaz, en çok on oda), yalnız açık bir
+kullanıcı eylemiyle çalışır (zamanlayıcı, arka plan görevi ve `wait` yoktur),
+ve oda adı yine **aynı** `DENIED_ROOMS` politikasından geçer — Station lobby'yi
+okumaz da. Okunan içerik seviye 1 değil **seviye 3**'tür (`community`).
+Ayrıntı: [`work-scan.md`](work-scan.md).
 
 ### Zorunlu / tamamlayıcı ayrımı neden var
 
@@ -599,7 +611,10 @@ düzeltilmiştir.
 - LLM veya Agent Runtime.
 
 Bu liste **Aşama 3'ün** kararlarıdır ve tarihî kayıt olarak durur. Sonraki
-paketler ilk iki maddeyi (Paket D) ve beşinci maddeyi (Paket E, ayrıca
-`/r/{room}/export` kanıt okuması) bilinçli olarak açtı; §3'teki tabloya
-bakınız. Lobby'ye katılım, note lane'i, serbest oda okuma, LLM ve Agent
-Runtime hâlâ kapsam dışıdır.
+paketler ilk iki maddeyi (Paket D), beşinci maddeyi (Paket E, ayrıca
+`/r/{room}/export` kanıt okuması) ve **dördüncü maddeyi** (Paket H1: oda,
+topic ve mesaj içeriği okuma) bilinçli olarak açtı; §3'teki tabloya bakınız.
+Dördüncü maddenin açılması **serbest** oda okuması değildir: kapsam
+kullanıcının seçtiği oda kümesidir, `DENIED_ROOMS` geçerlidir ve polling
+yoktur (ADR-0007 §3, §4). Lobby'ye katılım, note lane'i, LLM ve Agent Runtime
+hâlâ kapsam dışıdır.

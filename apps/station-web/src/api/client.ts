@@ -30,6 +30,8 @@ import type {
   RecoveryInspectResult,
   SessionBootstrap,
   TechnocoreStatus,
+  WorkScanStatus,
+  WorkScanSuggestion,
   WriteGateStatus,
 } from "./types";
 
@@ -743,6 +745,132 @@ export async function selectOpenCodeModel(input: {
   return mutate<OpenCodeStatus>("/api/opencode/model", {
     model_id: input.modelId,
     training_acknowledged: input.trainingAcknowledged,
+  });
+}
+
+// --- Public-room work scan (Paket H1) --------------------------------------
+//
+// Four calls, and the shape of the set is the point.
+//
+// * **Nothing here is called on a timer.** No interval, no background task,
+//   no `wait` parameter and no cursor that a "read the rest" loop could be
+//   built on. `fetchWorkScanStatus` runs once on mount and contacts nobody;
+//   the other three run only inside a click (ADR-0007 4).
+// * **The scope is the caller's room list.** There is no scan-everything
+//   call and no endpoint behind one. `scanWorkRooms` sends the rooms it was
+//   given and nothing about an address.
+// * **`suggestWorkScanCandidate` approves nothing.** It opens a local task in
+//   `suggested`; moving it forward is a separate act on the task surface.
+
+/**
+ * Reading the room overview. One blocking outbound GET on the server side.
+ *
+ * The backend's per-target budget is two attempts of connect 5s + read 10s,
+ * with a fixed 1s backoff it will extend to at most 5s when the service asks
+ * it to - about thirty-five seconds before it can honestly say the room list
+ * could not be read. Forty-five seconds sits above that with margin for the
+ * strict parse and still bounds the UI. A shorter deadline would abandon a
+ * read the server was still making and report `timeout`, which is a claim
+ * about the *local* service and would be false.
+ */
+export const WORK_SCAN_ROOMS_TIMEOUT_MS = 45000;
+
+/**
+ * The fixed part of a scan's deadline: session, policy and parse work that
+ * happens once however many rooms were chosen.
+ */
+export const WORK_SCAN_BASE_TIMEOUT_MS = 10000;
+
+/**
+ * The deadline one room adds to a scan.
+ *
+ * A scan reads the chosen rooms **sequentially**, one bounded HTTP exchange
+ * each, so its honest budget is per room rather than per request: the same
+ * thirty-five second worst case as the overview read, plus margin for the
+ * strict parse and the derivation. It is multiplied by the number of rooms
+ * the caller actually named rather than by the ceiling of ten, so choosing
+ * two rooms does not buy a six-minute hang.
+ *
+ * This is the one deadline in the app that is computed instead of constant,
+ * and the reason is the same reason the others are long: abandoning a scan
+ * mid-flight throws away every room the server had already read and reports
+ * `timeout` in place of the per-room result - including the per-room
+ * *failures*, which are the whole point of the failure list.
+ */
+export const WORK_SCAN_ROOM_TIMEOUT_MS = 40000;
+
+/**
+ * How many rooms one scan may name.
+ *
+ * Mirrors `WorkScanScanRequest`'s own `max_length` and the service's
+ * `MAX_ROOMS_PER_SCAN`. Held here so the UI cannot build a request the server
+ * would reject with a 422 - the bound is the server's, and this is a copy of
+ * it rather than a second, independent limit.
+ */
+export const WORK_SCAN_MAX_ROOMS = 10;
+
+/** The room count one read of the overview asks for. The published clamp is
+ * 1..200 and the backend's own default is 50; this sends it explicitly so the
+ * number is visible at the call site rather than inherited silently. */
+export const WORK_SCAN_ROOM_INDEX_LIMIT = 50;
+
+/** Messages read per room in one scan. Same published clamp, same reason. */
+export const WORK_SCAN_MESSAGE_LIMIT = 50;
+
+/**
+ * The whole scan surface, read-only.
+ *
+ * Contacts nobody: it reports what the last user-initiated read found, or
+ * that none has run. This is the only call in the group anything invokes on
+ * mount, and that is safe precisely because it makes no outbound request.
+ */
+export async function fetchWorkScanStatus(): Promise<WorkScanStatus> {
+  return request<WorkScanStatus>("/api/workscan/status");
+}
+
+/**
+ * Read the public room overview once, because the user asked.
+ *
+ * Separate from the scan on purpose: "show me what is out there" and "read
+ * these rooms" are two decisions, and one button doing both would always
+ * read everything.
+ */
+export async function refreshWorkScanRooms(): Promise<WorkScanStatus> {
+  return mutate<WorkScanStatus>(
+    "/api/workscan/rooms/refresh",
+    { limit: WORK_SCAN_ROOM_INDEX_LIMIT },
+    WORK_SCAN_ROOMS_TIMEOUT_MS,
+  );
+}
+
+/**
+ * Read the rooms the user chose, once each.
+ *
+ * The room names are the entire addressable part of this request: there is no
+ * host, path, URL or room template here or in the route behind it, and each
+ * name goes through the write path's room policy - `DENIED_ROOMS`, Lobby
+ * included - server-side.
+ */
+export async function scanWorkRooms(rooms: readonly string[]): Promise<WorkScanStatus> {
+  return mutate<WorkScanStatus>(
+    "/api/workscan/scan",
+    { rooms: [...rooms], limit: WORK_SCAN_MESSAGE_LIMIT },
+    WORK_SCAN_BASE_TIMEOUT_MS + rooms.length * WORK_SCAN_ROOM_TIMEOUT_MS,
+  );
+}
+
+/**
+ * Open one candidate as a local task in `suggested`.
+ *
+ * A local database write and nothing else: it sends nothing outward and it
+ * approves nothing. The default deadline is right because no part of this
+ * leaves the machine.
+ */
+export async function suggestWorkScanCandidate(
+  candidateId: string,
+): Promise<WorkScanSuggestion> {
+  return mutate<WorkScanSuggestion>("/api/workscan/suggest", {
+    candidate_id: candidateId,
   });
 }
 

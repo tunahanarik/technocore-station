@@ -10,18 +10,37 @@ The honest half
 Defining nine states does not make nine states reachable, and saying so is the
 point:
 
-* ``suggested`` needs a suggestion producer. That is Package H1.
+* ``suggested`` needed a suggestion producer. **Package H1 built one**, and the
+  state was opened here on the same commit that opened it - see below.
 * ``running`` and ``paused`` need an executor. That is Package H2.
 
-What this release can genuinely produce is the six in :data:`PRODUCIBLE_STATES`.
-The other three stay **defined** - so the machine is reviewable as a whole and
-so H1/H2 do not have to re-derive it - and no code path can reach them:
-:func:`validate_transition` refuses a target in :data:`UNPRODUCIBLE_STATES`
-even though the table lists the edge. Opening one means deleting its entry
-here, which is a deliberate change a reviewer sees.
+What this release can genuinely produce is the seven in
+:data:`PRODUCIBLE_STATES`. The other two stay **defined** - so the machine is
+reviewable as a whole and so H2 does not have to re-derive it - and no code
+path can reach them: :func:`validate_transition` refuses a target in
+:data:`UNPRODUCIBLE_STATES` even though the table lists the edge. Opening one
+means deleting its entry here, which is a deliberate change a reviewer sees.
 
 That is ``CheckState.NOT_IMPLEMENTED``'s rule applied to a state machine: a
 thing that has not been built does not get to sit there looking available.
+
+How ``suggested`` was opened, and what deliberately did not move
+----------------------------------------------------------------
+Package F wrote this docstring saying ``suggested``'s producer was H1's
+subject, and H1 wrote it (:mod:`station_api.workscan.candidates`,
+``TaskService.suggest_task``). Opening the state is therefore a **recorded
+opening** rather than a loosened test: ADR-0007 7 decides it, the hand-written
+oracle in ``test_task_states.py`` was updated on the same change, and the
+behavioural walk still has to *reach* the state through the real service
+before it agrees.
+
+:data:`INITIAL_STATE` did **not** move and is still ``awaiting_approval``.
+That is what keeps a user's own task and a scanned suggestion apart in two
+independent layers rather than one: they carry different
+:class:`~station_api.tasks.sources.TaskSourceId` values - hence different
+``source_version_id`` digests - *and* they are born in different states. A
+view that wanted to present a scanned candidate as something the operator
+asked for would have to forge both (ADR-0007 7, 10).
 """
 
 from __future__ import annotations
@@ -49,8 +68,9 @@ class TaskState(StrEnum):
 #: the state establishes.
 STATE_DETAIL: dict[TaskState, str] = {
     TaskState.SUGGESTED: (
-        "Bir oneri ureticisi tarafindan onerildi. Bu surumde hicbir kod yolu "
-        "bu durumu uretemez; oneri uretimi Paket H1'in konusudur."
+        "Bir oneri ureticisi tarafindan onerildi. Bu, kullanicinin kendi "
+        "yazdigi bir gorev degildir: kaynagi kamuya acik bir oda taramasidir "
+        "ve onaylanmadan once hicbir sey yurutulmez."
     ),
     TaskState.AWAITING_APPROVAL: (
         "Gorev tanimlandi ve kullanicinin onayini bekliyor. Onay olmadan "
@@ -125,12 +145,22 @@ ALLOWED_TRANSITIONS: dict[TaskState, frozenset[TaskState]] = {
     TaskState.PUBLISHED: frozenset(),
 }
 
-#: Where a task starts. Never ``suggested``: nothing suggests anything yet.
+#: Where a task opened by a person starts, and it is deliberately **not**
+#: ``suggested`` even now that ``suggested`` is producible.
+#:
+#: A scanned candidate is born in ``suggested`` through its own producer
+#: (``TaskService.suggest_task``) and walks to ``awaiting_approval`` only when
+#: the user picks it. Keeping the *initial* state at ``awaiting_approval``
+#: means "the user wrote this" and "a scan proposed this" differ in the row
+#: itself, not only in a source column somebody has to remember to read
+#: (ADR-0007 7).
 INITIAL_STATE: TaskState = TaskState.AWAITING_APPROVAL
 
-#: The states this release can genuinely reach.
+#: The states this release can genuinely reach. ``SUGGESTED`` joined the set
+#: in Package H1, when its producer was written; see the module docstring.
 PRODUCIBLE_STATES: frozenset[TaskState] = frozenset(
     {
+        TaskState.SUGGESTED,
         TaskState.AWAITING_APPROVAL,
         TaskState.BLOCKED,
         TaskState.FAILED,

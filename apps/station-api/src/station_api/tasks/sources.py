@@ -51,6 +51,15 @@ class TaskSourceId(StrEnum):
     PROJECT_MODULE = "project_module"
     #: Derived from an archived send in the evidence ledger.
     EVIDENCE_ARCHIVE = "evidence_archive"
+    #: Derived from a line read in a public room by the work scan (H1).
+    #:
+    #: Its own member rather than a flag on ``OPERATOR_REQUEST``, and that is
+    #: the whole point: the identifier goes into ``source_version_id``, so a
+    #: scanned candidate and a task the user typed cannot produce the same
+    #: identity even for byte-identical content. "A user's own text is never
+    #: presented as something found in public" therefore holds structurally
+    #: rather than by convention (ADR-0007 7, 10).
+    PUBLIC_ROOM_SCAN = "public_room_scan"
 
 
 #: Why each source exists, in one Turkish sentence.
@@ -65,7 +74,24 @@ SOURCE_DETAIL: dict[TaskSourceId, str] = {
     TaskSourceId.EVIDENCE_ARCHIVE: (
         "Kanit defterindeki arsivlenmis bir gonderimden turetildi."
     ),
+    TaskSourceId.PUBLIC_ROOM_SCAN: (
+        "Kamuya acik bir odada okunan bir satirdan kural tabanli olarak "
+        "cikarildi. Icerik yabancilarin yazdigi anonim metindir; veri olarak "
+        "islenir, talimat olarak degil ve kullanicinin kendi istegi diye "
+        "sunulmaz."
+    ),
 }
+
+#: Sources whose tasks are **born as suggestions** rather than as work the
+#: user described.
+#:
+#: A set rather than a boolean on the enum, so the two producers on
+#: :class:`~station_api.tasks.service.TaskService` can each refuse the other's
+#: sources by asking one question. ``open_task`` refuses a source in here and
+#: ``suggest_task`` refuses one outside it, which means neither the initial
+#: state nor the source identifier can be chosen independently of the other
+#: (ADR-0007 7).
+SCAN_SOURCES: frozenset[TaskSourceId] = frozenset({TaskSourceId.PUBLIC_ROOM_SCAN})
 
 
 class TaskSourceError(Exception):
@@ -98,6 +124,7 @@ def source_version_id(source: TaskSourceId, content_hash: str) -> str:
 
 
 __all__ = [
+    "SCAN_SOURCES",
     "SOURCE_DETAIL",
     "TASK_SOURCE_DOMAIN",
     "TaskSourceError",

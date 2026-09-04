@@ -998,3 +998,247 @@ class OpenCodeSelectModelRequest(OpenCodeStrictModel):
     #: Fail-closed. A model whose retention term is ``yes`` **or**
     #: ``unknown`` needs this, and the default is the safe answer.
     training_acknowledged: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Package H1 - the public-room work scan
+#
+# Nothing here carries a wallet, a claim, a score or a rank. Nothing here
+# carries a boolean saying a work item is open: element 8 is a sentence with a
+# timestamp in it, and a field named ``is_open`` would be read as an answer
+# this surface cannot produce (ADR-0007 8).
+# ---------------------------------------------------------------------------
+
+
+class WorkScanQuote(StrictModel):
+    """Element 1: the verbatim line and where it came from.
+
+    ``authority`` is 3 on every one of these and is sent rather than implied:
+    the endpoint is official, the content is anonymous input from strangers,
+    and a client that only saw the endpoint would draw the wrong conclusion.
+    """
+
+    room: str
+    seq: int
+    ts: str
+    author: str
+    author_is_did_key: bool
+    author_detail: str
+    quote: str
+    reference: str
+    authority: Literal[3] = 3
+
+
+class WorkScanCapability(StrictModel):
+    """Element 5: whether this build has the tools and the data."""
+
+    module_id: str
+    module_state: str
+    module_available: bool
+    write_gate_open: bool
+    ready: bool
+    detail: str
+
+
+class WorkScanEffort(StrictModel):
+    """Element 6: an estimate that says so in the payload, not in a tooltip."""
+
+    label: Literal["tahmin"] = "tahmin"
+    band: str
+    basis: str
+
+
+class WorkScanOpenState(StrictModel):
+    """Element 8. A sentence and a reading time; deliberately not a boolean."""
+
+    read_at: datetime
+    detail: str
+
+
+class WorkScanCandidate(StrictModel):
+    """One proposal, with all eight elements present."""
+
+    id: str
+    signal: str
+    source: WorkScanQuote
+    benefit: str
+    deliverable: str
+    success_condition: str
+    test_method: str
+    capability: WorkScanCapability
+    effort: WorkScanEffort
+    #: Always ``not_implemented``. There is no budget in this release, and a
+    #: missing budget never reads as an approved one.
+    budget_state: Literal["not_implemented"] = "not_implemented"
+    budget_detail: str
+    permissions: list[str]
+    risks: list[str]
+    open_state: WorkScanOpenState
+    derivation: str
+
+
+class WorkScanRefusal(StrictModel):
+    """A line this build declined to propose work from, and why."""
+
+    room: str
+    seq: int
+    shape: str
+    detail: str
+
+
+class WorkScanRoomFailure(StrictModel):
+    """A room that could not be read. Never folded into "found nothing"."""
+
+    room: str
+    reason: str
+    detail: str
+
+
+class WorkScanRoomResult(StrictModel):
+    """One room's outcome, including how many lines were actually read."""
+
+    room: str
+    candidates: list[WorkScanCandidate]
+    refusals: list[WorkScanRefusal]
+    lines_read: int
+
+
+class WorkScanStaleness(StrictModel):
+    """The reading time and the service's own declared cache bound.
+
+    No ``is_stale`` field. This build invents no threshold, so it publishes no
+    verdict (ADR-0007 5).
+    """
+
+    read_at: datetime
+    declared_cache_seconds: int
+    declared_by: str
+    detail: str
+
+
+class WorkScanRingDrop(StrictModel):
+    """The service's own machine-readable signal that history was dropped."""
+
+    since: int
+    expected_first: int
+    first_seq: int
+    detail: str
+
+
+class WorkScanRoom(StrictModel):
+    """One room as the overview listed it. Both fields are caller-written."""
+
+    name: str
+    topic: str
+    authority: Literal[3] = 3
+
+
+class WorkScanRoomIndex(StrictModel):
+    """The room overview as read once, at one moment."""
+
+    rooms: list[WorkScanRoom]
+    total: int
+    kept_count: int
+    truncated: bool
+    staleness: WorkScanStaleness
+    sha256: str
+    room_name_caveat: str
+    topic_caveat: str
+
+
+class WorkScanAdapterFact(StrictModel):
+    """One thing about an external service, and whether anybody confirmed it."""
+
+    key: str
+    detail: str
+    state: Literal["verified", "not_verified"]
+
+
+class WorkScanAdapter(StrictModel):
+    """An external service record. Never a client, and never contacted."""
+
+    id: str
+    name: str
+    support: str
+    authority: Literal[3] = 3
+    declared_origin: str
+    #: ``Literal[False]`` is the wire half of SI-281 and it stays: nothing can
+    #: serialise another value here. The route no longer leaves it to this
+    #: default, though - it reads the record's derived property and refuses a
+    #: true one - because a default the producer never passes makes an
+    #: assertion about this field a restatement of this line.
+    adapter_written: Literal[False] = False
+    contacted: Literal[False] = False
+    verified: list[WorkScanAdapterFact]
+    unverified: list[WorkScanAdapterFact]
+    #: The Turkish rendering of the service's own words.
+    self_description: str
+    #: The service's own two sentences, in the language it wrote them in.
+    #: Carried on the wire so that "the service's own words are quoted
+    #: verbatim" is a property of the response rather than of a frontend
+    #: constant transcribed by hand from an ADR.
+    self_description_source: str
+    score_self_description: str
+    score_caveat: str
+    provenance: str
+
+
+class WorkScanResult(StrictModel):
+    """One scan of one user-chosen room set."""
+
+    started_at: datetime
+    completed_at: datetime
+    rooms: list[str]
+    results: list[WorkScanRoomResult]
+    failures: list[WorkScanRoomFailure]
+    candidate_count: int
+    refusal_count: int
+
+
+class WorkScanStatusResponse(StrictModel):
+    """The whole scan surface, read-only. Sends nothing."""
+
+    #: Shown on every read, not only beside a result (ADR-0007 2).
+    honesty: str
+    capability: WorkScanCapability
+    adapters: list[WorkScanAdapter]
+    room_index: WorkScanRoomIndex | None
+    last_scan: WorkScanResult | None
+    #: The parameters this package refuses to send, named in the payload so
+    #: the absence of polling is checkable from outside the process.
+    never_sent_params: list[str]
+    polling_statement: str
+    #: The refusal half of the same honesty: the six prohibited work shapes
+    #: are matched by pattern, not recognised by meaning. Shown beside the
+    #: derivation sentence rather than left in a design document.
+    prohibition_statement: str
+
+
+class WorkScanRefreshRequest(StrictModel):
+    """Read the room overview. Carries a count and nothing addressable."""
+
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class WorkScanScanRequest(StrictModel):
+    """Scan the rooms the user chose. The scope is this list and nothing else."""
+
+    rooms: list[str] = Field(min_length=1, max_length=10)
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class WorkScanSuggestRequest(StrictModel):
+    """Turn one candidate from the last scan into a local suggested task."""
+
+    candidate_id: str
+
+
+class WorkScanSuggestResponse(StrictModel):
+    """The task that was opened. Born ``suggested``; approved by nobody."""
+
+    task_id: str
+    module_id: str
+    source_id: str
+    source_version_id: str
+    state: Literal["suggested"] = "suggested"
+    detail: str

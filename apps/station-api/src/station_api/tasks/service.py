@@ -24,11 +24,21 @@ in as data would be the first half of a plugin loader: once the set of modules
 is a constructor argument, something has to produce it, and the obvious
 something is a file. There is no such path (charter ADR-017).
 
+Two producers, and why the second one exists
+--------------------------------------------
+:meth:`TaskService.open_task` opens work the user described.
+:meth:`TaskService.suggest_task` opens work a public-room scan proposed, born
+in ``suggested``. They are separate methods rather than one method with a
+flag, and each refuses the other's sources, so a scanned candidate cannot be
+presented as an operator request and an operator request cannot be dressed up
+as a finding (ADR-0007 7). Both delegate the row write to one private helper,
+which is the only place a starting state is chosen.
+
 What a task cannot do here
 --------------------------
-Reach ``suggested``, ``running`` or ``paused``: those need producers this
-release does not have, and :func:`~station_api.tasks.states.validate_transition`
-refuses them by name. Fill ``public_share``: that field belongs to Package H3
+Reach ``running`` or ``paused``: those need an executor this release does not
+have, and :func:`~station_api.tasks.states.validate_transition` refuses them
+by name. Fill ``public_share``: that field belongs to Package H3
 and :class:`~station_api.modules.fields.EvidenceRef` refuses to be constructed
 for it. Become ``ready_to_publish`` by request: that state is derived from
 three separately verified pieces of evidence, and asking for it without them
@@ -62,6 +72,7 @@ from station_api.modules.registry import (
 from station_api.tasks.gate import TaskGateInput, TaskGateStatus
 from station_api.tasks.gate import evaluate as evaluate_gate
 from station_api.tasks.sources import (
+    SCAN_SOURCES,
     TaskSourceError,
     TaskSourceId,
     content_sha256,
@@ -237,12 +248,79 @@ class TaskService:
         content: bytes,
         title: str = "",
     ) -> TaskView:
-        """Open one task, bound to a module and a content version.
+        """Open one task the user described, bound to a module and a version.
 
-        The task starts in ``awaiting_approval``. It deliberately does not
-        start in ``suggested``: nothing in this release suggests anything, and
-        a task that opened in a state no producer can reach would be the first
-        lie the state machine told.
+        The task starts in ``awaiting_approval``, and it starts there even now
+        that ``suggested`` is producible. A scanned candidate has its own
+        producer, :meth:`suggest_task`, and a source this method **refuses**:
+        the two ways a task can come into existence are distinguishable by the
+        row alone, not only by a column a view might forget to read
+        (ADR-0007 7).
+        """
+        if source in SCAN_SOURCES:
+            raise TaskError(
+                "Bu kaynak yalnizca tarama ureticisiyle acilabilir; "
+                "kullanicinin kendi yazdigi bir gorev bu kaynagi tasiyamaz.",
+                reason="source_needs_the_scan_producer",
+            )
+        return self._create(
+            module_id=module_id,
+            source=source,
+            content=content,
+            title=title,
+            state=INITIAL_STATE,
+        )
+
+    def suggest_task(
+        self,
+        *,
+        module_id: ModuleId,
+        source: TaskSourceId,
+        content: bytes,
+        title: str = "",
+    ) -> TaskView:
+        """Open one task a scan proposed. Born ``suggested``, never approved.
+
+        The second producer, and the one ``tasks/states.py`` said Package H1
+        would write. It differs from :meth:`open_task` in exactly two places
+        and both are deliberate: the source must be one of
+        :data:`~station_api.tasks.sources.SCAN_SOURCES`, and the row is born
+        in ``suggested`` rather than ``awaiting_approval``.
+
+        What it does **not** do is approve anything. ``suggested`` walks to
+        ``awaiting_approval`` through :meth:`transition`, which is the user's
+        action; nothing here shortens that path, so a scan cannot open work
+        for itself and wave it through (ADR-0007 8).
+        """
+        if source not in SCAN_SOURCES:
+            raise TaskError(
+                "Oneri ureticisi yalnizca tarama kaynaklarini kabul eder; "
+                "kullanicinin kendi istegi bir oneri olarak acilamaz.",
+                reason="source_is_not_a_scan_source",
+            )
+        return self._create(
+            module_id=module_id,
+            source=source,
+            content=content,
+            title=title,
+            state=TaskState.SUGGESTED,
+        )
+
+    def _create(
+        self,
+        *,
+        module_id: ModuleId,
+        source: TaskSourceId,
+        content: bytes,
+        title: str,
+        state: TaskState,
+    ) -> TaskView:
+        """The row write both producers share. Private, so it takes a state.
+
+        ``state`` is a parameter here and nowhere else. Neither public
+        producer lets a caller choose it, which is what keeps "who decides the
+        starting state" a question with two answers written in this file
+        rather than an argument any caller can supply.
         """
         record = _module_or_refusal(module_id)
         content_hash = content_sha256(content)
@@ -264,8 +342,8 @@ class TaskService:
                     content_sha256=content_hash,
                     source_version_id=version_id,
                     title=swept_title,
-                    state=INITIAL_STATE.value,
-                    detail=STATE_DETAIL[INITIAL_STATE],
+                    state=state.value,
+                    detail=STATE_DETAIL[state],
                     created_at=now,
                     updated_at=now,
                 )
@@ -282,9 +360,9 @@ class TaskService:
                     id=uuid.uuid4().hex,
                     task_id=task_id,
                     from_state="",
-                    to_state=INITIAL_STATE.value,
+                    to_state=state.value,
                     recorded_at=now,
-                    detail=STATE_DETAIL[INITIAL_STATE],
+                    detail=STATE_DETAIL[state],
                 )
             )
 

@@ -9,6 +9,7 @@ import { IdentityPage } from "../pages/IdentityPage";
 import { OverviewPage } from "../pages/OverviewPage";
 import { SettingsHelpPage } from "../pages/SettingsHelpPage";
 import { SourcesPage } from "../pages/SourcesPage";
+import { WorkScanPage } from "../pages/WorkScanPage";
 import { DEFAULT_SECTION_ID, READY_SECTIONS, type SectionId } from "../sections";
 import { ErrorRegion } from "./ErrorRegion";
 
@@ -125,6 +126,7 @@ export function AppShell({ status, loading, connectionError, onRetryConnection }
           {selected === "overview" && (
             <OverviewPage loading={loading} onNavigate={setSelected} status={status} />
           )}
+          {selected === "work-scan" && <WorkScanPage />}
           {selected === "identity" && <IdentityPage />}
           {selected === "compose" && <ComposeVerifyPage />}
           {selected === "sources" && <SourcesPage />}

@@ -574,3 +574,232 @@ export interface OpenCodeStatus {
   readonly spending: OpenCodeSpendingContext;
   readonly protocol_context: OpenCodeProtocolContext;
 }
+
+// --- Public-room work scan (Paket H1) --------------------------------------
+//
+// Hand-written mirrors of the `WorkScan*` models in `station_api/schemas.py`.
+// As with the OpenCode group, the holes are copied deliberately, because the
+// holes are the contract:
+//
+// * there is no `is_open` anywhere below. Element 8 is a sentence with the
+//   moment of the reading in it, and a boolean would be read as an answer
+//   this surface cannot produce (ADR-0007 8);
+// * there is no `is_stale` and no threshold. What exists is the measured
+//   reading time and the bound the *service* declares about itself
+//   (ADR-0007 5);
+// * there is no `score`, `rank` or `reputation` field in any direction. The
+//   one third-party record below describes a service; it is not a client for
+//   one, and `adapter_written`/`contacted` are `false` as *types*
+//   (ADR-0007 1);
+// * `budget_state` is `not_implemented` as a type, so no edit can make a
+//   missing budget read as an approved one.
+
+/**
+ * Element 1: the verbatim line and its coordinates.
+ *
+ * `authority` is `3` - community - on every one of these, and it arrives on
+ * the wire rather than being inferred here. The endpoint is official; what
+ * came back through it is anonymous input written by strangers, and only one
+ * of those two facts is about the text.
+ */
+export interface WorkScanQuote {
+  readonly room: string;
+  readonly seq: number;
+  readonly ts: string;
+  /** A `did:key` or a nickname the writer typed. Told apart by the flag
+   * below, never by how the string looks. */
+  readonly author: string;
+  readonly author_is_did_key: boolean;
+  /** The one sentence the backend permits about that value. Rendered as it
+   * arrives, so no view can say more than the field supports. */
+  readonly author_detail: string;
+  /** The message body, swept for display. Data - never markup, never a link. */
+  readonly quote: string;
+  /** `room#seq@ts`, in one machine-checkable string. */
+  readonly reference: string;
+  readonly authority: 3;
+}
+
+/** Element 5: whether this build has the module and the gate for the work. */
+export interface WorkScanCapability {
+  readonly module_id: string;
+  readonly module_state: string;
+  readonly module_available: boolean;
+  readonly write_gate_open: boolean;
+  /** Both halves, and never one standing in for the other. */
+  readonly ready: boolean;
+  readonly detail: string;
+}
+
+/** Element 6: an estimate that says so in the payload, not in a tooltip. */
+export interface WorkScanEffort {
+  readonly label: "tahmin";
+  readonly band: string;
+  readonly basis: string;
+}
+
+/** Element 8. A sentence and a reading time; deliberately not a boolean. */
+export interface WorkScanOpenState {
+  readonly read_at: string;
+  readonly detail: string;
+}
+
+/** One proposal, with all eight elements present. None of them may be hidden. */
+export interface WorkScanCandidate {
+  readonly id: string;
+  readonly signal: string;
+  readonly source: WorkScanQuote;
+  readonly benefit: string;
+  readonly deliverable: string;
+  readonly success_condition: string;
+  readonly test_method: string;
+  readonly capability: WorkScanCapability;
+  readonly effort: WorkScanEffort;
+  readonly budget_state: "not_implemented";
+  readonly budget_detail: string;
+  readonly permissions: readonly string[];
+  readonly risks: readonly string[];
+  readonly open_state: WorkScanOpenState;
+  readonly derivation: string;
+}
+
+/** A line the backend declined to propose work from, and why. Shown, not hidden. */
+export interface WorkScanRefusal {
+  readonly room: string;
+  readonly seq: number;
+  readonly shape: string;
+  readonly detail: string;
+}
+
+/**
+ * A room that could not be read.
+ *
+ * Never folded into "found nothing": "we read this room and found nothing"
+ * and "we could not read this room" look identical in a candidate list, and
+ * only one of them means there is nothing to do.
+ */
+export interface WorkScanRoomFailure {
+  readonly room: string;
+  readonly reason: string;
+  readonly detail: string;
+}
+
+export interface WorkScanRoomResult {
+  readonly room: string;
+  readonly candidates: readonly WorkScanCandidate[];
+  readonly refusals: readonly WorkScanRefusal[];
+  /** How many lines were actually read. An empty candidate list beside a
+   * non-zero count is a different finding from an empty room. */
+  readonly lines_read: number;
+}
+
+/**
+ * The reading time and the service's own declared cache bound.
+ *
+ * There is no `is_stale`. The backend invents no threshold, so it publishes
+ * no verdict, and neither does this app.
+ */
+export interface WorkScanStaleness {
+  readonly read_at: string;
+  readonly declared_cache_seconds: number;
+  /** Where that number was read, so a reader can check it. */
+  readonly declared_by: string;
+  readonly detail: string;
+}
+
+/** One room as the overview listed it. Both fields are caller-written. */
+export interface WorkScanRoom {
+  readonly name: string;
+  readonly topic: string;
+  readonly authority: 3;
+}
+
+export interface WorkScanRoomIndex {
+  readonly rooms: readonly WorkScanRoom[];
+  /** The service's own count of every listed room. Not `rooms.length`. */
+  readonly total: number;
+  readonly kept_count: number;
+  readonly truncated: boolean;
+  readonly staleness: WorkScanStaleness;
+  readonly sha256: string;
+  readonly room_name_caveat: string;
+  /** `topic` is a world-writable KV note, not an endorsement. */
+  readonly topic_caveat: string;
+}
+
+/** One thing about an external service, and whether anybody confirmed it. */
+export interface WorkScanAdapterFact {
+  readonly key: string;
+  readonly detail: string;
+  readonly state: "verified" | "not_verified";
+}
+
+/**
+ * An external service record. Never a client, and never contacted.
+ *
+ * `adapter_written` and `contacted` are `false` as *types*: there is no state
+ * in which this build holds an adapter for a third-party job board, and no
+ * assignment can open one here.
+ */
+export interface WorkScanAdapter {
+  readonly id: string;
+  readonly name: string;
+  readonly support: string;
+  readonly authority: 3;
+  readonly declared_origin: string;
+  readonly adapter_written: false;
+  readonly contacted: false;
+  readonly verified: readonly WorkScanAdapterFact[];
+  readonly unverified: readonly WorkScanAdapterFact[];
+  /** The service's own description of itself, rendered as it arrives. */
+  readonly self_description: string;
+  /** The service's own two sentences, in the language it wrote them in.
+   * They arrive on the wire rather than being transcribed into a constant
+   * here: a quotation kept in two places is a quotation that can drift. */
+  readonly self_description_source: string;
+  readonly score_self_description: string;
+  readonly score_caveat: string;
+  /** When the record was written and how much of it was confirmed. Always
+   * present: the age of a transcription is a fact about every reading of it. */
+  readonly provenance: string;
+}
+
+/** One scan of one user-chosen room set. */
+export interface WorkScanResult {
+  readonly started_at: string;
+  readonly completed_at: string;
+  /** The rooms actually read, after the backend's room policy. */
+  readonly rooms: readonly string[];
+  readonly results: readonly WorkScanRoomResult[];
+  readonly failures: readonly WorkScanRoomFailure[];
+  readonly candidate_count: number;
+  readonly refusal_count: number;
+}
+
+/** The whole scan surface, read-only. Reading it sends nothing outward. */
+export interface WorkScanStatus {
+  /** The cost of a deterministic derivation, stated on every read and not
+   * only beside a result (ADR-0007 2). Rendered verbatim. */
+  readonly honesty: string;
+  readonly capability: WorkScanCapability;
+  readonly adapters: readonly WorkScanAdapter[];
+  readonly room_index: WorkScanRoomIndex | null;
+  readonly last_scan: WorkScanResult | null;
+  /** The query parameters this build refuses to send, named in the payload so
+   * the absence of polling is checkable from outside the process. */
+  readonly never_sent_params: readonly string[];
+  readonly polling_statement: string;
+  /** The refusal half of the honesty sentence: the prohibited work shapes are
+   * matched by pattern, not recognised by meaning. */
+  readonly prohibition_statement: string;
+}
+
+/** The task one candidate opened. Born `suggested`; approved by nobody. */
+export interface WorkScanSuggestion {
+  readonly task_id: string;
+  readonly module_id: string;
+  readonly source_id: string;
+  readonly source_version_id: string;
+  readonly state: "suggested";
+  readonly detail: string;
+}

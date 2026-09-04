@@ -1,8 +1,8 @@
 # UI eylem haritası
 
 > Paket C çıktısı; Paket D ile "Oluştur ve Doğrula" bölümü (§5), Paket E ile
-> "Kanıtlar" bölümü (§7), Paket G ile "Ayarlar ve Yardım" bölümü (§8)
-> dolduruldu.
+> "Kanıtlar" bölümü (§7), Paket G ile "Ayarlar ve Yardım" bölümü (§8), Paket
+> H1 ile "Is Tara" bölümü (§12) dolduruldu.
 > Sol menülü dashboard kabuğundaki **her** etkileşimin sözleşmesi: önkoşul,
 > çağrılan işlev, loading/success/error/timeout/iptal davranışı ve otomatik
 > test kimliği.
@@ -176,7 +176,7 @@ girer; sınıflandırmanın değişmesi gerekmez.
 | Ekran / yol | Kontrol | Önkoşul | API / işlev | Loading | Success | Error | Timeout | İptal | Test |
 |---|---|---|---|---|---|---|---|---|---|
 | Kabuk (açılış) | otomatik oturum başlatma | launcher cookie'si | `bootstrapSession()` + `fetchAppStatus()` | durum kartları "Kontrol ediliyor" | bölümler veriyle dolar | `ErrorRegion` "Yerel cekirdege baglanilamadi"; auth→launcher açıklaması, network→"Yeniden dene" | `kind=timeout`, "Yeniden dene" | yok | `App.test.tsx::surfaces an auth failure with the launcher guidance and no retry`, `::offers a retry when the local core is unreachable, and retries` |
-| Sol menü | 6 bölüm butonu (`nav aria-label="Ana bolumler"`) | bölüm `ready: true` | yok (React state) | anında | seçili bölüm mount edilir, `aria-current="page"` taşınır; hazır olmayan bölüm hiç görünmez | — | — | — | `App.test.tsx::renders a left navigation with exactly the ready sections (ADR-0001)`, `::never shows a section that is not ready`, `::mounts only the selected section and moves aria-current on click`, `::is operable with the keyboard: tab to a section, Enter selects it` |
+| Sol menü | 7 bölüm butonu (`nav aria-label="Ana bolumler"`; H1 ile "Is Tara" eklendi) | bölüm `ready: true` | yok (React state) | anında | seçili bölüm mount edilir, `aria-current="page"` taşınır; hazır olmayan bölüm hiç görünmez | — | — | — | `App.test.tsx::renders a left navigation with exactly the ready sections (ADR-0001)`, `::never shows a section that is not ready`, `::mounts only the selected section and moves aria-current on click`, `::is operable with the keyboard: tab to a section, Enter selects it` |
 | Sol menü | "Menuyu daralt" / "Menuyu ac" (`aria-expanded` + `aria-controls`) | — | yok (React state; kalıcı depolama yok) | anında | menü daralır/genişler, seçim korunur. **Landmark unmount edilmez:** `<nav aria-label="Ana bolumler">` ve bütün bölüm butonları daraltılmış durumda da DOM'da kalır; görünen etiket baş harfe iner (`aria-hidden`), erişilebilir ad tam etiket olarak `sr-only` kalır | — | — | — | `App.test.tsx::collapses the navigation without losing the selection`, `::keeps the navigation landmark and every section name while collapsed`, `::points the collapse toggle at the region it controls`, `::selects a section from the collapsed menu` |
 | Üst başlık | (kontrol yok; sade başlık) | — | — | — | — | — | — | — | — |
 
@@ -565,7 +565,7 @@ görünmez:
 | Bölüm | `ready` | Açılacağı paket |
 |---|---|---|
 | Genel Bakis | evet | — |
-| Is Tara | hayır | H1 |
+| Is Tara | evet | — (H1 ile açıldı, ADR-0007 §9; sözleşmesi §12) |
 | Gorevler | hayır | F / H2 |
 | Aktivite | hayır | H2 |
 | Kimlik ve Guvenlik | evet | — |
@@ -574,7 +574,13 @@ görünmez:
 | Kanitlar | evet | — (kayıt defteri E ile doldu) |
 | Ayarlar ve Yardim | evet | — |
 
-Test: `App.test.tsx::never shows a section that is not ready`.
+Test: `App.test.tsx::never shows a section that is not ready`. Bu testin
+**kendisi** H1'de değişmedi; yalnız beslediği iki veri sabiti güncellendi
+(`VISIBLE_SECTIONS` sıralı `toEqual` ile, `HIDDEN_SECTIONS` artık
+`["Gorevler", "Aktivite"]`). E2E tarafında aynı liste `e2e/fixtures.ts`
+içindeki `SECTION_LABELS`'tır ve erişilebilirlik, CSP ve klavye geçişleri bu
+liste üzerinden döndüğü için yeni bölüm otomatik olarak üçünün de kapsamına
+girdi.
 
 ## 10. Bilinen sınırlar
 
@@ -629,7 +635,20 @@ Bu sözleşmenin kapsamadığı, bilinen ve bilinçli boşluklar:
    (AC-14). İki yüzey aynı gönderimi farklı ömürlerle gösterir ve bu bilinçli
    bir ayrımdır: biri az önce ne olduğunu, diğeri ne arşivlendiğini söyler.
    Tarayıcı depolaması yasak olduğu için (SI-24) arada bir önbellek yoktur.
-7. **Üst karakter sınırı aşımı butonu kilitlemez.** Süpürme metni kısaltabilir
+7. **Halka (ring) düşüşü sinyali tarama yanıtında taşınmıyor.** Backend
+   `RingDropNotice`'ı üretebiliyor ve `WorkScanRingDrop` şeması tanımlı, ama
+   tarama imleçsiz okuduğu için (`since` gönderilmiyor) sinyal hiç üretilmiyor
+   ve `WorkScanRoomResult` yanıtında böyle bir alan yok. UI bu boşluğu bir
+   alan uydurarak doldurmuyor: "Halka dususu ayri bir sinyaldir" uyarısı
+   sinyalin neden bu yanıtta olmadığını yazıyor. İmleçli okuma açılırsa alan
+   ve gösterim birlikte gelmelidir (§12.3).
+8. **Kibble'ın iki İngilizce cümlesi frontend'de sabit.** Tel üzerinde yalnız
+   Türkçe karşılığı (`self_description`) geliyor; servisin kendi sözlerini
+   birebir göstermek ADR-0007 §1'in isteği olduğu için iki cümle
+   `WorkScanPanel.tsx`'te alıntı olarak duruyor. Bu bir **ikinci kopyadır**
+   ve backend'deki `SELF_DESCRIPTION`/`SCORE_SELF_DESCRIPTION` ile
+   sürüklenebilir; tel bu iki alanı taşımaya başlarsa sabitler düşürülmelidir.
+9. **Üst karakter sınırı aşımı butonu kilitlemez.** Süpürme metni kısaltabilir
    ve etkin sınır sunucuda **süpürülmüş** metne uygulanır; UI uyarır ve alanı
    `aria-invalid` yapar ama son kararı sunucuya bırakır. Alt sınırın altı ise
    engellenir: süpürme metni yalnız kısaltabildiği için kısa bir ham metin
@@ -668,6 +687,17 @@ doğrulamasını, veri saklama koşulunu ve seçilemiyorsa **nedenini** taşıma
 zorunda ve bunlar bir `<option>` etiketine sığmaz. Seçilemeyen model
 `disabled` bir radyo olarak listelenir, nedeni yanında görünür.
 
+**Paket H1 hiçbir bileşen eklemedi; küme 11'de kaldı.** "Is Tara" yüzeyi
+`Card` + `Alert` + `Separator` + `Button` + `Checkbox` ve `StatusPill`
+üzerinden `Chip` ile kuruldu. Oda seçimi için `Table` veya `Listbox`
+istenmedi: her satır bir oda adı ve **dünyaya yazılabilir** bir başlık taşır,
+başlık düz metin olarak (`<pre>`) gösterilmek zorundadır ve bu bir hücreye
+sığmaz. Aday listesi için de `Accordion`/`Disclosure` **kullanılmadı** —
+sekiz öğenin hepsi görünür olmak zorunda (ADR-0007 §8) ve katlanabilir bir
+bileşen tam da gizlenmemesi gereken alanları (riskler, izinler, tahminin
+dayanağı) gizlemenin en kolay yolu olurdu. Böylece CSP inline-style hash
+riski (A1-R1) yeniden değerlendirilmedi ve tarayıcı QA borcu artmadı.
+
 **Paket E hiçbir bileşen eklemedi; küme 11'de kaldı.** Kanıt defteri
 `Card` + `Alert` + `Separator` + `Button` + `Checkbox` ve `StatusPill`
 üzerinden `Chip` ile kuruldu; kayıt listesi bir `Table` istemedi, çünkü her
@@ -683,3 +713,122 @@ import'ları taranır ve beklenen kümeye eşit olmalıdır (test:
 nothing new`, `::no longer imports the retired Tabs component`). Yeni bir
 bileşen eklemek, import satırının yan etkisi değil, bu listeyi bilerek
 genişletmek demektir.
+
+## 12. Is Tara (Paket H1)
+
+Bölüm `src/pages/WorkScanPage.tsx` → `components/workscan/WorkScanPanel.tsx`.
+Akış tek yönlüdür ve her adımı kullanıcı başlatır:
+
+> kaynakları seç → "iş tara" → sınırlı okuma → adaylar → birini seç → plan ve
+> izinler → yerel `suggested` görev
+
+### 12.1 Kontrol tablosu
+
+| Kontrol | Çağrı | Zaman aşımı | Pending etiketi | Hata |
+|---|---|---|---|---|
+| (mount) | `fetchWorkScanStatus` `GET /api/workscan/status` | 15 sn (varsayılan) | "Tarama yuzeyi okunuyor..." | `ErrorRegion` + "Yeniden dene" |
+| Oda listesini oku | `refreshWorkScanRooms` `POST /rooms/refresh` | 45 sn | "Oda listesi okunuyor..." | `ErrorRegion`, retry yok |
+| Secili odalari tara | `scanWorkRooms` `POST /scan` | 10 sn + oda başına 40 sn | "Taraniyor..." | `ErrorRegion`, retry yok |
+| Secili adayi yerel gorev olarak ac | `suggestWorkScanCandidate` `POST /suggest` | 15 sn | "Aciliyor..." | `ErrorRegion`, retry yok |
+
+Tarama zaman aşımı **hesaplanır**, sabit değil. Sunucu odaları sırayla okur ve
+oda başına bütçesi iki denemedir (bağlan 5 sn + oku 10 sn), aralarında en çok
+5 sn'ye kadar onurlandırılan bir bekleme vardır: oda başına ~35 sn. İstemci
+tarafı bunu okunacak oda sayısıyla çarpar, çünkü kısa bir süre dolduğunda
+istek yarıda bırakılır ve sonuç `timeout` — yani **yerel servis hakkında** bir
+iddia — olarak raporlanır; oysa sunucunun okuduğu odalar ve **okuyamadığı**
+odalar o yanıtın içindedir ve asıl cevap odur.
+
+Çift tıklama koruması dört çağrının dördünde de aynı: tek bir `busy` durumu
+tutulur, `busy !== null` iken hiçbir eylem başlamaz ve düğmeler `isDisabled`
+olur (§1.4).
+
+### 12.2 Kapsam kullanıcınındır
+
+`/rooms` listesi seçim yapılabilsin diye okunur; bir kuyruk değildir. Tarama
+yalnız işaretlenen odalarda çalışır, en çok 10 oda (`WORK_SCAN_MAX_ROOMS`,
+sunucunun `max_length` sınırının kopyası — UI 422 alacak bir istek kuramasın
+diye). Bütün oda evrenini tarayan bir yol ne burada ne arkadaki route'ta
+vardır.
+
+**Polling yoktur.** Zamanlayıcı, arka plan görevi, otomatik yenileme ve
+`wait` parametresi yoktur; yenileme yalnız açık bir düğmeyledir. İki testle
+sabitlenmiştir: çalışma anında hiçbir `setInterval` kurulmaz, ve bölümün
+kendi kaynak dosyaları taranıp `setInterval`/`setTimeout`/
+`requestAnimationFrame` ile depolama API'lerinin **hiç geçmediği** doğrulanır
+(`WorkScanPanel.test.tsx::installs no timer...`, `::carries no timer or
+storage primitive in its own source`).
+
+### 12.3 Dürüstlük yüzeyi
+
+| Ne | Nerede | Test |
+|---|---|---|
+| Deterministik çıkarımın bedeli (kalıp eşleşmesi, anlamsal çıkarım yok) | "Bu taramanin siniri" bölümü, **her** okumada, sonuç olmadan da | `workscan-honesty` |
+| Yasak iş biçimlerinin **kalıp eşleşmesiyle** reddedildiği (yani listede olmayan bir sözcük aday üretebilir) | aynı bölüm, dürüstlük cümlesinin yanında, koşulsuz | `workscan-prohibition` |
+| Polling yokluğu ve hiç gönderilmeyen parametreler (`n`, `wait`) | aynı bölüm | `workscan-polling` |
+| Oda listesi bayatlığı: ölçülen okuma anı + sunucunun kendi 3 sn beyanı + beyanın kaynağı | oda seçimi bloğu, koşulsuz | `workscan-staleness-rooms` |
+| Tarama anlık görüntüsü: ölçülen başlangıç/bitiş ve "bu yanıt mesaj okumaları için ayrı bir bayatlık beyanı taşımıyor" | tarama sonucu bloğu | `workscan-staleness-scan` |
+| Halka (ring) düşüşü — **ayrı** bir uyarı | kendi `Alert`'i | `workscan-ring-drop` |
+| Okunamayan odalar, ad ad | kendi `Alert`'i | `workscan-failures` |
+
+Bir **eşik uydurulmaz**. Ekranda "bayat"/"taze" diye bir hüküm yoktur; iki
+ölçülen değer ve servisin kendi beyanı vardır. Halka düşüşü bayatlıkla aynı
+kutuya konmaz: "liste birkaç saniye eski olabilir" ile "hiç okumadığınız
+mesajlar artık sunucuda yok" iki ayrı bulgudur ve ikincisini birincinin içine
+katmak somut bir kaybı genel bir çekinceye çevirirdi.
+
+Bugünkü sürümde tarama **imleçsizdir** (`since` gönderilmez), bu yüzden
+sunucu `first_seq > since + 1` sinyalini üretmez ve yanıt bir halka düşüşü
+alanı taşımaz. Uyarı bunu açıkça yazar; bir alan uydurulmadı.
+
+### 12.4 "Açık" demek yasak
+
+İşin durumu yalnız backend'in izin verdiği tek cümleyle sunulur: *"Su ana
+kadar okunanda kapanis isareti gorulmedi (anlik goruntu: …)"*. Hiçbir yerde
+boolean bir "açık/kapalı" rozeti yoktur ve şemada ondan üretilecek bir alan da
+yoktur. Test bütün belgeyi tarar: metni sadece `acik`/`kapali`/`open`/`closed`
+olan tek bir öğe bile bulunmamalıdır.
+
+### 12.5 Topluluk otoritesi ve uzak içerik
+
+- Oda içeriği **seviye 3**'tür (`authority: 3`) ve her aday kartında rozetle
+  yazar. Yol resmîdir, içerik değildir; ikisi tek bir rozete indirgenmez.
+- `from` `did:key` değilse "kendi beyan ettiği takma ad" olarak gösterilir ve
+  backend'in izin verdiği tek cümle yanında durur.
+- `topic` dünyaya yazılabilir bir KV notudur; ekranda "bir onay değildir"
+  yazar.
+- Alıntı `<pre>` içinde, düz metin olarak, **tıklanamaz** biçimde gösterilir:
+  HTML olarak render edilmez, otomatik bağlantıya çevrilmez ve aday kartında
+  hiç `<a>` yoktur (SI-54, AC-17). Vitest ve Playwright ayrı ayrı ölçer.
+
+### 12.6 Sekiz öğe
+
+Aday kartı sekiz başlığın hepsini numaralı olarak gösterir ve hiçbirini
+katlamaz: (1) birebir alıntı + `room`/`seq`/`ts` referansı, (2) kime faydası,
+(3) teslimat, (4) başarı koşulu ve testi, (5) modül/yazma kapısı yetkinliği,
+(6) **"tahmin"** etiketli çalışma tahmini + `not_implemented` bütçe ve nedeni
+(H2), (7) izinler ve riskler, (8) açıklık notu. Backend eksik aday
+üretemiyor; UI de eksik alan gizlemiyor.
+
+### 12.7 Dış servis kaydı (Kibble)
+
+Bir kayıttır, bir entegrasyon değil. Ekranda: `support_unverified` →
+"Destek dogrulanamadi", "Adapter yazilmadi", "Hicbir istek gonderilmedi",
+doğrulanan (5) ile doğrulanamayan (5) ayrı ayrı sayılarıyla, kaydın yazıldığı
+tarih satırı, servisin kendi iki cümlesi **kendi dilinde birebir** ve yanında
+backend'in gönderdiği Türkçe karşılığı.
+
+`score`/`rank` hiçbir yerde bir ölçüt olarak sunulmaz. Bir test, backend'in
+yasak-ifade listesini (folded karşılaştırmayla) **render edilmiş belgenin
+tamamına** uygular: "dogrulanmis itibar", "itibar puani", "uygunluk puani",
+"airdrop uygunlugu", "dogrulanmis talep sahibi", "resmi oda", "hala acik".
+
+### 12.8 Bu bölümde bilerek olmayanlar
+
+- Otomatik yenileme, zamanlayıcı, imleç (`since`) ve `wait`.
+- "Tümünü tara" düğmesi ve bir oda şablonu/URL alanı.
+- Bir onay adımı: `suggest` görevi `suggested` durumunda açar; onaya geçirmek
+  görev yüzeyinin ayrı bir işlemidir.
+- Üçüncü taraf bir skor, sıralama veya uygunluk göstergesi.
+- Tarayıcı depolaması: seçilen odalar, seçilen aday ve tarama sonucu yalnız
+  React state'tedir (SI-24).

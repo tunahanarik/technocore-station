@@ -1,10 +1,16 @@
-"""SI-215 .. SI-218, SI-226 - nine states, one explicit table, six of them real.
+"""SI-215 .. SI-218, SI-226, SI-277 - nine states, one explicit table, seven real.
 
 ADR-0004 3 asks for two things that pull against each other and this file
 holds both. The whole nine-state machine is written down once, so a later
 package does not re-derive it from memory; and **no code path can reach the
-three states nothing produces yet**, so nobody reads the table as a list of
-things that work.
+states nothing produces yet**, so nobody reads the table as a list of things
+that work.
+
+Package H1 moved one name across that line, and the move is recorded rather
+than quiet: ``suggested`` became producible when its producer was written
+(ADR-0007 7). The oracles below were edited by hand on the same change and the
+reason is written beside them. ``running`` and ``paused`` still await the
+executor.
 
 Two tests carry that claim, one behavioural and one structural, because the
 first version of this file carried it with one and the one was narrower than
@@ -79,12 +85,27 @@ CHARTER_STATE_NAMES = frozenset(
     }
 )
 
-#: The six ADR-0004 3 says this release can genuinely reach. **Typed out, not
-#: imported**: this is the oracle the reachability walk is compared against,
-#: and an oracle read out of the constant under test proves only that the code
-#: agrees with itself.
+#: What this release can genuinely reach. **Typed out, not imported**: this is
+#: the oracle the reachability walk is compared against, and an oracle read out
+#: of the constant under test proves only that the code agrees with itself.
+#:
+#: It was six under Package F and is seven under H1. That edit is the point at
+#: which this file has to be read carefully rather than trusted, so the reason
+#: is written here and not only in a commit message: ADR-0007 7 opened
+#: ``suggested`` **because H1 built its producer**
+#: (``TaskService.suggest_task``, driven by ``station_api.workscan``), which is
+#: exactly the condition Package F's own docstring set for opening it. This is
+#: a recorded opening, not a loosened assertion - and it is loosened in the
+#: weakest possible sense, because the walk below still has to *reach*
+#: ``suggested`` through the real service against a real database before this
+#: set is believed. Adding a name here without a producer turns the walk red.
+#:
+#: What deliberately did not change is ``INITIAL_STATE``: see
+#: ``test_the_initial_state_is_not_suggested``, which is the assertion that
+#: keeps a user's own task and a scanned candidate distinguishable by the row.
 EXPECTED_PRODUCIBLE = frozenset(
     {
+        TaskState.SUGGESTED,
         TaskState.AWAITING_APPROVAL,
         TaskState.BLOCKED,
         TaskState.FAILED,
@@ -94,10 +115,8 @@ EXPECTED_PRODUCIBLE = frozenset(
     }
 )
 
-#: The three that need a producer this release does not have. Also typed out.
-EXPECTED_UNPRODUCIBLE = frozenset(
-    {TaskState.SUGGESTED, TaskState.RUNNING, TaskState.PAUSED}
-)
+#: The two that need the executor this release does not have. Also typed out.
+EXPECTED_UNPRODUCIBLE = frozenset({TaskState.RUNNING, TaskState.PAUSED})
 
 TEST_ONLY_CONTENT = b"TEST-ONLY task content, not a real work item."
 
@@ -426,9 +445,21 @@ def test_the_table_still_lists_the_edges_into_unbuilt_states() -> None:
 
 
 def test_the_initial_state_is_not_suggested() -> None:
-    """Nothing suggests anything yet, so nothing may start there."""
+    """Kept unchanged through H1, and it is now doing more work than before.
+
+    While ``suggested`` was unproducible this said "nothing suggests anything
+    yet". H1 built a suggester, and the assertion stays exactly as it was on
+    purpose (ADR-0007 7): a task the **user** opened must not be born in the
+    state a **scan** produces, because the starting state is one of the two
+    independent layers that keep the two apart - the other being the source
+    identifier, and therefore ``source_version_id``.
+
+    A future change that made ``suggested`` the initial state would collapse
+    both layers into one column and is refused here.
+    """
     assert INITIAL_STATE is TaskState.AWAITING_APPROVAL
     assert INITIAL_STATE in PRODUCIBLE_STATES
+    assert INITIAL_STATE is not TaskState.SUGGESTED
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +467,7 @@ def test_the_initial_state_is_not_suggested() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_unproducible_states_are_exactly_the_three_the_adr_names() -> None:
+def test_the_unproducible_states_are_exactly_the_two_that_await_an_executor() -> None:
     assert set(UNPRODUCIBLE_STATES) == EXPECTED_UNPRODUCIBLE
     assert set(PRODUCIBLE_STATES) == EXPECTED_PRODUCIBLE
     assert set(TaskState) == PRODUCIBLE_STATES | UNPRODUCIBLE_STATES
