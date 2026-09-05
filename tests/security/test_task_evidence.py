@@ -4,9 +4,12 @@ a versioned identity, no writes.
 Four rules from ADR-0004, each with the failure it exists to prevent:
 
 * **4.** Task success, test result, user acceptance and public sharing stay
-  four fields. Public sharing is always empty in this release, and an unbuilt
-  check reports ``not_implemented`` - never ``passed``. The existence of a
-  result is not the success of one.
+  four fields, and an unbuilt check reports ``not_implemented`` - never
+  ``passed``. The existence of a result is not the success of one. Public
+  sharing was *always empty* until Package H3; ADR-0009 1 opened it, on the
+  condition that it can only ever point at an archived send, and left it out
+  of ``PUBLICATION_FIELDS`` so publishing is still not a precondition for
+  finishing.
 * **5.** A task is bound to ``domain_digest(task-source/v1, source_id,
   content_sha256)``. Change the content and the identity changes, so evidence
   produced for the old bytes stops matching.
@@ -21,6 +24,7 @@ from __future__ import annotations
 import ast
 import inspect
 import socket
+import uuid
 from collections.abc import Iterator
 from dataclasses import fields
 from datetime import UTC, datetime
@@ -76,6 +80,48 @@ TEST_ONLY_CHANGED = b"TEST-ONLY task content, edited."
 TEST_ONLY_DID = "did:key:zTESTONLYnotarealdidkeyvalue"
 TEST_ONLY_ROOM = "mb-station-test-only"
 
+#: The three fields that gate publication, typed out rather than derived.
+#:
+#: They used to be derived - "every field that is not unfillable" - and that
+#: derivation quietly stopped meaning anything when Package H3 emptied
+#: ``UNFILLABLE_FIELDS`` (ADR-0009 1). Written out, a package that moved
+#: ``public_share`` into the set fails here instead of agreeing with itself.
+EXPECTED_PUBLICATION_FIELDS: frozenset[EvidenceField] = frozenset(
+    {
+        EvidenceField.TASK_OUTCOME,
+        EvidenceField.TEST_RESULT,
+        EvidenceField.USER_ACCEPTANCE,
+    }
+)
+
+#: Empty since H3, and typed out as an oracle rather than dropped. It is the
+#: measured claim "this release closes no field"; a package that closes one
+#: edits this line, and one that closes a field by accident fails here.
+EXPECTED_UNFILLABLE: frozenset[EvidenceField] = frozenset()
+
+#: A field closed for the duration of one test, so the refusal machinery is
+#: **driven** rather than looped over an empty set. ``TEST_RESULT`` is used
+#: because it is genuinely fillable today: closing something already closed
+#: would prove nothing (ADR-0009 2, the ``CLOSED_FOR_THE_PROBE`` pattern
+#: ``test_task_states.py`` established for ``UNPRODUCIBLE_STATES``).
+CLOSED_FOR_THE_PROBE = EvidenceField.TEST_RESULT
+
+#: TEST-ONLY. Thirty-two lowercase hex characters - the shape ``uuid4().hex``
+#: produces - and not a real evidence record id anywhere.
+TEST_ONLY_EVIDENCE_ID = "0123456789abcdef0123456789abcdef"
+
+#: The trees the "no budget field" scan covers.
+#:
+#: Package F's two, plus the ``proof`` package H3 added. The third name is
+#: load-bearing rather than tidy: ADR-0009 5 records that a new package is
+#: outside every boundary scan until somebody widens one, and a proof
+#: workspace is exactly where a field called ``estimated_cost`` would look
+#: natural. A scan that still read only ``modules`` and ``tasks`` would have
+#: declared "the task layer opens no budget field" while the newest code was
+#: free to open one - SI-225 silently holed on the commit that made the hole
+#: reachable, which is H2's ``PACKAGE_F_DIRS`` lesson repeated.
+BUDGET_SCANNED_DIRS = ("modules", "tasks", "proof")
+
 
 @pytest.fixture
 def service(engine: Engine) -> TaskService:
@@ -109,14 +155,27 @@ def _verify_all(service: TaskService, view: TaskView) -> TaskView:
 
 
 def test_there_are_exactly_four_fields_and_three_decide_publication() -> None:
+    """The four names, and the three that gate publication.
+
+    Rewritten by Package H3 because one of its assertions stopped saying
+    anything. It read ``PUBLICATION_FIELDS == set(EvidenceField) -
+    UNFILLABLE_FIELDS``, which was a real statement while ``public_share`` was
+    unfillable and became "the three are the four minus nothing" - a claim
+    that is simply false, and would have been *silently repaired* by moving
+    ``public_share`` into ``PUBLICATION_FIELDS``. That is the exact edit
+    ADR-0004 4 and ADR-0009 1 both refuse, so the three are now named against
+    a typed-out oracle instead of derived from a set that has emptied.
+    """
     assert {field.value for field in EvidenceField} == {
         "task_outcome",
         "test_result",
         "user_acceptance",
         "public_share",
     }
-    assert set(PUBLICATION_FIELDS) == set(EvidenceField) - UNFILLABLE_FIELDS
-    assert set(UNFILLABLE_FIELDS) == {EvidenceField.PUBLIC_SHARE}
+    assert set(PUBLICATION_FIELDS) == EXPECTED_PUBLICATION_FIELDS
+    assert EvidenceField.PUBLIC_SHARE not in PUBLICATION_FIELDS
+    assert set(UNFILLABLE_FIELDS) == EXPECTED_UNFILLABLE
+    assert frozenset() == UNFILLABLE_FIELDS
 
 
 def test_the_four_fields_are_four_column_groups_and_not_one_flag() -> None:
@@ -137,34 +196,141 @@ def test_the_four_fields_are_four_column_groups_and_not_one_flag() -> None:
         assert collapsed not in columns
 
 
-def test_a_public_share_reference_cannot_be_constructed_at_all() -> None:
-    """Unrepresentable, not merely unwritten (ADR-0004 4).
+def _archive_a_send(engine: Engine, *, outcome: str = "accepted") -> str:
+    """Put one TEST-ONLY row in the evidence archive and return its id.
 
-    The field exists so the absence can be *stated*; a release that could
-    build a reference for it would be a release that could fill it by
-    accident.
+    Written straight into the table rather than through ``EvidenceService``,
+    because that service needs an audit chain and a DPAPI envelope and this
+    file is about the *task* layer's lookup, not about how the row arrived.
+    The reservation is made through the real reserver so the foreign key is
+    honest. Nothing here contacts anything; every value is a fixture.
     """
-    with pytest.raises(EvidenceFieldError):
-        EvidenceRef(
-            field=EvidenceField.PUBLIC_SHARE,
-            ref_id="TEST-ONLY",
-            verified=True,
-            source_version_id="v1",
+    from station_api.db.models import EvidenceRecord
+
+    reserver = NonceReserver(engine)
+    reservation = reserver.reserve(did=TEST_ONLY_DID, room=TEST_ONLY_ROOM)
+    reserver.commit_to_send(reservation.id)
+
+    evidence_id = uuid.uuid4().hex
+    with Session(engine) as session, session.begin():
+        session.add(
+            EvidenceRecord(
+                id=evidence_id,
+                reservation_id=reservation.id,
+                did=TEST_ONLY_DID,
+                room=TEST_ONLY_ROOM,
+                nonce=reservation.nonce,
+                canonical="TEST-ONLY canonical",
+                canonical_sha256="0" * 64,
+                signature="TEST-ONLY-signature",
+                signature_verified=True,
+                request_body=b"TEST-ONLY request",
+                request_sha256="1" * 64,
+                response_body=b"TEST-ONLY response",
+                response_sha256="2" * 64,
+                http_status=200,
+                write_outcome=outcome,
+                recorded_at=datetime.now(UTC),
+                external_anchor=None,
+            )
         )
+    return evidence_id
 
 
-def test_the_service_refuses_to_record_public_share(service: TaskService) -> None:
+def test_a_public_share_reference_needs_an_evidence_record_identity() -> None:
+    """ADR-0009 1, in the constructor. A typed sentence is not a pointer.
+
+    This test used to be ``..._cannot_be_constructed_at_all`` and asserted
+    that no ``public_share`` reference could exist. Package H3 changed that
+    fact rather than softening the test: the field is fillable now, and the
+    condition it is fillable under is checked in the same place the old
+    refusal lived, so a hand-written string still raises and still raises
+    *here* rather than at whichever caller remembered to look.
+
+    Both halves are driven. Without the first, a constructor that refused
+    every ``public_share`` reference would pass the second and the field would
+    be unfillable again with nobody noticing.
+    """
+    accepted = EvidenceRef(
+        field=EvidenceField.PUBLIC_SHARE,
+        ref_id=TEST_ONLY_EVIDENCE_ID,
+        verified=True,
+        source_version_id="v1",
+    )
+    assert accepted.ref_id == TEST_ONLY_EVIDENCE_ID
+
+    for wrong_shape in (
+        "TEST-ONLY",
+        TEST_ONLY_EVIDENCE_ID.upper(),
+        TEST_ONLY_EVIDENCE_ID[:31],
+        TEST_ONLY_EVIDENCE_ID + "0",
+        "paylasildi",
+    ):
+        with pytest.raises(EvidenceFieldError):
+            EvidenceRef(
+                field=EvidenceField.PUBLIC_SHARE,
+                ref_id=wrong_shape,
+                verified=True,
+                source_version_id="v1",
+            )
+
+
+def test_the_service_refuses_a_public_share_pointer_with_no_row_behind_it(
+    service: TaskService,
+) -> None:
+    """The second of the two refusals, and it is not the same as the first.
+
+    The constructor checks the *shape*; this checks that a row exists. A
+    thirty-two character hex string invented by hand has the right shape and
+    names no send, and the difference between "looks like an id" and "is an
+    id" is the whole of ADR-0009 1 - so both are asserted, with different
+    reasons, on the same surface.
+    """
     view = _open(service)
 
-    with pytest.raises(TaskError) as caught:
+    with pytest.raises(TaskError) as typed:
         service.record_evidence(
             view.id,
             field=EvidenceField.PUBLIC_SHARE,
             ref_id="TEST-ONLY",
             verified=True,
         )
+    assert typed.value.reason == "evidence_field_refused"
 
-    assert caught.value.reason == "evidence_field_refused"
+    with pytest.raises(TaskError) as invented:
+        service.record_evidence(
+            view.id,
+            field=EvidenceField.PUBLIC_SHARE,
+            ref_id=TEST_ONLY_EVIDENCE_ID,
+            verified=True,
+        )
+    assert invented.value.reason == "evidence_record_missing"
+    assert service.get(view.id).refs == ()
+
+
+def test_a_public_share_pointing_at_a_real_archived_send_is_accepted(
+    service: TaskService, engine: Engine
+) -> None:
+    """The permitted case, so the two refusals above are not "refuse always".
+
+    A guard that rejected every public-share pointer would pass both halves of
+    the test before this one. This is the half that makes them mean something:
+    an id that names a row actually in the archive is recorded, and it comes
+    back through the gate as a passed field.
+    """
+    evidence_id = _archive_a_send(engine)
+    view = service.record_evidence(
+        _open(service).id,
+        field=EvidenceField.PUBLIC_SHARE,
+        ref_id=evidence_id,
+        verified=True,
+        detail="TEST-ONLY paylasim.",
+    )
+
+    share = service.gate(view.id).check_for(EvidenceField.PUBLIC_SHARE)
+
+    assert share.state is CheckState.PASSED
+    assert share.ref_id == evidence_id
 
 
 def test_an_evidence_pointer_is_swept_and_bounded_like_every_other_string(
@@ -225,13 +391,18 @@ def test_a_pointer_that_sweeps_down_to_nothing_is_refused(
 def test_a_public_share_row_written_directly_is_passed_by(
     service: TaskService, engine: Engine
 ) -> None:
-    """What ``_refs_from_row`` actually does with a column nothing writes (F-4).
+    """What ``_refs_from_row`` does with a value the service would not write (F-4).
 
-    The docstring used to say such a row "would raise here". It would not: the
-    field is skipped before its columns are read, so the row is passed by. The
-    behaviour is the safe one - no reference this release calls impossible is
-    ever built - and the sentence now says that instead of a louder thing that
-    was not true.
+    The behaviour is unchanged and the reason for it is not. While the field
+    was unfillable the row was skipped **before its columns were read**;
+    Package H3 opened the field, so those columns are read now and the value
+    reaches ``EvidenceRef``, whose constructor refuses it. Without the
+    ``except EvidenceFieldError`` that answer would have been an unhandled
+    error on *every* read of this task - a listing included - which is a much
+    worse answer to a hand-edited row than passing it by.
+
+    So the assertion is the same one it always was, and it is now covering a
+    second code path rather than the same one under a new name.
     """
     from station_api.db.models import TaskEvidenceOutcome
 
@@ -247,24 +418,45 @@ def test_a_public_share_row_written_directly_is_passed_by(
 
     assert after.refs == ()
     assert [ref.field for ref in after.refs] == []
-    # The gate is unmoved: the field is not implemented whatever the row holds.
+    # The gate is unmoved: nothing valid was recorded, so the field blocks.
     assert service.gate(view.id).check_for(EvidenceField.PUBLIC_SHARE).state is (
-        CheckState.NOT_IMPLEMENTED
+        CheckState.BLOCKED
     )
     assert service.gate(view.id).ready_to_publish is False
+    # And the whole listing still answers rather than raising, which is the
+    # half that would have gone wrong silently.
+    assert [item.id for item in service.list_tasks()] == [view.id]
 
 
-def test_public_share_is_always_not_implemented_and_never_passed(
-    service: TaskService,
+def test_public_share_is_blocked_until_an_archived_send_is_recorded(
+    service: TaskService, engine: Engine
 ) -> None:
+    """Renamed from ``..._is_always_not_implemented_and_never_passed``.
+
+    That name described a release in which no code path could fill the field,
+    and Package H3 built one (ADR-0009 1). The property worth keeping is not
+    "this is always empty" - it is "this is never *assumed*": with nothing
+    recorded the field blocks rather than passing, and it only passes when
+    something real is pointed at.
+    """
     view = _verify_all(service, _open(service))
-    status = service.gate(view.id)
+    share = service.gate(view.id).check_for(EvidenceField.PUBLIC_SHARE)
 
-    share = status.check_for(EvidenceField.PUBLIC_SHARE)
-
-    assert share.state is CheckState.NOT_IMPLEMENTED
+    assert share.state is CheckState.BLOCKED
     assert share.satisfied is False
     assert share.ref_id == ""
+
+    evidence_id = _archive_a_send(engine)
+    view = service.record_evidence(
+        view.id,
+        field=EvidenceField.PUBLIC_SHARE,
+        ref_id=evidence_id,
+        verified=True,
+    )
+    after = service.gate(view.id).check_for(EvidenceField.PUBLIC_SHARE)
+
+    assert after.state is CheckState.PASSED
+    assert after.ref_id == evidence_id
 
 
 def test_public_share_does_not_block_a_finished_task(service: TaskService) -> None:
@@ -272,16 +464,20 @@ def test_public_share_does_not_block_a_finished_task(service: TaskService) -> No
 
     Making external sharing a precondition for finishing would mean no task
     could ever be complete without publishing it, which inverts the property
-    this product wants to be true.
+    this product wants to be true. ADR-0009 1 kept
+    ``PUBLICATION_FIELDS`` at three for exactly this reason while making the
+    field fillable, so the rationale is unchanged and the state the field
+    reports is not: it is ``blocked`` now rather than ``not_implemented``, and
+    a blocked field that does not block is the sharper version of this test -
+    the earlier one could have passed because the field was inert.
     """
     view = _verify_all(service, _open(service))
     status = service.gate(view.id)
 
     assert status.ready_to_publish is True
     assert status.blocking_fields == ()
-    assert status.check_for(EvidenceField.PUBLIC_SHARE).state is (
-        CheckState.NOT_IMPLEMENTED
-    )
+    assert status.check_for(EvidenceField.PUBLIC_SHARE).state is CheckState.BLOCKED
+    assert status.check_for(EvidenceField.PUBLIC_SHARE).satisfied is False
 
 
 def test_a_record_that_merely_exists_is_not_success(service: TaskService) -> None:
@@ -876,6 +1072,38 @@ def test_a_scan_with_no_database_is_an_empty_report_rather_than_a_crash() -> Non
 # ---------------------------------------------------------------------------
 
 
+#: The one permitted budget-shaped name: the sentence that records where the
+#: ceiling actually lives. It is a string constant and nothing reads a number
+#: out of it; anything else budget-shaped would be a field pretending a budget
+#: exists.
+_ALLOWED_BUDGET_NAMES = frozenset({"BUDGET_DETAIL"})
+
+
+def _budget_scanned_files(root: Path) -> list[Path]:
+    """Every file the budget scan opens, so "it scanned nothing" is visible."""
+    found: list[Path] = []
+    for directory in BUDGET_SCANNED_DIRS:
+        found.extend((root / "station_api" / directory).rglob("*.py"))
+    return sorted(found)
+
+
+def _budget_offenders(root: Path) -> list[str]:
+    """Every budget-shaped identifier in the scanned trees."""
+    offenders: list[str] = []
+    for path in _budget_scanned_files(root):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Name)
+                and "budget" in node.id.lower()
+                and node.id not in _ALLOWED_BUDGET_NAMES
+            ):
+                offenders.append(f"{path.name}: {node.id}")
+            if isinstance(node, ast.Attribute) and "budget" in node.attr.lower():
+                offenders.append(f"{path.name}: .{node.attr}")
+    return offenders
+
+
 def test_the_task_layer_opens_no_budget_field(api_source_root: Path) -> None:
     """No budget column, no budget attribute, no budget arithmetic - **here**.
 
@@ -885,11 +1113,17 @@ def test_the_task_layer_opens_no_budget_field(api_source_root: Path) -> None:
     it, so SI-225 stays literally true rather than becoming a sentence about
     where the field moved (ADR-0008 4).
 
-    The scan is unchanged and deliberately so. It is stricter than it needs to
-    be - it refuses the *word* in an identifier, not just a column - and that
-    strictness is what makes "the run carries a ceiling, a task does not" a
-    structural boundary rather than a naming convention. What must not happen
-    is a field on a task that looks like a limit and enforces nothing.
+    The scan is stricter than it needs to be - it refuses the *word* in an
+    identifier, not just a column - and that strictness is what makes "the run
+    carries a ceiling, a task does not" a structural boundary rather than a
+    naming convention. What must not happen is a field on a task that looks
+    like a limit and enforces nothing.
+
+    What Package H3 changed is the **reach**: :data:`BUDGET_SCANNED_DIRS` now
+    covers ``proof`` as well (ADR-0009 5). The rule was scoped to two
+    directories, so the newest package was exempt from it by construction, and
+    the exemption would have been invisible - a passing test over the wrong
+    tree looks exactly like a passing test.
     """
     from station_api.db.models import TaskEvidenceOutcome, TaskRecord
 
@@ -898,26 +1132,39 @@ def test_the_task_layer_opens_no_budget_field(api_source_root: Path) -> None:
             for fragment in ("budget", "cost", "spend", "quota", "credit"):
                 assert fragment not in column.name.lower(), f"{table.name}.{column.name}"
 
-    # The one permitted name is the sentence that records the deferral. It is
-    # a string constant and nothing reads a number out of it; anything else
-    # budget-shaped would be a field pretending a budget exists.
-    allowed = {"BUDGET_DETAIL"}
-    offenders: list[str] = []
-    for directory in ("modules", "tasks"):
-        for path in (api_source_root / "station_api" / directory).rglob("*.py"):
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            for node in ast.walk(tree):
-                if (
-                    isinstance(node, ast.Name)
-                    and "budget" in node.id.lower()
-                    and node.id not in allowed
-                ):
-                    offenders.append(f"{path.name}: {node.id}")
-                if isinstance(node, ast.Attribute) and "budget" in node.attr.lower():
-                    offenders.append(f"{path.name}: .{node.attr}")
-
-    assert offenders == [], f"a budget-shaped identifier appeared: {offenders}"
+    assert _budget_offenders(api_source_root) == [], "a budget-shaped identifier appeared"
     assert isinstance(BUDGET_DETAIL, str)
+
+
+def test_the_budget_scan_reaches_the_proof_package_and_would_fire_there(
+    api_source_root: Path, tmp_path: Path
+) -> None:
+    """The extension, driven with a planted violation (ADR-0009 5).
+
+    Two halves, and neither is enough alone. The first proves the scan really
+    opens ``station_api/proof`` - a directory name that is simply wrong reads
+    as a clean result, which is how a widened rule can widen nothing. The
+    second plants ``estimated_budget`` in a file under that directory in a
+    throwaway tree and requires it to be reported, so the reach is measured
+    rather than assumed.
+    """
+    scanned = _budget_scanned_files(api_source_root)
+    proof_files = [path for path in scanned if path.parent.name == "proof"]
+
+    assert len(proof_files) >= 4, proof_files
+    assert {"service.py", "bundle.py"} <= {path.name for path in proof_files}
+
+    for directory in BUDGET_SCANNED_DIRS:
+        planted = tmp_path / "station_api" / directory
+        planted.mkdir(parents=True)
+        (planted / "planted.py").write_text(
+            "estimated_budget = 10\nvalue = run.budget_left\n", encoding="utf-8"
+        )
+
+    offenders = _budget_offenders(tmp_path)
+
+    assert len(offenders) == 2 * len(BUDGET_SCANNED_DIRS), offenders
+    assert any("proof" in str(path) for path in _budget_scanned_files(tmp_path))
 
 
 def test_the_task_layer_states_where_the_ceiling_lives_rather_than_implying_none(
@@ -946,7 +1193,13 @@ def test_the_task_layer_states_where_the_ceiling_lives_rather_than_implying_none
     assert "arac cagrisi sayisi" in payload.budget_detail
     # The units this product refuses to count are named, not merely absent.
     assert "Token ve para birimi sayilmaz" in payload.budget_detail
-    assert payload.public_share_available is False
+    # ``public_share_available`` moved from ``Literal[False]`` to a derived
+    # boolean when Package H3 made the field fillable (ADR-0009 1). The
+    # assertion moved with the fact rather than being deleted, and it is
+    # asserted against the constant that decides it so the wire and the rule
+    # cannot drift apart.
+    assert payload.public_share_available is True
+    assert EvidenceField.PUBLIC_SHARE not in UNFILLABLE_FIELDS
 
 
 def test_the_deferral_is_recorded_in_the_documents(repo_root: Path) -> None:
@@ -955,3 +1208,181 @@ def test_the_deferral_is_recorded_in_the_documents(repo_root: Path) -> None:
 
     assert "butce" in notes.lower() or "bütçe" in notes.lower()
     assert "H2" in notes
+
+
+# ---------------------------------------------------------------------------
+# ADR-0009 2 - the honesty condition: four branches that would go quiet
+# ---------------------------------------------------------------------------
+#
+# Emptying ``UNFILLABLE_FIELDS`` leaves four branches with nothing to match,
+# and none of them turns red when that happens:
+#
+#     tasks/gate.py        ``if field in UNFILLABLE_FIELDS``
+#     tasks/service.py     ``if field in UNFILLABLE_FIELDS: continue``
+#     modules/completion.py``or requirement.evidence in UNFILLABLE_FIELDS``
+#     modules/fields.py    ``EvidenceRef.__post_init__``'s refusal
+#
+# That is the shape H2 hit with ``UNPRODUCIBLE_STATES``, and it takes H2's
+# answer: the mechanism is **driven** with one genuinely fillable field closed
+# for the duration of a test. Each test reads the permitted case *first*, with
+# nothing closed, so a function that refused everything would fail rather than
+# pass - which is the way a driven mutation goes quietly wrong.
+#
+# The patch is applied to the module that *uses* the constant, never to
+# ``fields`` alone: each consumer holds its own ``from ... import`` binding, so
+# patching only the definition would leave three of the four untouched and the
+# test would report a success it had not measured.
+
+
+def test_the_gate_still_reports_a_closed_field_as_not_implemented(
+    service: TaskService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``tasks/gate.py``'s branch, driven rather than looped over."""
+    from station_api.tasks import gate as gate_module
+
+    view = _verify_all(service, _open(service))
+
+    # Read first, with nothing closed: the field passes. Without this half a
+    # gate that reported every field as not_implemented would also pass below.
+    assert (
+        service.gate(view.id).check_for(CLOSED_FOR_THE_PROBE).state is CheckState.PASSED
+    )
+
+    monkeypatch.setattr(
+        gate_module, "UNFILLABLE_FIELDS", frozenset({CLOSED_FOR_THE_PROBE})
+    )
+    status = gate_module.evaluate(
+        TaskGateInput(source_version_id=view.source_version_id, refs=view.refs)
+    )
+    closed = status.check_for(CLOSED_FOR_THE_PROBE)
+
+    assert closed.state is CheckState.NOT_IMPLEMENTED
+    assert closed.ref_id == ""
+    assert status.ready_to_publish is False
+    assert CLOSED_FOR_THE_PROBE.value in status.blocking_fields
+
+
+def test_the_row_reader_still_skips_a_closed_fields_columns(
+    service: TaskService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``tasks/service.py``'s branch: a closed field is passed by, not raised over."""
+    from station_api.tasks import service as task_service_module
+
+    view = _verify_all(service, _open(service))
+
+    assert CLOSED_FOR_THE_PROBE in {ref.field for ref in service.get(view.id).refs}
+
+    monkeypatch.setattr(
+        task_service_module, "UNFILLABLE_FIELDS", frozenset({CLOSED_FOR_THE_PROBE})
+    )
+    after = service.get(view.id)
+
+    assert CLOSED_FOR_THE_PROBE not in {ref.field for ref in after.refs}
+    assert len(after.refs) == len(EXPECTED_PUBLICATION_FIELDS) - 1
+
+
+def test_a_requirement_bound_to_a_closed_field_is_never_counted_as_passed(
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``modules/completion.py``'s branch, on a requirement that really passes.
+
+    ``restore_test_verified`` is bound to ``test_result`` and is
+    ``implemented=True``, so it is a requirement the check can actually pass -
+    which is what makes closing its field a measurement rather than a
+    tautology.
+    """
+    from station_api.modules import completion as completion_module
+
+    record = get_module(ModuleId.PROJECT_ZERO)
+    ref = EvidenceRef(
+        field=CLOSED_FOR_THE_PROBE,
+        ref_id="TEST-ONLY-ref",
+        verified=True,
+        source_version_id="v1",
+    )
+
+    before = evaluate_module(record, refs=(ref,), source_version_id="v1")
+    passed = next(
+        check for check in before.checks if check.key == "restore_test_verified"
+    )
+    assert passed.state is CheckState.PASSED
+
+    monkeypatch.setattr(
+        completion_module, "UNFILLABLE_FIELDS", frozenset({CLOSED_FOR_THE_PROBE})
+    )
+    after = completion_module.evaluate_module(
+        record, refs=(ref,), source_version_id="v1"
+    )
+    closed = next(
+        check for check in after.checks if check.key == "restore_test_verified"
+    )
+
+    assert closed.state is CheckState.NOT_IMPLEMENTED
+    assert closed.satisfied is False
+    assert "restore_test_verified" in after.not_implemented_keys
+
+
+def test_a_reference_for_a_closed_field_cannot_be_constructed(
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``modules/fields.py``'s branch: the refusal in the constructor itself."""
+    from station_api.modules import fields as fields_module
+
+    permitted = EvidenceRef(
+        field=CLOSED_FOR_THE_PROBE,
+        ref_id="TEST-ONLY-ref",
+        verified=True,
+        source_version_id="v1",
+    )
+    assert permitted.field is CLOSED_FOR_THE_PROBE
+
+    monkeypatch.setattr(
+        fields_module, "UNFILLABLE_FIELDS", frozenset({CLOSED_FOR_THE_PROBE})
+    )
+
+    with pytest.raises(EvidenceFieldError) as caught:
+        EvidenceRef(
+            field=CLOSED_FOR_THE_PROBE,
+            ref_id="TEST-ONLY-ref",
+            verified=True,
+            source_version_id="v1",
+        )
+
+    assert CLOSED_FOR_THE_PROBE.value in str(caught.value)
+    # And the other three fields are untouched, so the refusal is about the
+    # closed field rather than about every field.
+    for field in EvidenceField:
+        if field is CLOSED_FOR_THE_PROBE or field is EvidenceField.PUBLIC_SHARE:
+            continue
+        assert EvidenceRef(
+            field=field,
+            ref_id="TEST-ONLY-ref",
+            verified=True,
+            source_version_id="v1",
+        ).field is field
+
+
+def test_the_service_refuses_to_record_a_closed_field(
+    service: TaskService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The four branches meeting at the surface a caller actually uses."""
+    from station_api.modules import fields as fields_module
+
+    view = _open(service)
+    assert service.record_evidence(
+        view.id, field=CLOSED_FOR_THE_PROBE, ref_id="TEST-ONLY-ref", verified=True
+    ).refs
+
+    monkeypatch.setattr(
+        fields_module, "UNFILLABLE_FIELDS", frozenset({CLOSED_FOR_THE_PROBE})
+    )
+
+    with pytest.raises(TaskError) as caught:
+        service.record_evidence(
+            _open(service).id,
+            field=CLOSED_FOR_THE_PROBE,
+            ref_id="TEST-ONLY-ref",
+            verified=True,
+        )
+
+    assert caught.value.reason == "evidence_field_refused"

@@ -330,31 +330,53 @@ def test_the_capability_reads_the_registry_and_the_gate_without_merging_them() -
     assert shut_gate.detail != open_gate.detail
 
 
-def test_a_planned_module_produces_a_capability_that_says_the_code_is_absent() -> None:
+def test_a_planned_module_produces_a_capability_that_says_the_code_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Read off the compile-time registry, not asserted.
 
-    The example module moved. ``agent_workspace`` was the ``planned`` record
-    this test pointed at, and Package H2 opened it - the state, the owners and
-    the requirements moved together, exactly as H1 moved ``work_scan``. So the
-    test points at the record that is still planned, ``proof_workspace``, and
-    it keeps saying the thing it was written to say: a capability derived from
-    a ``planned`` record reports the code as absent rather than as pending.
+    This test has now outlived every record it pointed at.
+    ``agent_workspace`` was the example until H2 opened it,
+    ``proof_workspace`` until H3 opened it, and there is no third: the
+    registry has no ``planned`` records left. The previous docstring wrote
+    down what to do at exactly this moment - *"it gets a record that is
+    genuinely planned, or, if there is none, it becomes an assertion that the
+    registry has no planned records left. What it must never become is a test
+    that quietly points at nothing"* - and this is that edit.
 
-    When H3 opens that one too, this test does not get deleted - it gets a
-    record that is genuinely planned, or, if there is none, it becomes an
-    assertion that the registry has no planned records left. What it must
-    never become is a test that quietly points at nothing.
+    So the capability is driven against a record that is planned **for the
+    duration of this test**. The permitted case is read first, unpatched, so a
+    ``capability_for`` that reported every module as absent would fail here
+    rather than pass; then the same module is closed and the sentence has to
+    change. The registry itself is checked next door, by
+    ``test_no_module_is_registered_as_planned_any_more``, which is the named
+    claim this file is deliberately not making.
     """
+    from station_api.modules import registry as registry_module
+
+    # Unpatched: the module H3 opened really is open. Without this half the
+    # patched half below would also pass against a function that always
+    # answered "absent".
+    opened = capability_for(ModuleId.PROOF_WORKSPACE, write_gate_open=True)
+    assert opened.module_available is True
+    assert opened.module_state == "available"
+
+    record = registry_module.get_module(ModuleId.PROOF_WORKSPACE)
+    closed = replace(
+        record,
+        state=registry_module.ModuleState.PLANNED,
+        owners=(),
+        requirements=(),
+        available_from="TEST-ONLY-package",
+    )
+    monkeypatch.setitem(registry_module._BY_ID, ModuleId.PROOF_WORKSPACE, closed)
+
     planned = capability_for(ModuleId.PROOF_WORKSPACE, write_gate_open=True)
 
     assert planned.module_available is False
+    assert planned.module_state == "planned"
     assert planned.ready is False
-    assert "H3" in planned.detail
-
-    # And the module H2 opened really is open, so this test is not passing
-    # because the registry lost the distinction it is about.
-    opened = capability_for(ModuleId.AGENT_WORKSPACE, write_gate_open=True)
-    assert opened.module_available is True
+    assert "TEST-ONLY-package" in planned.detail
 
 
 # ---------------------------------------------------------------------------

@@ -29,7 +29,7 @@ kaybolmuş bir hedefe işaret eden kayıt, kayıt olmayandan kötüdür.
 | `project_zero` | `available` | `identity`, `recovery`, `conformance`, `technocore`, `compose`, `evidence` |
 | `work_scan` | `available` | Paket H1'de acildi |
 | `agent_workspace` | `available` | Paket H2'de acildi |
-| `proof_workspace` | `planned` | Paket H3 |
+| `proof_workspace` | `available` | Paket H3'te acildi |
 
 `planned` kayıtlar `sections.ts` kalıbını izler: hedef yerleşim kod
 incelemesinde görünür kalsın diye kaydedilir, fakat bir özellikmiş gibi
@@ -146,12 +146,29 @@ bir "tamamlandı" bayrağı.
 | `task_outcome` | İşin kendi çıktısı üretildi ve **denetlendi** |
 | `test_result` | Çıktının üzerinde koşan denetimin sonucu |
 | `user_acceptance` | Bir kişinin açık kabulü |
-| `public_share` | **Bu sürümde daima boş** — H3'ün konusu |
+| `public_share` | Kanıtın bu makinenin dışında paylaşılmış olması |
 
-`public_share` için bir `EvidenceRef` **kurulamaz**: yapıcı reddeder. Alan,
-yokluğun *söylenebilmesi* için vardır (Seviye 4'ün `null` yazılmasıyla aynı
-kural). `ready_to_publish`'i engellemez — dış paylaşımı bitirme koşulu yapmak,
-hiçbir görevin yayımlanmadan tamamlanamaması demek olurdu.
+`public_share` Paket F'te **doldurulamaz** bir alandı ve yokluğun
+*söylenebilmesi* için vardı (Seviye 4'ün `null` yazılmasıyla aynı kural).
+Paket H3 onu doldurulabilir yaptı ve **koşulu yapısal tuttu** (ADR-0009 §1):
+`ref_id` yalnızca **arşivlenmiş bir gönderimin kanıt kaydı kimliği** olabilir.
+Bu iki ayrı reddetmedir ve ikisi de tek başına yeterli değildir —
+`EvidenceRef` yapıcısı **şekli** (32 küçük harf hex) denetler ve veritabanı
+görmez; `TaskService.record_evidence` **satırın gerçekten var olduğunu**
+denetler. `verified` çağırandan alınmaz: `ProofService` arşivdeki kaydın
+kendi `write_outcome` değerini okur, yani `outcome_unknown` dönmüş bir
+gönderim kaydedilir fakat **doğrulanmış sayılmaz**.
+
+Alan `PUBLICATION_FIELDS`'e **girmedi** ve girmeyecek. `ready_to_publish`'i
+engellemez — dış paylaşımı bitirme koşulu yapmak, hiçbir görevin
+yayımlanmadan tamamlanamaması demek olurdu.
+
+`UNFILLABLE_FIELDS` bu yüzden **boştur**, fakat silinmedi: onu okuyan dört dal
+(görev kapısı, satır okuyucu, modül tamamlanması ve yapıcı) ileride
+doldurulamayan bir alan tanımlanırsa gereken reddetme mekanizmasıdır. Boş bir
+küme üzerinde dönen döngü hiçbir şey kanıtlamadığı için bu dört dal, test
+süresince **geçici olarak kapatılmış** gerçek bir alanla sürülür — ve
+kapatmadan önce aynı yolun izinli olduğu da denetlenir (ADR-0009 §2).
 
 **Bir kaydın varlığı tek başına başarı değildir.** `EvidenceRef.verified`'ın
 varsayılanı yoktur: çağıran, işaret ettiği şeyin denetlenip denetlenmediğini

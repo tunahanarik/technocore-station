@@ -4,9 +4,13 @@ import { useCallback, useEffect, useId, useState } from "react";
 import {
   type ApiError,
   fetchAgentSurface,
+  fetchEvidenceRecords,
+  fetchProof,
   fetchTaskRuns,
   fetchTasks,
   planTaskRun,
+  recordProofAcceptance,
+  recordProofPublicShare,
   resumeTaskRun,
   startTaskRun,
   stopTaskRun,
@@ -21,6 +25,9 @@ import type {
   AgentTaskRunsResponse,
   AgentToolScopeName,
   AgentToolStatus,
+  EvidenceList,
+  EvidenceWriteOutcome,
+  ProofWorkspace,
   TaskCheckState,
   TaskEvidenceFieldName,
   TaskListResponse,
@@ -28,6 +35,7 @@ import type {
   TaskStatusResponse,
   TaskUserTransitionName,
 } from "../../api/types";
+import { shortDigest } from "../../lib/digest";
 import { ErrorRegion } from "../ErrorRegion";
 import { StatusPill } from "../StatusPill";
 
@@ -80,7 +88,14 @@ type Step =
   | "plan"
   | "start"
   | "stop"
-  | "resume";
+  | "resume"
+  // Paket H3. Three more, kept apart from the six above for the reason the
+  // six are kept apart from each other: "the bundle could not be read",
+  // "the acceptance was refused" and "the send could not be attached" are
+  // three findings, and only the first repeats safely.
+  | "proof"
+  | "accept"
+  | "mark";
 
 type Busy = Step | null;
 
@@ -92,6 +107,9 @@ const ERROR_TITLE: Record<Step, string> = {
   start: "Calisma baslatilamadi",
   stop: "Durdurma istegi islenemedi",
   resume: "Calisma surdurulemedi",
+  proof: "Kanit paketi okunamadi",
+  accept: "Kabul kaydedilemedi",
+  mark: "Gonderim bu goreve isaretlenemedi",
 };
 
 /** The nine states, in the user's language. */
@@ -467,6 +485,13 @@ function EvidenceFields({ task }: { readonly task: TaskStatusResponse }) {
               task.blocking_fields.length === 0 ? "(yok)" : task.blocking_fields.join(", ")
             }.`}
       </p>
+      <p className="text-xs text-muted" data-testid="tasks-publish-unreachable">
+        Uc alan ayri ayri dogrulanmis olsa bile gorevi &quot;Yayima hazir&quot;
+        durumuna tasiyan bir kullanici yolu bu surumde yoktur. Bu kapatilmis bir
+        karar degil, acik bir bosluktur: &quot;Yayima hazir&quot; kanittan
+        turetilir ve istenemez, bu yuzden asagidaki durum degisikligi
+        dugmelerinin arasinda da bulunmaz.
+      </p>
       <p className="text-xs text-muted" data-testid="tasks-public-share">
         {task.public_share_detail}
       </p>
@@ -677,6 +702,25 @@ export function TasksPanel() {
   const [approvalRunId, setApprovalRunId] = useState("");
   const [approvals, setApprovals] = useState<ApprovalState>(NO_APPROVALS);
 
+  // --- Paket H3: the two fields a person fills --------------------------
+  //
+  // Neither of these is read on task open. The bundle is read because
+  // somebody pressed "read the bundle", and the archive is listed because
+  // somebody pressed "list the archived sends" - so an acceptance is always
+  // given against material that was actually put on screen first, and a
+  // failure in either read is scoped to the region that asked for it rather
+  // than taking the whole task detail down with it.
+  const [proof, setProof] = useState<ProofWorkspace | null>(null);
+  const [acceptRead, setAcceptRead] = useState(false);
+  const [acceptNote, setAcceptNote] = useState("");
+  /** The task state as it stood *before* an acceptance, so the surface can
+   *  show that recording the field moved nothing (ADR-0009 8, SI-222). */
+  const [stateBeforeAccept, setStateBeforeAccept] = useState<TaskStateName | null>(null);
+
+  const [archive, setArchive] = useState<EvidenceList | null>(null);
+  const [markEvidenceId, setMarkEvidenceId] = useState("");
+  const [markNote, setMarkNote] = useState("");
+
   /**
    * The two reads that run without a click.
    *
@@ -719,6 +763,14 @@ export function TasksPanel() {
     setCondition("");
     setApprovalRunId("");
     setApprovals(NO_APPROVALS);
+    // A different task is a different bundle and a different acceptance.
+    setProof(null);
+    setAcceptRead(false);
+    setAcceptNote("");
+    setStateBeforeAccept(null);
+    setArchive(null);
+    setMarkEvidenceId("");
+    setMarkNote("");
     try {
       setDetail(await fetchTaskRuns(taskId));
     } catch (caught) {
@@ -790,6 +842,114 @@ export function TasksPanel() {
     } catch (caught) {
       setError(toApiError(caught));
       setStep(action);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // --- Paket H3 -----------------------------------------------------------
+
+  /**
+   * Read the bundle this task's acceptance would be given against.
+   *
+   * A read. It writes nothing, sends nothing and moves nothing; the reason it
+   * is behind a button rather than on task open is that acceptance is only
+   * honest when the material was actually put on screen first.
+   */
+  async function readProof(): Promise<void> {
+    if (busy !== null || selected === "") return;
+    setBusy("proof");
+    setError(null);
+    // A re-read may return a different bundle, and a tick given against the
+    // previous one is a tick for something else.
+    setAcceptRead(false);
+    try {
+      setProof(await fetchProof(selected));
+    } catch (caught) {
+      setProof(null);
+      setError(toApiError(caught));
+      setStep("proof");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /**
+   * Record that a person accepted this exact bundle. Moves no state.
+   *
+   * The digest goes up with the request and is compared server-side: an
+   * acceptance recorded against a bundle that has since changed is an
+   * acceptance of something else and comes back refused. `stateBeforeAccept`
+   * is captured here so the surface can show afterwards that the task is
+   * where it was - acceptance is the input to a publication decision, never
+   * its output (ADR-0009 8, SI-222).
+   */
+  async function accept(): Promise<void> {
+    if (busy !== null || selected === "" || proof === null || !acceptRead) return;
+    setBusy("accept");
+    setError(null);
+    setStateBeforeAccept(proof.task.state);
+    try {
+      const next = await recordProofAcceptance({
+        taskId: selected,
+        bundleSha256: proof.bundle_sha256,
+        detail: acceptNote,
+      });
+      setProof(next);
+      setDetail(await fetchTaskRuns(selected));
+      setList(await fetchTasks());
+      setAcceptRead(false);
+      setAcceptNote("");
+    } catch (caught) {
+      setStateBeforeAccept(null);
+      setError(toApiError(caught));
+      setStep("accept");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** List the archived sends. A read of a local table; contacts nobody. */
+  async function listArchive(): Promise<void> {
+    if (busy !== null) return;
+    setBusy("proof");
+    setError(null);
+    try {
+      setArchive(await fetchEvidenceRecords());
+    } catch (caught) {
+      setError(toApiError(caught));
+      setStep("proof");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /**
+   * Attach an archived send to this task. Causes no send.
+   *
+   * The request carries an evidence record's identity and nothing else - no
+   * room, no address, no text - so there is no shape here that could reach an
+   * outbound client. Whether the reference counts as verified is read
+   * server-side from that record's own write outcome (ADR-0009 1, 11).
+   */
+  async function markPublicShare(): Promise<void> {
+    if (busy !== null || selected === "" || markEvidenceId === "") return;
+    setBusy("mark");
+    setError(null);
+    try {
+      const next = await recordProofPublicShare({
+        taskId: selected,
+        evidenceId: markEvidenceId,
+        detail: markNote,
+      });
+      setProof(next);
+      setDetail(await fetchTaskRuns(selected));
+      setList(await fetchTasks());
+      setMarkEvidenceId("");
+      setMarkNote("");
+    } catch (caught) {
+      setError(toApiError(caught));
+      setStep("mark");
     } finally {
       setBusy(null);
     }
@@ -964,6 +1124,32 @@ export function TasksPanel() {
               </p>
 
               <EvidenceFields task={task} />
+
+              <AcceptanceRegion
+                busy={busy}
+                note={acceptNote}
+                onAccept={() => void accept()}
+                onNote={setAcceptNote}
+                onRead={() => void readProof()}
+                onTick={setAcceptRead}
+                proof={proof}
+                stateBefore={stateBeforeAccept}
+                task={task}
+                ticked={acceptRead}
+              />
+
+              <PublicShareRegion
+                archive={archive}
+                busy={busy}
+                chosen={markEvidenceId}
+                name={`${ids}-archived-send`}
+                note={markNote}
+                onChoose={setMarkEvidenceId}
+                onList={() => void listArchive()}
+                onMark={() => void markPublicShare()}
+                onNote={setMarkNote}
+                task={task}
+              />
 
               <div className="flex flex-col gap-2">
                 <h4 className="text-xs font-semibold text-foreground">Durum degisikligi</h4>
@@ -1167,5 +1353,290 @@ export function TasksPanel() {
         )}
       </Card.Content>
     </Card>
+  );
+}
+
+// --- Paket H3: the two fields a person fills -------------------------------
+
+/** The five archived write outcomes, in the user's language. */
+const SHARE_OUTCOME_LABEL: Record<EvidenceWriteOutcome, string> = {
+  in_flight: "Gonderim suruyor",
+  accepted: "Kabul edildi",
+  refused: "Reddedildi",
+  outcome_unknown: "Sonuc bilinmiyor",
+  not_sent: "Gonderim yapilmadi",
+};
+
+/**
+ * Accepting one exact bundle, and the two things acceptance is not.
+ *
+ * It is **not a transition**. The route writes `user_acceptance` and stops;
+ * the task stays where it was, and this region shows the state before and
+ * after so that is visible rather than merely true. Making acceptance move the
+ * task would give `ready_to_publish` a producer that is not "three separately
+ * verified pieces of evidence" (ADR-0009 8, SI-222).
+ *
+ * It is **not a verdict about the work**. The bundle is read first, its named
+ * gaps are on screen while the tick is given, and the backend's sentence about
+ * what a digest establishes sits beside them. A person accepting a bundle with
+ * four open gaps is accepting a bundle with four open gaps.
+ */
+function AcceptanceRegion({
+  task,
+  proof,
+  ticked,
+  note,
+  busy,
+  stateBefore,
+  onRead,
+  onTick,
+  onNote,
+  onAccept,
+}: {
+  readonly task: TaskStatusResponse;
+  readonly proof: ProofWorkspace | null;
+  readonly ticked: boolean;
+  readonly note: string;
+  readonly busy: Busy;
+  readonly stateBefore: TaskStateName | null;
+  readonly onRead: () => void;
+  readonly onTick: (next: boolean) => void;
+  readonly onNote: (next: string) => void;
+  readonly onAccept: () => void;
+}) {
+  const field = task.evidence_fields.find((entry) => entry.evidence_field === "user_acceptance");
+
+  return (
+    <section aria-label="Kullanici kabulu" className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <h4 className="text-xs font-semibold text-foreground">Kullanici kabulu</h4>
+        {field !== undefined && (
+          <StatusPill label={CHECK_LABEL[field.state]} tone={CHECK_TONE[field.state]} />
+        )}
+      </div>
+
+      <p className="text-xs text-muted" data-testid="tasks-acceptance-rule">
+        Kabul, gecisin girdisidir; ciktisi degil. Kabul kaydetmek gorevi hicbir
+        duruma tasimaz ve hicbir sey yayimlamaz. Kabul, o an gordugunuz paketin
+        ozetine baglanir: paket bu arada degistiyse istek reddedilir ve yeni
+        paketi okuyup tekrar kabul etmeniz gerekir.
+      </p>
+
+      <div>
+        <Button isDisabled={busy !== null} onPress={onRead} size="sm" variant="secondary">
+          {busy === "proof"
+            ? "Okunuyor..."
+            : proof === null
+              ? "Kabul edilecek paketi oku"
+              : "Paketi yeniden oku"}
+        </Button>
+      </div>
+
+      {proof === null ? (
+        <p className="text-xs text-muted" data-testid="tasks-acceptance-unread">
+          Paket henuz okunmadi. Okunmamis bir paket kabul edilemez: kabul
+          dugmesi bir paket ozetine baglanmadan etkin olmaz.
+        </p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <p className="font-mono text-xs text-muted" data-testid="tasks-acceptance-digest">
+            {`Kabul edilecek paket ozeti: ${shortDigest(proof.bundle_sha256)} · dosya ${String(
+              proof.file_count,
+            )} · adlandirilmis eksik ${String(proof.missing.length)}`}
+          </p>
+
+          {/* The backend's own sentence, verbatim. The UI writes no second
+              version of it: a digest shown without it reads as an
+              endorsement (ADR-0009 11). */}
+          <p className="text-xs text-muted" data-testid="tasks-acceptance-hash-scope">
+            {proof.hash_scope}
+          </p>
+
+          {proof.missing.length > 0 && (
+            <ul className="flex flex-col gap-1" data-testid="tasks-acceptance-missing">
+              {proof.missing.map((entry) => (
+                <li className="font-mono text-xs text-muted" key={entry.key}>
+                  {`• ${entry.key} · ${entry.state}`}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <Checkbox isSelected={ticked} onChange={onTick}>
+            <Checkbox.Content>
+              <Checkbox.Control>
+                <Checkbox.Indicator />
+              </Checkbox.Control>
+              Bu paketi okudum, yukarida adiyla listelenen eksikleri gordum ve
+              kabulumun hicbir durumu tasimadigini anliyorum.
+            </Checkbox.Content>
+          </Checkbox>
+
+          <TextField className="w-full" onChange={onNote} value={note}>
+            <Label>Kabul notu (istege bagli)</Label>
+            <TextArea rows={2} variant="secondary" />
+          </TextField>
+
+          <div>
+            <Button isDisabled={busy !== null || !ticked} onPress={onAccept} size="sm">
+              {busy === "accept" ? "Kaydediliyor..." : "Kabulumu kaydet (durumu tasimaz)"}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {stateBefore !== null && (
+        <p className="text-xs text-muted" data-testid="tasks-acceptance-no-transition">
+          {`Kabul kaydedildi. Gorev durumu kabulden once '${STATE_LABEL[stateBefore]}' idi ve simdi '${STATE_LABEL[task.state]}'. Kabul bir gecis degildir; durumu tasiyan tek sey durum degisikligi islemidir.`}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/**
+ * The fourth field: pointing at a send that already happened.
+ *
+ * Three things this region refuses to flatten:
+ *
+ * * **it cannot send anything.** The request carries an archived record's
+ *   identity and nothing else. There is no room, no address and no text here,
+ *   so there is no shape on this surface that could reach a write client
+ *   (ADR-0009 11);
+ * * **"archived" is not "verified".** Only a send whose own write outcome was
+ *   `accepted` produces a verified reference. An `outcome_unknown` send is
+ *   *recorded and not verified*, and that difference sits beside every row
+ *   rather than being collapsed into "paylasildi";
+ * * **it is not a publication requirement.** `public_share` stays out of the
+ *   three fields that decide publication: a task can be finished without ever
+ *   being shared (ADR-0004 4, ADR-0009 1).
+ */
+function PublicShareRegion({
+  task,
+  archive,
+  chosen,
+  note,
+  busy,
+  name,
+  onList,
+  onChoose,
+  onNote,
+  onMark,
+}: {
+  readonly task: TaskStatusResponse;
+  readonly archive: EvidenceList | null;
+  readonly chosen: string;
+  readonly note: string;
+  readonly busy: Busy;
+  readonly name: string;
+  readonly onList: () => void;
+  readonly onChoose: (next: string) => void;
+  readonly onNote: (next: string) => void;
+  readonly onMark: () => void;
+}) {
+  const field = task.evidence_fields.find((entry) => entry.evidence_field === "public_share");
+
+  return (
+    <section aria-label="Public paylasim isareti" className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <h4 className="text-xs font-semibold text-foreground">Public paylasim isareti</h4>
+        {field !== undefined && (
+          <StatusPill label={CHECK_LABEL[field.state]} tone={CHECK_TONE[field.state]} />
+        )}
+      </div>
+
+      <p className="text-xs text-muted" data-testid="tasks-public-share-no-send">
+        Bu islem hicbir sey gondermez ve gonderemez. Yalnizca arsivde zaten
+        bulunan bir gonderimin bu goreve ait oldugunu kaydeder; istek bir oda
+        adi, bir adres veya bir metin tasimaz. Gercek gonderim &quot;Olustur ve
+        Dogrula&quot; bolumundeki uc adimli zincirden gecer.
+      </p>
+
+      <p className="text-xs text-muted" data-testid="tasks-public-share-verification-rule">
+        Arsivlenmis olmak dogrulanmis olmak degildir. Yalnizca yazma sonucu
+        &quot;Kabul edildi&quot; olan bir gonderim dogrulanmis sayilir. Sonucu
+        bilinmeyen bir gonderim kaydedilir ve dogrulanmis sayilmaz: sunucu
+        mesaji yazmis da olabilir, yazmamis da. Bu ayrimi bu ekran yapmaz;
+        kaydin kendi yazma sonucundan okunur.
+      </p>
+
+      <p className="text-xs text-muted" data-testid="tasks-public-share-not-required">
+        Bu alan yayim kararini vermez. Yayimi uc alan belirler; bir gorev hic
+        paylasilmadan da tamamlanabilir.
+      </p>
+
+      <div>
+        <Button isDisabled={busy !== null} onPress={onList} size="sm" variant="secondary">
+          {busy === "proof" ? "Okunuyor..." : "Arsivlenmis gonderimleri listele"}
+        </Button>
+      </div>
+
+      {archive !== null && archive.records.length === 0 && (
+        <p className="text-xs text-muted" data-testid="tasks-public-share-empty">
+          Arsivde hicbir gonderim yok. Isaretlenecek bir sey de yok: bu alan
+          elle yazilan bir dizeyle degil, yalnizca gercekten olmus bir
+          gonderimin kaydiyla doldurulabilir.
+        </p>
+      )}
+
+      {archive !== null && archive.records.length > 0 && (
+        <>
+          <ul className="flex flex-col gap-2" data-testid="tasks-public-share-archive">
+            {archive.records.map((record) => (
+              <li
+                className="rounded-lg border border-border p-2"
+                data-testid={`tasks-archived-send-${record.id}`}
+                key={record.id}
+              >
+                <label className="flex items-center gap-2">
+                  <input
+                    checked={chosen === record.id}
+                    disabled={busy !== null}
+                    name={name}
+                    onChange={() => onChoose(record.id)}
+                    type="radio"
+                    value={record.id}
+                  />
+                  <span className="text-sm font-medium text-foreground">
+                    {`Oda: ${record.room}`}
+                  </span>
+                </label>
+                <span className="mt-1 flex flex-wrap items-center gap-2">
+                  <StatusPill
+                    label={SHARE_OUTCOME_LABEL[record.write_outcome]}
+                    tone={record.write_outcome === "accepted" ? "ok" : "pending"}
+                  />
+                  <span className="font-mono text-xs text-muted">
+                    {`${shortId(record.id)} · ${
+                      record.write_outcome === "accepted"
+                        ? "dogrulanmis olarak kaydedilir"
+                        : "kaydedilir, dogrulanmis sayilmaz"
+                    }`}
+                  </span>
+                </span>
+              </li>
+            ))}
+          </ul>
+
+          <TextField className="w-full" onChange={onNote} value={note}>
+            <Label>Isaret notu (istege bagli)</Label>
+            <TextArea rows={2} variant="secondary" />
+          </TextField>
+
+          <div>
+            <Button
+              isDisabled={busy !== null || chosen === ""}
+              onPress={onMark}
+              size="sm"
+              variant="secondary"
+            >
+              {busy === "mark"
+                ? "Isaretleniyor..."
+                : "Bu gonderimi bu goreve isaretle (gonderim yapmaz)"}
+            </Button>
+          </div>
+        </>
+      )}
+    </section>
   );
 }

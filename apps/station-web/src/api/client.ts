@@ -30,6 +30,9 @@ import type {
   EvidenceList,
   IdentityStatus,
   OpenCodeStatus,
+  ProofBundleFormat,
+  ProofPrepareResult,
+  ProofWorkspace,
   ProtectionMode,
   RecoveryInspectResult,
   SessionBootstrap,
@@ -1063,4 +1066,138 @@ export async function fetchActivity(runId = ""): Promise<ActivityListResponse> {
  */
 export async function deleteActivity(runId = ""): Promise<ActivityDeleteResponse> {
   return mutate<ActivityDeleteResponse>("/api/activity/delete", { run_id: runId });
+}
+
+// --- The proof workspace (Paket H3) ----------------------------------------
+//
+// Five calls, and the shape of the set is the point.
+//
+// * **Nothing here names a destination.** `takeProofBundle` asks for a format
+//   and spends a token; there is no path, no filename and no directory
+//   parameter, so the traversal, symlink and overwrite questions are absent
+//   from this feature rather than defended against (ADR-0009 3).
+// * **Nothing here can cause a send.** `recordProofPublicShare` carries an
+//   evidence record's identity and nothing else - no room, no address, no
+//   text. It records that a send already in the archive belongs to this task;
+//   the send itself goes out through the composer chain, and
+//   `OUTBOUND_CLIENT_MODULES` stays at five (ADR-0009 11).
+// * **Nothing here moves a task.** Acceptance is the input to a publication
+//   decision, not its output, and there is no transition parameter on any of
+//   these functions (ADR-0009 8, SI-222).
+
+/** One task's proof, as it stands. A read: it writes nothing and sends nothing. */
+export async function fetchProof(taskId: string): Promise<ProofWorkspace> {
+  return request<ProofWorkspace>(`/api/proof/${encodeURIComponent(taskId)}`);
+}
+
+/**
+ * Mint one single-use approval, bound to the bundle as it stands right now.
+ *
+ * Preparing delivers nothing. It returns the digest beside the token so the
+ * second request can be checked against the first: if an artifact changes in
+ * between, the digest changes and the approval no longer matches. The token is
+ * held in component state and never written to any browser storage (SI-24).
+ */
+export async function prepareProofShare(taskId: string): Promise<ProofPrepareResult> {
+  return mutate<ProofPrepareResult>(
+    `/api/proof/${encodeURIComponent(taskId)}/prepare`,
+    {},
+  );
+}
+
+/**
+ * Spend the approval and take the file.
+ *
+ * `acknowledged` is passed through from the caller rather than defaulted here,
+ * for the reason `exportEvidence` gives: a default in this function would be a
+ * way to take the bundle without consent that type-checks. The backend refuses
+ * a body without the key (422) and refuses a `false` again in the handler.
+ *
+ * The response is a file, so it cannot go through `request`. The server's
+ * `Content-Disposition` name is deliberately not read back; the download name
+ * is stated on this side, from a constant.
+ *
+ * A refused delivery **spends the token too**. That is the server's rule, not
+ * this function's, and the surface says so before the button is pressed - a
+ * caller that quietly re-prepared on failure would be hiding it.
+ */
+export async function takeProofBundle(input: {
+  readonly taskId: string;
+  readonly shareToken: string;
+  readonly format: ProofBundleFormat;
+  readonly acknowledged: boolean;
+}): Promise<{ blob: Blob }> {
+  if (csrfToken === null) {
+    throw new Error("session_not_bootstrapped");
+  }
+
+  const deadline = AbortSignal.timeout(DEFAULT_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(`/api/proof/${encodeURIComponent(input.taskId)}/share`, {
+      method: "POST",
+      credentials: "same-origin",
+      signal: deadline,
+      headers: { "Content-Type": "application/json", [csrfHeader]: csrfToken },
+      body: JSON.stringify({
+        share_token: input.shareToken,
+        format: input.format,
+        acknowledged: input.acknowledged,
+      }),
+    });
+  } catch (caught) {
+    throw classifyFetchFailure(caught, deadline);
+  }
+
+  const requestId = readRequestId(response);
+
+  if (!response.ok) {
+    throw new ApiError(response.status, await readErrorDetail(response), { requestId });
+  }
+
+  try {
+    return { blob: await response.blob() };
+  } catch {
+    throw new ApiError(response.status, "malformed_response", { kind: "malformed", requestId });
+  }
+}
+
+/**
+ * Record that a person accepted one exact bundle.
+ *
+ * `bundleSha256` is required by the wire and compared server-side against the
+ * bundle as it stands: an acceptance recorded against a bundle that has since
+ * changed is an acceptance of something else, and comes back `bundle_changed`.
+ *
+ * The response is the workspace again, not a transition. Nothing about this
+ * call moves the task, and the returned `task.state` is the state it already
+ * had.
+ */
+export async function recordProofAcceptance(input: {
+  readonly taskId: string;
+  readonly bundleSha256: string;
+  readonly detail: string;
+}): Promise<ProofWorkspace> {
+  return mutate<ProofWorkspace>(`/api/proof/${encodeURIComponent(input.taskId)}/acceptance`, {
+    bundle_sha256: input.bundleSha256,
+    detail: input.detail,
+  });
+}
+
+/**
+ * Point the fourth field at an archived send. Causes no send.
+ *
+ * `evidenceId` is an evidence record's own identity. Whether the reference
+ * counts as verified is read server-side from that record's own write
+ * outcome; there is no parameter here that could assert it.
+ */
+export async function recordProofPublicShare(input: {
+  readonly taskId: string;
+  readonly evidenceId: string;
+  readonly detail: string;
+}): Promise<ProofWorkspace> {
+  return mutate<ProofWorkspace>(`/api/proof/${encodeURIComponent(input.taskId)}/public-share`, {
+    evidence_id: input.evidenceId,
+    detail: input.detail,
+  });
 }

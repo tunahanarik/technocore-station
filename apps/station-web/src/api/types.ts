@@ -889,7 +889,24 @@ export interface TaskStatusResponse {
   /** Derived from three separately verified fields. Never asked for. */
   readonly ready_to_publish: boolean;
   readonly blocking_fields: readonly string[];
-  readonly public_share_available: false;
+  /**
+   * Whether the fourth field can be filled at all.
+   *
+   * This was typed `false` through Package H2, because four separate layers
+   * made `public_share` unrepresentable and the type said so. **Package H3
+   * opened the field** (ADR-0009 1) and the backend now derives this from
+   * `EvidenceField.PUBLIC_SHARE not in UNFILLABLE_FIELDS`, which is empty -
+   * so the wire carries `true` and a `false` here was a type that had stopped
+   * describing the server.
+   *
+   * Nothing broke while it was wrong, and that is the reason it is called out:
+   * the fixtures build their own bodies and TypeScript never checks the wire,
+   * so a mirror that has drifted looks exactly like a mirror that is right.
+   * Widened to `boolean` rather than flipped to `true`: what the field can
+   * carry is a server decision, and pinning the new answer as a type would
+   * repeat the mistake in the opposite direction.
+   */
+  readonly public_share_available: boolean;
   readonly public_share_detail: string;
   /** There is no budget in the task layer, and the type says so (SI-225). */
   readonly budget_available: false;
@@ -1113,4 +1130,132 @@ export interface ActivityDeleteResponse {
   /** The deletion is itself an audit event (ADR-0008 6). */
   readonly recorded_in_audit_chain: true;
   readonly detail: string;
+}
+
+// --- The proof workspace (Paket H3) ----------------------------------------
+//
+// Hand-written mirrors of the `Proof*` models in `station_api/schemas.py`.
+// The holes are copied on purpose, because here the holes are the whole
+// subject (ADR-0009):
+//
+// * `ProofClaimState` is `"not_implemented"` as a **type**, not as one value
+//   of a wider union. A surface that started reporting an independent check
+//   as `passed` is a compile error rather than a screen somebody has to
+//   notice (ADR-0009 6, 7);
+// * there is **no score, no percentage and no completeness field**. What is
+//   missing arrives as a list of named items with their own states, and
+//   nothing in this file can sum them;
+// * `hash_scope` and `bundle_scope` come **from the server**. They are not
+//   composed here, because two surfaces writing the same disclaimer
+//   independently is how the two eventually stop saying the same thing - the
+//   rule `AuditChainStatus.claim` already follows;
+// * a share request carries a **format and a token**, and no path, no
+//   filename and no directory. The bundle is handed to the browser; there is
+//   no server-side destination to name (ADR-0009 3);
+// * a public-share request carries an **evidence record identity** and
+//   nothing else. There is no room, no address and no text, so no shape in
+//   this file can reach an outbound client (ADR-0009 11);
+// * there is no field for a model's opinion of the work. The model lane is
+//   closed and the bundle has no column for one (ADR-0008 2).
+
+/**
+ * One module requirement and its verdict.
+ *
+ * `not_implemented` is a distinct value from `blocked` for the reason the
+ * write gate keeps them apart: an unbuilt requirement is not a user error, and
+ * `policy_refused` separates "nobody has written this yet" from "this product
+ * will not do it" - which read identically in a status column and are not the
+ * same finding.
+ */
+export interface ModuleCheckStatus {
+  readonly key: string;
+  readonly state: TaskCheckState;
+  readonly detail: string;
+  readonly evidence_field: TaskEvidenceFieldName;
+  readonly stage: string;
+  readonly ref_id: string;
+  readonly policy_refused: boolean;
+}
+
+/** One record from the compile-time module registry. */
+export interface ProjectModuleStatus {
+  readonly id: string;
+  readonly name: string;
+  readonly purpose: string;
+  readonly state: "available" | "planned";
+  readonly available_from: string;
+  readonly owners: readonly string[];
+  readonly checks: readonly ModuleCheckStatus[];
+  /** Derived from the checks, never stored. False while any is unbuilt. */
+  readonly complete: boolean;
+  readonly blocking_keys: readonly string[];
+  readonly not_implemented_keys: readonly string[];
+}
+
+/** The two formats a bundle is produced in. A closed set. */
+export type ProofBundleFormat = "json" | "markdown";
+
+/**
+ * The only state the unproduced claims can be in.
+ *
+ * Written as a single-value literal, mirroring `ProofClaimStateName`. This is
+ * the type that stops "bagimsiz kontrol" from ever rendering as a green tick.
+ */
+export type ProofClaimState = "not_implemented";
+
+/** One file in the task workspace, with its own digest. Never its path. */
+export interface ProofArtifactStatus {
+  readonly name: string;
+  readonly byte_count: number;
+  /** 64 hex characters. Rendered through `shortDigest`, never whole. */
+  readonly sha256: string;
+}
+
+/** A record this build does not produce, and the reason it does not. */
+export interface ProofClaimStatus {
+  readonly key: string;
+  readonly state: ProofClaimState;
+  readonly detail: string;
+}
+
+/** One named gap. Never summed, never turned into a badge. */
+export interface ProofMissingStatus {
+  readonly key: string;
+  readonly state: string;
+  readonly detail: string;
+}
+
+/** Everything a person needs in order to judge one task's proof. */
+export interface ProofWorkspace {
+  readonly task: TaskStatusResponse;
+  readonly module: ProjectModuleStatus;
+  readonly artifacts: readonly ProofArtifactStatus[];
+  readonly file_count: number;
+  readonly total_bytes: number;
+  /** The digest over the produced set, as the run itself recorded it. */
+  readonly artifact_set_sha256: string;
+  /** The digest an approval and an acceptance are both bound to. */
+  readonly bundle_sha256: string;
+  readonly missing: readonly ProofMissingStatus[];
+  readonly claims: readonly ProofClaimStatus[];
+  readonly formats: readonly ProofBundleFormat[];
+  /** What a SHA-256 does and does not establish. Rendered verbatim. */
+  readonly hash_scope: string;
+  readonly bundle_scope: string;
+  readonly reproduction: string;
+  readonly approval_ttl_seconds: number;
+}
+
+/**
+ * The bundle as it stands, plus one single-use approval to deliver it.
+ *
+ * `share_token` is a capability the way `send_token` is: it turns "I have read
+ * this bundle" into "hand me the file". Single-use, expiring, and bound to the
+ * bundle digest, the task, the content version and this browser session. A
+ * refused delivery spends it too (ADR-0009 4).
+ */
+export interface ProofPrepareResult {
+  readonly workspace: ProofWorkspace;
+  readonly share_token: string;
+  readonly expires_in_seconds: number;
 }

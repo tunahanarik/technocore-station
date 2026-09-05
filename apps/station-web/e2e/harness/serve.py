@@ -107,7 +107,7 @@ def main() -> int:
     if settings.dev_mode:
         raise SystemExit("browser tests run the production path; STATION_DEV must be off")
 
-    engine = initialise_database(settings.database_path, stage=8)
+    engine = initialise_database(settings.database_path, stage=9)
     sock, port = reserve_loopback_socket(settings)
 
     app = create_app(settings=settings, port=port, engine=engine, web_dist=DEFAULT_WEB_DIST)

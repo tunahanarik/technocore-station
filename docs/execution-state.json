@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-09-05T11:20:00Z",
+  "updated_utc": "2026-09-05T12:05:00Z",
   "base_sha": "5411171dd2302c6fea5a2af22695503859317c27",
   "note": "Kayit ile gercek Git/GitHub durumu celisirse Git/GitHub kaniti esastir.",
   "stages": [
@@ -164,12 +164,12 @@
     {
       "id": "H2",
       "name": "Agent calisma ortami + Activity Desk",
-      "status": "in_review",
+      "status": "merged",
       "branch": "stage-h2-agent-runtime",
       "pr": 18,
-      "reviewed_sha": "70f74d4",
-      "tested_sha": "70f74d4",
-      "merge_sha": null,
+      "reviewed_sha": "cb20c10",
+      "tested_sha": "cb20c10",
+      "merge_sha": "54fdf20",
       "findings": [
         "ADR-0008: izolasyon envanteri OLCULDU (Docker Desktop 4.89.0 kurulu ve daemon acik, WSL2 var, Sandbox yok, Hyper-V yonetim yuzeyi yok, kullanici local admin degil, optional feature durumlari OLCULEMEDI) ve yurutme YINE DE kapatildi: Docker kullanicinin kurulumudur, urunun degil; konteyner yolu CI'da dogrulanamaz",
         "Hicbir sey kurulmadi, hicbir konteyner calistirilmadi; urun kaynaginda subprocess/exec/eval/os.system hala yok",
@@ -197,23 +197,24 @@
         "INCELEMECI DE IKI YERDE YANILDI, olcerek gosterildi: ARBITRARY_EXECUTION_SUPPORTED zaten Literal[False] idi; get_tool'un dali olu degil. MAX_NAME_CHARS teshisi de yanlisti - dal erisilebilirmis ama iki dal AYNI gerekceyi donduruyordu",
         "BU PAKETIN KENDI RAPORUNDA IKI YANLIS IDDIA DUZELTILDI: 'tasks/ ve modules/ hic dokunulmadi' (olcum: 201 ekleme) ve safe_name mutasyonu '17 kirmizi' (olcum: 18)",
         "docs/architecture.md ve docs/agent-runtime.md'nin H2 gercegi tarafindan yalanlanan bes cumlesi duzeltildi (junction icin 'admin veya subprocess ister' iddiasi dahil - incelemeci admin olmadan olusturdu)",
-        "53 mutasyon / 42 oldurulen / 11 hayatta kalan -> 13 bulgunun HEPSI kapatildi. 1992 pytest (1974'ten +18)"
+        "53 mutasyon / 42 oldurulen / 11 hayatta kalan -> 13 bulgunun HEPSI kapatildi. 1992 pytest (1974'ten +18)",
+        "CI uc is de yesil (backend 4m8s -> 7m15s: yeni gercek-junction testleri runner'da fiilen kosuyor). Merge: 54fdf20"
       ],
       "failed_attempts": 0,
-      "next_safe_step": "Duzeltmeler indi (1992 pytest); kapilar yesilse commit + CI + merge."
+      "next_safe_step": null
     },
     {
       "id": "H3",
       "name": "Proof Workspace",
-      "status": "planned",
-      "branch": null,
+      "status": "implementing",
+      "branch": "stage-h3-proof-workspace",
       "pr": null,
       "reviewed_sha": null,
       "tested_sha": null,
       "merge_sha": null,
       "findings": [],
       "failed_attempts": 0,
-      "next_safe_step": null
+      "next_safe_step": "Proof Workspace: kanit paketi, kullanici kabulu, dis paylasim onayi. GERCEK YAZMA YOK, GERCEK HARCAMA YOK."
     },
     {
       "id": "I",

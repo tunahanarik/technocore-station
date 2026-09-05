@@ -779,10 +779,19 @@ class TaskStatusResponse(StrictModel):
     #: Derived from three separately verified fields. Never asked for.
     ready_to_publish: bool
     blocking_fields: list[str]
-    #: External sharing is Package H3's subject and asks for its own
-    #: single-use consent there. This release opens the field and never fills
-    #: it, and says so rather than leaving it to be inferred.
-    public_share_available: Literal[False] = False
+    #: Whether the fourth field can be filled at all.
+    #:
+    #: A plain ``bool`` since Package H3, and it was ``Literal[False]`` before
+    #: that for a reason that has stopped being true rather than for a reason
+    #: that was dropped: the field is fillable now, from an archived send and
+    #: from nothing else (ADR-0009 1). The value is **derived** from
+    #: ``UNFILLABLE_FIELDS`` in ``tasks/views.py`` rather than written out
+    #: here, so it cannot disagree with the constant that decides it.
+    #:
+    #: Fillable is not the same as required: ``public_share`` is still absent
+    #: from ``PUBLICATION_FIELDS``, so a task can be finished without ever
+    #: being published (ADR-0004 4, ADR-0009 1).
+    public_share_available: bool
     public_share_detail: str
     #: There is no budget in this release and no field that behaves like one.
     #: The requirement's budget half is deferred to G/H2 and is recorded
@@ -1577,3 +1586,142 @@ class ActivityDeleteResponse(StrictModel):
     #: so a user is told their removal was recorded rather than discovering it.
     recorded_in_audit_chain: Literal[True] = True
     detail: str
+
+
+# --- the proof workspace (Package H3) ---------------------------------------
+#
+# ADR-0009 11 asks that the models declared here **stay here**. Three tests in
+# ``test_no_secret_fields.py`` walk ``vars(schemas)`` and nothing else, so a
+# response model declared in a package module would be exempt from the
+# secret-field rule, the extra-forbid rule and the passphrase rule at once -
+# silently, and only for the newest code.
+#
+# The models refuse to flatten three things:
+#
+# * a hash is not a verdict. ``artifact_set_sha256`` travels beside
+#   ``hash_scope`` - the sentence that says what a digest does and does not
+#   establish - because a digest shown alone reads as an endorsement;
+# * what is missing is a **list of named items**, never a count and never a
+#   percentage. Four different gaps have four different remedies;
+# * a claim this build cannot produce carries its own state and its own
+#   reason, rather than being omitted and left to be inferred.
+
+
+#: The two formats a bundle is produced in. A closed set.
+ProofBundleFormatName = Literal["json", "markdown"]
+
+#: The only state the two unproduced claims can be in. Written as a
+#: single-value literal rather than as the wider check-state union: a route
+#: that started reporting ``passed`` here would be a type error at build time,
+#: which is the point of ADR-0009 6 and 7.
+ProofClaimStateName = Literal["not_implemented"]
+
+
+class ProofArtifactStatus(StrictModel):
+    """One file in the workspace, with its own digest."""
+
+    name: str
+    byte_count: int
+    sha256: str
+
+
+class ProofClaimStatus(StrictModel):
+    """A record this build does not produce, and the reason it does not.
+
+    ``state`` is fixed at ``not_implemented``: the model lane is closed and
+    arbitrary execution is closed, so there is no second opinion and no exit
+    code (ADR-0009 6, 7). Reporting the absence at full volume is the whole
+    point - an omitted key would read as an oversight.
+    """
+
+    key: str
+    state: ProofClaimStateName
+    detail: str
+
+
+class ProofMissingStatus(StrictModel):
+    """One named gap. Never summed into a score."""
+
+    key: str
+    state: str
+    detail: str
+
+
+class ProofWorkspaceResponse(StrictModel):
+    """Everything a person needs in order to judge one task's proof."""
+
+    task: TaskStatusResponse
+    module: ProjectModuleStatus
+    artifacts: list[ProofArtifactStatus]
+    file_count: int
+    total_bytes: int
+    #: The digest over the whole produced set. The same number the run
+    #: recorded when it finished, not a second one computed differently.
+    artifact_set_sha256: str
+    #: The digest of the bundle document as it stands right now. An approval
+    #: and an acceptance are both bound to this value.
+    bundle_sha256: str
+    missing: list[ProofMissingStatus]
+    claims: list[ProofClaimStatus]
+    formats: list[ProofBundleFormatName]
+    #: What a SHA-256 does and does not establish (ADR-0009 11). Returned
+    #: rather than left to the interface, so the wording cannot drift between
+    #: the two surfaces.
+    hash_scope: str
+    bundle_scope: str
+    reproduction: str
+    #: How long a share approval stays spendable once it is minted.
+    approval_ttl_seconds: int
+
+
+class ProofPrepareResponse(StrictModel):
+    """The bundle as it stands, plus one single-use approval to deliver it.
+
+    ``share_token`` is a capability in the sense ``send_token`` is: it turns
+    "I have read this bundle" into "hand me the file". It is single-use, it
+    expires, and it is bound to the bundle digest, the task, the content
+    version and this browser session (ADR-0009 4).
+    """
+
+    workspace: ProofWorkspaceResponse
+    share_token: str
+    expires_in_seconds: int
+
+
+class ProofShareRequest(StrictModel):
+    """Spend the approval and take the file.
+
+    ``acknowledged`` has no default, so a body that omits it never reaches a
+    handler - the rule the evidence export is built on, applied to the surface
+    that hands a proof to the browser.
+    """
+
+    share_token: str = Field(min_length=1, max_length=128)
+    format: ProofBundleFormatName
+    acknowledged: Literal[True]
+
+
+class ProofAcceptanceRequest(StrictModel):
+    """A person accepting what one exact bundle showed them.
+
+    ``bundle_sha256`` is required and is compared against the bundle as it
+    stands: an acceptance recorded against a bundle that has since changed is
+    an acceptance of something else. Recording the field moves no state - the
+    acceptance is the input to a publication decision, not its output
+    (ADR-0009 8, SI-222).
+    """
+
+    bundle_sha256: str = Field(min_length=64, max_length=64)
+    detail: str = Field(default="", max_length=500)
+
+
+class ProofPublicShareRequest(StrictModel):
+    """Point the fourth field at an archived send.
+
+    ``evidence_id`` is an evidence record's own identity and nothing else. A
+    sentence somebody typed has the wrong shape and is refused by
+    ``EvidenceRef``'s constructor before any row is read (ADR-0009 1).
+    """
+
+    evidence_id: str = Field(min_length=32, max_length=32)
+    detail: str = Field(default="", max_length=500)

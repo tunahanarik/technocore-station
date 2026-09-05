@@ -2,8 +2,8 @@
 
 > Ana karar kaynağı: [`Technocore-Station-Proje-Kunyesi.md`](Technocore-Station-Proje-Kunyesi.md)
 > Çalışma kuralları: [`AGENTS.md`](AGENTS.md) · [`CLAUDE.md`](CLAUDE.md)
-> Son güncelleme: **4 Eylül 2026** (Aşama 6 / Paket F — proje/görev modülü
-> temeli; PR #15 bağımsız inceleme düzeltmeleri dâhil)
+> Son güncelleme: **5 Eylül 2026** (Aşama 10 / Paket H3 — kanıt çalışma
+> alanı: kanıt paketi, tek kullanımlık dış paylaşım onayı, kullanıcı kabulü)
 
 ## Aşama checklist
 
@@ -1530,9 +1530,94 @@ bir bulguya donustu; **on ucunun hepsi kapatildi.** Ayrintili tablo:
       olculemedi** (bu makinede `WinError 1314`), migration SQL'i okunmadi.
       Bunlar orkestrator tarafindan ayrica kosuldu.
 
-## Sonraki asama: Asama 10 - H3 Proof Workspace
+### Paket H3 - Kanit calisma alani (Asama 10)
 
-Public paylasim ve kanit paketi H3'un.
+Kapsam kararlari: [ADR-0009](docs/decisions/0009-paket-h3-kapsam-kararlari-2026-09-05.md).
+Dogrulama raporu: [docs/verification/paket-h3.md](docs/verification/paket-h3.md).
+Uygulama ayrintisi: [docs/proof-workspace.md](docs/proof-workspace.md).
+
+- [x] **`public_share` doldurulabilir oldu - kosulu yapisal.** Alan yalniz
+      **arsivlenmis bir gonderimin kanit kaydi kimligiyle** isaretlenebilir ve
+      bunu birbirinin yerine gecmeyen **uc** kontrol saglar: yapici **sekli**
+      (32 kucuk harf hex), servis **satirin varligini**, `ProofService` de
+      kaydin **kendi `write_outcome` degerini** denetler. `outcome_unknown`
+      donmus bir gonderim kaydediliyor fakat **dogrulanmis sayilmiyor**.
+      `PUBLICATION_FIELDS` **ucte kaldi**: yayimlamadan da bir gorev
+      tamamlanabilir.
+- [x] **Acilan alan bir okuma yolunu kirabilirdi ve kirmadan once yakalandi.**
+      Alan kapaliyken `_refs_from_row` sutunlari **okumadan** atliyordu; alani
+      acmak o yolu yukselten bir yapiciya cevirdi ve elle duzenlenmis bir
+      satir o gorevin **her okumasini** (listeleme dahil) dusururdu.
+      `except EvidenceFieldError: continue` eklendi; davranis ayni kaldi, test
+      artik ikinci bir kod yolunu kapsiyor.
+- [x] **Bosalan dort dal sessiz birakilmadi.** `UNFILLABLE_FIELDS` bosaldi ve
+      onu okuyan dort dal (kapi, satir okuyucu, modul tamamlanmasi, yapici)
+      olu kalirdi. Mekanizma **gercekten doldurulabilir** bir alan
+      (`test_result`) test suresince kapatilarak suruluyor - ve her testin
+      **ilk yarisi** kapatmadan once ayni yolun izinli oldugunu okuyor, yoksa
+      "her seyi reddeden" bir fonksiyon da gecerdi.
+- [x] **Son `PLANNED` kayit acildi ve testi vacuous birakilmadi.**
+      `proof_workspace` acilinca planli-modul testinin uc `assert`'i hic
+      calismayacakti. Sozlesme bir fonksiyona cikarildi ve testte kurulan
+      kayitlarla suruluyor (gecerli bir `planned` kayit **kabul** ediliyor,
+      dort bozuk sekil **reddediliyor**); "artik planlanan modul yok" kendi
+      adlandirilmis iddiasi oldu. `test_work_scan_candidates.py`'nin ayni
+      sekle sahip testi de kaydi test suresince `PLANNED` yaparak suruluyor.
+- [x] **Paket hicbir yere yazilmiyor.** Iki bicim (kanonik JSON + Markdown),
+      `Content-Disposition`, yeni dosya koku yok, **zip yok**. Pakette
+      `zipfile`/`shutil`/`gzip` importu, `symlink`/`write_text`/`mkdir`/`open`
+      adi ve arsiv/baglanti bicimli **isim** tasiyan fonksiyon yok. Paket
+      kurulup iki bicimi uretilip teslim edildikten sonra calisma alani dizini
+      **bayt bayt ayni** - paket kendi hash'inin girdisi olamiyor.
+- [x] **Determinizm kosulsuz.** Belgede kopyanin alindigi ani soyleyen alan
+      yok; o an `X-Station-Delivered-At` basliginda. Burada bu kanit disa
+      aktarimindakinden daha baglayici: tek kullanimlik onay paket ozetine
+      bagli. `artifact_set_sha256`, `AgentService._artifact_set_digest` ile
+      **birebir ayni sayi** ve anlasma bir testle sabitlendi.
+- [x] **Onay `SendApproval` kalibi, `ExportConsent` degil.** Tek kullanimlik,
+      TTL'li, ve **paket digest'ine + goreve + icerik surumune + oturuma**
+      bagli. **Reddedilen bir teslim de token'i harciyor** - aksi hâlde
+      reddi atlatarak tekrar denenebilirdi. Rota ayrica govdede
+      `acknowledged: Literal[True]` istiyor.
+- [x] **"Bagimsiz kontrol" ve "gercek exit code" `not_implemented` kaldi** ve
+      gerekcesini soyluyor: model yolu (ADR-0008 §2) ve keyfi yurutme
+      (ADR-0008 §1) kapali. Planin olcutu ve yeniden uretme talimati **metin
+      olarak** paketleniyor; olcutun yaninda kosmanin `test_result_state`'i de
+      yaziliyor. Soz verilen her ciktiyi ureten bir calisma bile gorevi
+      `ready_to_publish`'e tasimiyor.
+- [x] **Eksikler adiyla listeleniyor**, skor/yuzde/rozet yok:
+      `evidence.*`, `requirement.*`, `run.*`, `artifact.*`. JSON govdesinde
+      `score`/`percent`/`completeness`/`grade`/`rating` gecmedigi olculuyor.
+- [x] **Kabul gecisin girdisi.** `user_acceptance` icin ayri bir rota acildi;
+      `verified=True` yalniz insan eyleminden doguyor, kisinin **gordugu
+      paketin ozetine** baglaniyor ve rota **hicbir durumu tasimiyor** -
+      kabul oncesi ve sonrasi gorev durumunun ayni oldugu olculuyor (SI-222).
+      Bu, `agent_workspace`'in yedinci gereksinimini de kapatti.
+- [x] **Yeni paket her sinir taramasinin icine alindi (ADR-0009 §5, merge
+      sarti).** `STATE_WRITER_DIRS`, `BUDGET_SCANNED_DIRS` ve
+      `REGISTRY_SCANNED_DIRS` (eski `PACKAGE_F_DIRS`) `proof`'u kapsiyor; iki
+      yeni dosya (`test_proof_boundary.py`, `test_proof_language.py`) yurutme,
+      arsiv, baglanti, dosya yazma, zamanlayici, secret ve yasak ifade
+      sinirlarini paketin **her string literal'i** ve rota dosyasi uzerinde
+      uyguluyor. Her genisletme iki yariyla suruldu: taramanin gercekten
+      `proof/` dosyalarini **actigi** ve ekili ihlalin **raporlandigi**.
+- [x] **Asama `8 -> 9`** bes giris noktasi ve pinli sabitle atomik.
+      **Yeni migration yok**; `CURRENT_MIGRATION_HEAD` `0009`'da kaldi.
+- [x] **`OUTBOUND_CLIENT_MODULES` beste kaldi.** Dis paylasim mevcut
+      `compose/` zinciriyle gider; bu paket tarayiciya dosya teslim eder ve
+      baska hicbir sey yapmaz. Yeni bagimlilik yok, yeni HeroUI bileseni yok,
+      `sections.ts`'e dokunulmadi.
+- [x] SI-300...SI-311; SI-213, SI-219, SI-220, SI-225 ve SI-226 metinleri
+      **gercek degistigi icin guncellendi**, iddialari zayiflatilmadi.
+
+- [x] **Mutasyon kaydi: on alti mutasyon, on altisi da en az bir testi
+      oldurdu.** Sifir olduren guard yok. Tam tablo
+      [docs/verification/paket-h3.md](docs/verification/paket-h3.md) ve
+      [docs/security-invariants.md](docs/security-invariants.md) §9k'de.
+- [x] **2104 pytest** (1992 -> 2104). Frontend kapilari bu turda kosulmadi
+      (orkestrator kosuyor); Playwright kosulmadi.
+
+## Sonraki asama: Asama 11 - I Windows paketleme
 
 **Gercek servise hicbir istek gonderilmedi** ve **hicbir ucretli cagri
 yapilmadi** - her sey mock tasiyiciya karsi, iki katmanli ag kesici altinda.
