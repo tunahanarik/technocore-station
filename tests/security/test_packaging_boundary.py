@@ -752,10 +752,63 @@ def test_the_repository_packaging_directory_does_not_shadow_the_distribution(
 # PyInstaller two source *directories* to copy. A ``.pyc`` stores the
 # absolute path it was compiled from in ``co_filename``. The exe and the PYZ
 # were clean.
+#
+# That scan then failed on CI and passed here, for the same archive bytes,
+# which means it was not checking a property of the archive at all - it was
+# checking one of the machine it ran on. Every needle came from
+# ``Path.home()``. On a developer's machine that is their own account; on a
+# GitHub Actions runner it is ``runneradmin`` - and *upstream* builds the
+# Windows wheels for
+# ``cryptography`` and ``pydantic-core`` on GitHub Actions too. Measured,
+# by scanning the two members the runner named:
+#
+#   _internal/cryptography/hazmat/bindings/_rust.pyd
+#   _internal/pydantic_core/_pydantic_core.cp312-win_amd64.pyd
+#
+# both carry Rust panic-location strings shaped like
+# ``C:\Users\runneradmin\.cargo\registry\src\index.crates.io-<hash>\<crate>``
+# - openssl, pyo3, asn1, jiter, regex-automata and two dozen more. That is
+# upstream's build machine baked into a binary we did not compile and cannot
+# recompile, and it names nobody here.
+#
+# So the scan is split by what each needle can honestly describe:
+#
+#   * **the repository path** - the absolute path of this checkout, in both
+#     separator spellings - is refused **anywhere in the archive**. No
+#     binary compiled elsewhere can contain it, and our own leak is exactly
+#     this shape: a ``.pyc``'s ``co_filename`` is the repository path plus
+#     the module's relative path.
+#   * **the building account's name and home directory** are refused in the
+#     members ``station.spec`` copied **out of our own trees**, and that
+#     scope is read off the spec rather than written down here.
+#   * **``__pycache__`` and ``.pyc``** stay refused archive-wide, unchanged.
+#
+# Deliberately *not* an exemption by distribution name. ADR-0010 3 rejected
+# that shape and SI-327 is the repair: ``build``, ``dist`` and ``out`` are no
+# longer skipped *by name*, because a list of names excuses whatever later
+# takes one of those names. The distinction drawn here is a property - our
+# leak is recognisable by our repository path - and it holds for a
+# distribution nobody has added yet.
 # ---------------------------------------------------------------------------
 
 #: Where ``build_bundle.py`` leaves the archive, and how it names it.
 ARCHIVE_GLOB = "TechnocoreStation-*-windows-x64.zip"
+
+#: The directory PyInstaller's ``onedir`` layout puts everything but the
+#: executable in. Not a value the spec sets, so it is named here - and
+#: ``test_the_copied_scope_is_read_off_the_spec_and_finds_real_members``
+#: fails loudly rather than silently scanning nothing if it ever changes.
+BUNDLE_INTERNAL_DIR = "_internal"
+
+#: The account name of a GitHub Actions Windows runner, and the home
+#: directory that follows from it. Literals, not ``Path.home()``, because
+#: the whole point of the drives below is that they measure the same thing
+#: on a runner and on a developer's machine.
+CI_RUNNER_ACCOUNT = "runneradmin"
+CI_RUNNER_NEEDLES: dict[str, bytes] = {
+    "home-directory": rb"C:\Users\runneradmin",
+    "account-name": CI_RUNNER_ACCOUNT.encode("ascii"),
+}
 
 
 def _built_archive(repo_root: Path) -> Path | None:
@@ -764,14 +817,82 @@ def _built_archive(repo_root: Path) -> Path | None:
     return archives[-1] if archives else None
 
 
-def _local_path_needles() -> dict[str, bytes]:
-    """Byte strings that must not appear inside a file anybody receives.
+def _string_literals(node: ast.AST) -> list[str]:
+    """Every string constant under ``node``, in source order."""
+    found: list[str] = []
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        found.append(node.value)
+    for child in ast.iter_child_nodes(node):
+        found.extend(_string_literals(child))
+    return found
+
+
+def _spec_assignment_parts(spec_source: str, name: str) -> tuple[str, ...]:
+    """The string literals the spec assigns to ``name``, in source order."""
+    for node in ast.parse(spec_source).body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if any(
+            isinstance(target, ast.Name) and target.id == name
+            for target in node.targets
+        ):
+            return tuple(_string_literals(node.value))
+    raise AssertionError(f"packaging/station.spec no longer assigns {name}")
+
+
+def _spec_copied_prefixes(spec_source: str) -> tuple[str, ...]:
+    """Archive prefixes holding the members copied out of *our* trees.
+
+    Derived from every module-level ``*_TARGET`` assignment in the spec, so a
+    fourth tree added to ``station.spec`` widens this scope on its own. A
+    hand-written list here would have to be remembered, and the whole reason
+    this file exists is that the thing nobody remembers is the thing that
+    ships.
+    """
+    app_name = _spec_assignment_parts(spec_source, "APP_NAME")
+    assert len(app_name) == 1, "the spec no longer names the bundle exactly once"
+
+    prefixes: list[str] = []
+    for node in ast.parse(spec_source).body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Name) or not target.id.endswith("_TARGET"):
+                continue
+            parts = _string_literals(node.value)
+            assert parts, f"{target.id} names no directory"
+            inside = "/".join(parts)
+            prefixes.append(f"{app_name[0]}/{BUNDLE_INTERNAL_DIR}/{inside}/")
+    assert prefixes, "the spec copies nothing out of this repository any more"
+    return tuple(sorted(prefixes))
+
+
+def _repository_needles(repo_root: Path) -> dict[str, bytes]:
+    """The absolute path of this checkout, in both separator spellings.
+
+    Refused in **every** member. This is the needle that recognises our own
+    leak wherever the checkout happens to live - under a home directory here,
+    under ``D:\\a`` on a runner - and it is a needle no binary built anywhere
+    else can carry by accident.
+    """
+    root = repo_root.resolve()
+    return {
+        "repository-path": str(root).encode("utf-8"),
+        "repository-path-posix": root.as_posix().encode("utf-8"),
+    }
+
+
+def _build_account_needles() -> dict[str, bytes]:
+    """Who and where the machine running this build is.
 
     The home directory rather than only the account name: it is the longer
     and more specific of the two, so it is the one that cannot match by
-    accident inside a binary. The account name is checked as well because it
-    is the part that actually identifies a person, and it is checked in the
-    two separator spellings a Windows path can be written in.
+    accident, and it is spelled in both separator forms a Windows path can be
+    written in. The account name is checked as well because it is the part
+    that actually identifies a person.
+
+    Refused only in the members the spec copied out of our trees - see the
+    section comment for the measurement that says why.
     """
     home = Path.home()
     return {
@@ -781,18 +902,38 @@ def _local_path_needles() -> dict[str, bytes]:
     }
 
 
-def _leaking_entries(archive: Path, needles: dict[str, bytes]) -> list[str]:
-    """Every archive member whose *content* carries one of the needles."""
+def _leaking_entries(
+    archive: Path,
+    needles: dict[str, bytes],
+    *,
+    within: tuple[str, ...] | None = None,
+) -> list[str]:
+    """Every archive member whose *content* carries one of the needles.
+
+    ``within`` restricts the scan to members under one of those prefixes;
+    ``None`` reads the whole archive.
+    """
     offenders: list[str] = []
     with zipfile.ZipFile(archive) as opened:
         for member in opened.infolist():
             if member.is_dir():
+                continue
+            if within is not None and not member.filename.startswith(within):
                 continue
             body = opened.read(member)
             found = sorted(label for label, needle in needles.items() if needle in body)
             if found:
                 offenders.append(f"{member.filename} ({', '.join(found)})")
     return offenders
+
+
+def _archive_of(tmp_path: Path, name: str, members: dict[str, bytes]) -> Path:
+    """A throwaway ZIP, for driving the scan without breaking the spec."""
+    planted = tmp_path / name
+    with zipfile.ZipFile(planted, "w") as archive:
+        for member, body in members.items():
+            archive.writestr(member, body)
+    return planted
 
 
 def test_the_leak_scan_reports_a_planted_path(tmp_path: Path) -> None:
@@ -802,15 +943,16 @@ def test_the_leak_scan_reports_a_planted_path(tmp_path: Path) -> None:
     because the way to make the real artefact leak is to break the spec, and
     a broken spec is not something to leave lying in a test.
     """
-    needles = _local_path_needles()
-    planted = tmp_path / "planted.zip"
-    with zipfile.ZipFile(planted, "w") as archive:
-        archive.writestr("clean.txt", b"nothing to see")
-        archive.writestr(
-            "pretend.pyc", b"\x00\x00" + str(Path.home()).encode("utf-8") + b"\x00"
-        )
+    planted = _archive_of(
+        tmp_path,
+        "planted.zip",
+        {
+            "clean.txt": b"nothing to see",
+            "pretend.pyc": b"\x00\x00" + str(Path.home()).encode("utf-8") + b"\x00",
+        },
+    )
 
-    offenders = _leaking_entries(planted, needles)
+    offenders = _leaking_entries(planted, _build_account_needles())
 
     assert [entry for entry in offenders if entry.startswith("pretend.pyc")], (
         "the scan does not report a file that literally contains the home "
@@ -819,8 +961,43 @@ def test_the_leak_scan_reports_a_planted_path(tmp_path: Path) -> None:
     assert [entry for entry in offenders if entry.startswith("clean.txt")] == []
 
 
+def test_the_copied_scope_is_read_off_the_spec_and_finds_real_members(
+    spec_source: str,
+    repo_root: Path,
+) -> None:
+    """The scope the account needles run in is neither empty nor imaginary.
+
+    Two ways this narrowing could have become a blindfold: the spec stops
+    assigning ``*_TARGET`` and the scope is empty, or PyInstaller stops using
+    ``_internal`` and every prefix matches nothing. Either would leave the
+    account-name check passing without reading a single byte, so both are
+    refused here rather than discovered by whoever gets the next leak.
+    """
+    prefixes = _spec_copied_prefixes(spec_source)
+    assert len(prefixes) >= 3, (
+        "the spec used to copy three trees out of this repository and now "
+        f"copies {len(prefixes)}: {prefixes}"
+    )
+
+    archive = _built_archive(repo_root)
+    if archive is None:
+        return
+
+    names = [
+        member.filename
+        for member in zipfile.ZipFile(archive).infolist()
+        if not member.is_dir()
+    ]
+    for prefix in prefixes:
+        assert [name for name in names if name.startswith(prefix)], (
+            f"nothing in the archive sits under {prefix}, so the account-name "
+            "scan reads nothing and would pass over any leak in it"
+        )
+
+
 def test_the_shipped_archive_names_no_developer_and_no_home_directory(
     repo_root: Path,
+    spec_source: str,
 ) -> None:
     """The property, on the real thing, when there is a real thing to read.
 
@@ -855,9 +1032,142 @@ def test_the_shipped_archive_names_no_developer_and_no_home_directory(
         + ", ".join(cached)
     )
 
-    assert _leaking_entries(archive, _local_path_needles()) == [], (
-        "the shipped archive names the account that built it"
+    assert _leaking_entries(archive, _repository_needles(repo_root)) == [], (
+        "the shipped archive carries the absolute path of the checkout it "
+        "was built from"
     )
+
+    copied = _spec_copied_prefixes(spec_source)
+    assert _leaking_entries(archive, _build_account_needles(), within=copied) == [], (
+        "a file the spec copied out of this repository names the account "
+        "that built it"
+    )
+
+
+def test_a_leak_in_a_copied_member_is_reported(
+    tmp_path: Path,
+    spec_source: str,
+) -> None:
+    """Drive (a): our own tree, our own leak, still red.
+
+    Planted under a prefix the spec actually names, so narrowing the account
+    scan to those prefixes cannot have narrowed it past the eleven files that
+    started all of this.
+    """
+    prefix = _spec_copied_prefixes(spec_source)[0]
+    planted = _archive_of(
+        tmp_path,
+        "ours.zip",
+        {
+            f"{prefix}env.py": b"# " + str(Path.home()).encode("utf-8") + b"\n",
+            f"{prefix}clean.py": b"# nothing\n",
+        },
+    )
+
+    offenders = _leaking_entries(planted, _build_account_needles(), within=(prefix,))
+
+    assert [entry for entry in offenders if entry.startswith(f"{prefix}env.py")], (
+        "a member the spec copies out of this repository can carry the home "
+        "directory without the scan saying so"
+    )
+    assert [entry for entry in offenders if "clean.py" in entry] == []
+
+
+def test_a_third_party_binarys_upstream_build_path_is_not_our_leak(
+    tmp_path: Path,
+    spec_source: str,
+) -> None:
+    """Drive (b): the exact bytes that turned CI red, refused as a verdict.
+
+    Everything here is a literal, so this measures the same thing on a runner
+    whose account is ``runneradmin`` and on a machine whose account is
+    anything else. That is the point: the old scan reported these two files
+    on one machine and not on the other, which made the *test* the variable.
+    """
+    upstream = (
+        rb"C:\Users\runneradmin\.cargo\registry\src"
+        rb"\index.crates.io-1949cf8c6b5b557f\openssl-0.10.74\src\bn.rs"
+    )
+    copied = _spec_copied_prefixes(spec_source)
+    bundle = copied[0].split("/")[0]
+    binary = f"{bundle}/{BUNDLE_INTERNAL_DIR}/cryptography/hazmat/bindings/_rust.pyd"
+    planted = _archive_of(tmp_path, "upstream.zip", {binary: b"MZ\x00" + upstream})
+
+    assert _leaking_entries(planted, CI_RUNNER_NEEDLES) == [
+        f"{binary} (account-name, home-directory)"
+    ], (
+        "the unscoped scan no longer sees this file at all, so this drive is "
+        "measuring nothing"
+    )
+    assert _leaking_entries(planted, CI_RUNNER_NEEDLES, within=copied) == [], (
+        "a binary this repository did not compile is being reported as this "
+        "repository's leak"
+    )
+
+
+def test_the_repository_path_is_refused_anywhere_in_the_archive(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    """Drive (c): the needle that has no scope, because it needs none.
+
+    Planted in a *third-party* member on purpose. A binary compiled by
+    somebody else cannot contain this checkout's path, so finding it there
+    means something in this build wrote it - and there is no member this may
+    be excused in.
+    """
+    leaking = "TechnocoreStation/_internal/somelib/_ext.pyd"
+    planted = _archive_of(
+        tmp_path,
+        "repo.zip",
+        {
+            leaking: b"MZ" + str(repo_root.resolve()).encode("utf-8"),
+            "TechnocoreStation/_internal/somelib/clean.pyd": b"MZ\x00\x00",
+        },
+    )
+
+    offenders = _leaking_entries(planted, _repository_needles(repo_root))
+
+    assert [entry for entry in offenders if entry.startswith(leaking)], (
+        "the repository path can sit in a shipped binary without being seen"
+    )
+    assert [entry for entry in offenders if "clean.pyd" in entry] == []
+
+
+def test_the_third_party_binaries_carry_their_own_build_machine(
+    repo_root: Path,
+    spec_source: str,
+) -> None:
+    """The measured fact, kept rather than quietly excused.
+
+    Scanned in the built archive: exactly two of its 141 members carry
+    ``C:\\Users\\runneradmin`` - ``cryptography``'s ``_rust.pyd`` and
+    ``pydantic_core``'s ``_pydantic_core.cp312-win_amd64.pyd`` - and no
+    member carries it anywhere else. Both are wheels upstream compiles on
+    GitHub Actions; the strings are Rust panic locations under
+    ``.cargo\\registry``.
+
+    Asserted as a *property* rather than as those two names: whatever carries
+    another machine's build path is a binary this repository did not compile,
+    and never a file the spec copied out of this repository. If upstream ever
+    stops shipping those paths this passes with nothing to look at, which is
+    the outcome we would want anyway.
+    """
+    archive = _built_archive(repo_root)
+    if archive is None:
+        return
+
+    copied = _spec_copied_prefixes(spec_source)
+    for entry in _leaking_entries(archive, CI_RUNNER_NEEDLES):
+        name = entry.split(" (")[0]
+        assert not name.startswith(copied), (
+            f"{name} was copied out of this repository and names another "
+            "machine, which is our leak and not upstream's"
+        )
+        assert name.endswith((".pyd", ".dll", ".exe", ".so")), (
+            f"{name} carries another machine's build path and is not a "
+            "compiled binary, so it is not upstream's to explain"
+        )
 
 
 # ---------------------------------------------------------------------------

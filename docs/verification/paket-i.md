@@ -739,11 +739,130 @@ gerçek kabukta çalıştırıldı — ama adım **sırası** ve runner davranı
 ölçülmedi). Yeniden üretilebilirlik, kusur öncesi artefaktın sayıları,
 tarayıcı QA, ve Paket I dışındaki paketler incelenmedi.
 
+## 13d. Testin kendisi makineye bağlıydı — CI bunu ölçtü
+
+`windows bundle` işi P2-5'te eklenen sızıntı taramasında kırmızıya düştü, ve
+**yerelde aynı test yeşildi**. Aynı arşiv baytları, iki farklı sonuç: yani
+test arşivin bir özelliğini değil, koştuğu **makinenin** bir özelliğini
+denetliyordu.
+
+### Ölçüm — iğne nereden geliyordu, ne buldu
+
+İğnelerin hepsi `Path.home()`'dan kuruluyordu: ev dizini (iki ayraç
+yazımında) ve hesap adı. Geliştirici makinesinde bu kendi hesabı, GitHub
+Actions Windows runner'ında `runneradmin`. Runner'ın raporladığı iki dosya
+yerelde bulunan artefaktta tarandı:
+
+| Üye | Bulunan |
+|---|---|
+| `_internal/cryptography/hazmat/bindings/_rust.pyd` (9 121 280 B) | `C:\Users\runneradmin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\<crate>\src\<file>.rs` — openssl-0.10.74, pyo3-0.26.0, asn1-0.22.0, base64, pem, once_cell |
+| `_internal/pydantic_core/_pydantic_core.cp312-win_amd64.pyd` (5 157 888 B) | aynı biçim — pyo3-0.28.3, jiter-0.14.0, regex-automata-0.4.13, aho-corasick, speedate, url, idna, num-bigint |
+
+Bunlar Rust'ın **panic konumu** dizeleri. `cryptography` ve `pydantic-core`
+Windows wheel'lerini upstream GitHub Actions'ta derliyor, o makinenin hesabı
+da `runneradmin`; yani binary'lerin içindeki upstream derleme yolu, runner'ın
+**kendi** iğnesiyle çakışıyor. Yerelde iğne başka bir hesap olduğu için
+görünmüyordu.
+
+Arşivin **141 üyesinin tamamı** üç iğne ailesi için tarandı. Sonuç:
+
+| İğne | Eşleşen üye |
+|---|---|
+| `C:\Users\runneradmin` / `runneradmin` | **2** (yukarıdaki iki `.pyd`) |
+| Bu makinenin ev dizini / hesap adı | **0** |
+| Bu deponun mutlak yolu (iki ayraç yazımında) | **0** |
+
+**İki ayrı gerçek, ikisi de doğru.** P2-5'teki sızıntımız gerçekti ve
+kapatıldı (11 `.pyc`, `co_filename`'de bizim kaynak ağacımızın mutlak yolu).
+Üçüncü taraf derlenmiş wheel'ler ise **kendi** derleme yollarını taşıyor;
+upstream'i yeniden derlemeden bunu düzeltmenin yolu yok ve bu **bizim
+makinemizi adlandırmıyor**.
+
+### Düzeltme — ada göre muafiyet değil, özelliğe göre ayrım
+
+`cryptography` ve `pydantic_core` adlarını muaf tutmak, ADR-0010 §3'ün
+reddettiği ve SI-327'nin onardığı körlüğün aynısı olurdu: `build`, `dist`
+ve `out` tam da bu yüzden artık **ada göre** atlanmıyor — ada göre yazılmış
+bir liste, sonradan o adı alan her şeyi de affeder. Kullanılan ayrım bir
+**özellik**: bizim sızıntımız **bizim depo yolumuzla** tanınır, ve
+upstream'in yolu asla bizim depo yolumuzu içeremez.
+
+* **Depo yolu iğnesi** — bu çalışma kopyasının mutlak yolu, iki ayraç
+  yazımında — **arşivin tamamına** uygulanır. `.pyc` sızıntısı tam olarak bu
+  biçimdedir (`co_filename` = depo yolu + modülün göreli yolu), ve depo
+  ister ev dizininin altında (burada) ister `D:\a` altında (runner) olsun
+  aynı şekilde yakalanır.
+* **Hesap adı ve ev dizini iğneleri**, yalnız spec'in **bizim
+  ağaçlarımızdan kopyaladığı** üyelere uygulanır. Kapsam spec'in `*_TARGET`
+  atamalarından **AST ile** türetiliyor — elle yazılmış bir liste değil,
+  yani spec'e dördüncü bir ağaç eklendiğinde kapsam kendiliğinden genişler.
+  Bugün türetilen üç önek: `station_api/db/migrations/`, `station_web/`,
+  `technocore_conform/vectors/`.
+* **`__pycache__`/`.pyc` yasağı** arşivin tamamında, değişmeden kaldı.
+* **Üçüncü taraf gerçeği sessizce muaf tutulmuyor, iddia ediliyor**:
+  `test_the_third_party_binaries_carry_their_own_build_machine` başka bir
+  makinenin yolunu taşıyan **her** üyenin derlenmiş bir ikili olduğunu ve
+  spec'in kopyaladığı bir dosya **olmadığını** denetliyor.
+
+**Kör geçişe karşı iki kapı.** Kapsamın daralması, kapsamın *boşalmasına*
+dönüşebilirdi.
+`test_the_copied_scope_is_read_off_the_spec_and_finds_real_members`
+hem önek sayısının üçten az olmadığını hem de her öneğin arşivde **en az bir
+gerçek üyeyle** eşleştiğini denetliyor; ikisinden biri bozulursa hesap
+taraması hiçbir bayt okumadan geçerdi.
+
+### Makineye bağlılık nasıl gitti
+
+CI'yı kırmızıya düşüren koşul artık testin **içinde**, düz metin olarak
+duruyor: `runneradmin` ve `C:\Users\runneradmin` birer sabit,
+`Path.home()`'dan gelmiyor.
+`test_a_third_party_binarys_upstream_build_path_is_not_our_leak`
+bu yüzden runner'da da geliştirici makinesinde de **aynı** şeyi ölçüyor — ve
+kapsam yeniden bundle köküne genişletilirse (regresyonun kendisi) her iki
+makinede de kırmızı veriyor.
+
+### Sürüşler
+
+| Sürüş | Beklenen | Ölçülen |
+|---|---|---|
+| (a) bizim ağacımızdan gelen üyede ekili ev dizini | kırmızı | **kırmızı** — `test_a_leak_in_a_copied_member_is_reported` |
+| (b) üçüncü taraf binary'sinde upstream `runneradmin` yolu | kırmızı **değil** | **yeşil** — kapsamsız tarama dosyayı hâlâ görüyor (bu da iddia ediliyor), kapsamlı tarama görmüyor |
+| (c) depo yolu, arşivin herhangi bir yerinde | kırmızı | **kırmızı** — üçüncü taraf gibi adlandırılmış bir `.pyd`'ye ekildi |
+
+Üçü de **gerçek artefaktın geçici bir kopyasında** da sürüldü: ekili
+`__pycache__/env.cpython-312.pyc` bytecode yasağını, `somelib/_ext.pyd`
+içindeki depo yolu arşiv geneli iğneyi, `station_web/assets/vendor.js`
+içindeki ev dizini kapsanmış hesap iğnesini kırmızıya düşürdü. Kopya her
+seferinde silindi; **gönderilen arşive dokunulmadı** ve yeniden derleme
+yapılmadı.
+
+CI koşulu yerelde birebir yeniden üretildi: `Path.home()` geçici olarak
+`C:\Users\runneradmin` yapılıp gerçek arşiv tarandığında eski tarama **tam o
+iki dosyayı, tam o iki etiketle** raporladı; yeni tarama aynı koşulda hesap
+iğneleri için **0**, depo yolu iğnesi için **0** verdi.
+
+Mutasyon skoru **7/7** — tablo `docs/security-invariants.md`, "Mutasyon
+kaydı (SI-329) — makineye bağlılık turu".
+
+### Ölçülmeyenler
+
+Artefakt **yeniden derlenmedi**; bu turda değişen tek şey testtir, spec ve
+build betiği el değmedi. Düzeltme bir GitHub Actions runner'ında
+**koşturulmadı** — runner koşulu yerelde `Path.home()` yamalanarak taklit
+edildi. `runneradmin` sabitinin ileride de runner hesabı olacağı iddia
+edilmiyor; değişirse (b) sürüşü bir CI koşulunu değil, kendi tarif ettiği
+sentetik koşulu ölçmeye devam eder — kapsam kuralı ise iğneden bağımsızdır.
+
 ## 14. Kapılar
 
 Yedisi de yeşil. Kapanış turundan sonra pytest **2184** (kusur turu tabanı
 2169, **+15**: on tanesi kapanış davranışı, beşi tarama kaynak/kopya ayrımı),
 Vitest **315** (değişmedi).
+
+§13d turundan sonra pytest **2206** (o turun tabanı 2201, **+5**: sızıntı
+taramasının kapsam guard'ı ve üç sürüşü, artı üçüncü taraf ikililerinin
+ölçülmüş gerçeğini iddia eden test), Vitest **315** (yine değişmedi).
+Artefakt yeniden derlenmedi; o turda değişen tek şey testtir.
 
 | Kapı | Sonuç |
 |---|---|

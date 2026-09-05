@@ -786,7 +786,7 @@ I şemaya dokunmadı.
 | SI-326 | Konsoldan yapılan **normal kapanış** — Ctrl+C **ve** Ctrl+Break — **çıkış kodu 0** verir, konsola çöküş metni basmaz ve tek örnek kilidini **bırakır** | `SHUTDOWN_SIGNALS` `SIGINT`, `SIGTERM` ve (Windows'ta) `SIGBREAK` taşır; `absorbing_shutdown_signals()` yalnız `uvicorn.Server.run` çevresinde kuruludur ve çıkışta bulduğu handler'ları **geri koyar**; uvicorn'un `capture_signals` davranışı birebir taklit edilerek sürülür — pencere içinde yeniden yükseltilen sinyal sürece ulaşmaz, pencere dışında **aynı** taklit `KeyboardInterrupt` üretir; gerçek bir çökme **hâlâ** yayılır ve kilit yine bırakılır; ana iş parçacığı dışında pencere sessizce no-op'tur | `test_packaging_boundary.py::test_the_absorbed_signal_set_covers_both_console_stop_keys`, `::test_a_re_raised_interrupt_inside_the_window_does_not_reach_the_process`, `::test_a_re_raised_break_inside_the_window_does_not_reach_the_process`, `::test_without_the_window_the_same_re_raise_is_a_keyboard_interrupt`, `::test_the_window_puts_back_the_handlers_it_found`, `::test_the_window_is_a_no_op_off_the_main_thread`, `::test_a_clean_stop_exits_zero_and_leaves_no_lock_behind`, `::test_a_break_stop_also_exits_zero_and_releases_the_lock`, `::test_a_real_crash_is_still_a_crash`, `::test_the_launcher_wraps_the_server_run_in_the_absorbing_window` | I |
 | SI-327 | `0.0.0.0` taramasının açtığı dosya kümesi **build durumundan bağımsızdır**: tarama **kaynağı** okur, üretilmiş kopyayı değil | tek muafiyet `packaging/artifacts` **tam yoludur**, dizin adı değil, ve `build_bundle.py`'nin yazdığı yerle aynı olduğu denetlenir (`test_tracked_sources.py`'nin muafiyetiyle **tek tanım**); `build`, `dist` ve `out` artık **ada göre atlanmaz**, üçünde de ekili bir `0.0.0.0` raporlanır; sentetik bir ağaçta bundle kopyaları atlanır ve kaynak okunur, ve atlanan kopyaların gerçekten okunabilir uzantılar taşıdığı ayrıca ölçülür; gerçek depoda taramanın açtığı **hiçbir** dosya çıktı dizininin içinde değildir | `test_bind.py::test_the_scan_reads_the_packaging_sources_and_not_the_bundle_beside_them`, `::test_the_bundle_the_scan_skips_really_did_contain_readable_files`, `::test_a_wildcard_in_a_pyinstaller_default_output_directory_is_still_reported`, `::test_no_file_the_real_scan_opens_lives_in_the_build_output_directory`, `::test_the_exempt_directory_is_the_one_the_build_script_writes_to` | I |
 | SI-328 | Tek örnek kilidi **başlatmanın tamamını** sarar: kilit alındıktan sonraki **hiçbir** hata onu geride bırakamaz | `lock = single_instance.acquire(...)`'dan hemen sonra açılan `try`, `initialise_database`, soket rezervi ve `create_app` çağrılarının **hepsini** içine alır ve `finally: lock.release()` ile kapanır; migration sırasındaki `KeyboardInterrupt`, soketin rezerve edilememesi ve `PackagedLayoutError` üçü de hatayı **kendisi olarak** yayar ve kilidi geride **bırakmaz**; `SchemaAheadError` dalı çıkış kodu 5 verir ve kilidi yine bırakır (elle `release()` çağrısı kaldırıldı, kaynakta `lock.release()` **bir kez** geçer) | `test_packaging_boundary.py::test_a_failure_during_start_up_does_not_strand_the_lock`, `::test_a_database_from_a_newer_build_still_releases_the_lock`, `::test_the_lock_release_covers_the_whole_start_up_and_not_only_the_server`, `::test_the_launcher_releases_the_lock_when_the_server_stops` | I |
-| SI-329 | Gönderilen arşiv **üretildiği makineyi adlandırmaz** ve derlenmiş bytecode taşımaz | ZIP'te hiçbir `__pycache__` girdisi ve hiçbir `.pyc` yoktur; hiçbir üyenin içeriği ev dizini yolunu veya hesap adını taşımaz; `station.spec` iki Python ağacını dizin olarak değil **dosya dosya** kopyalar ve önbellekleri dışarıda bırakır; tarama ekili bir sızıntıda kırmızıdır. Paketleme workflow'u bu testi **build'den sonra** koşar, çünkü bundle yokken karşılaştıracak bir şey yoktur | `test_packaging_boundary.py::test_the_shipped_archive_names_no_developer_and_no_home_directory`, `::test_the_leak_scan_reports_a_planted_path` | I |
+| SI-329 | Gönderilen arşiv **üretildiği makineyi adlandırmaz** ve derlenmiş bytecode taşımaz; **hangi iğnenin hangi üyelere uygulandığı testin koştuğu makineye bağlı değildir** | ZIP'te hiçbir `__pycache__` girdisi ve hiçbir `.pyc` yoktur (**arşivin tamamı**); **depo yolu** iğnesi — bu çalışma kopyasının mutlak yolu, iki ayraç yazımında — **arşivin tamamına** uygulanır, çünkü başka bir makinede derlenmiş bir ikili onu taşıyamaz; **hesap adı ve ev dizini** iğneleri yalnız `station.spec`'in **bizim ağaçlarımızdan kopyaladığı** üyelere uygulanır ve bu kapsam spec'in `*_TARGET` atamalarından **AST ile türetilir**, ada göre yazılmış bir muafiyet listesinden değil; kapsamın ne boş ne hayalî olduğu ayrıca denetlenir (üç önek, her biri arşivde en az bir gerçek üyeyle eşleşir); `station.spec` iki Python ağacını dizin olarak değil **dosya dosya** kopyalar ve önbellekleri dışarıda bırakır; üçüncü taraf ikililerin **kendi** derleme makinelerinin yolunu taşıdığı sessizce muaf tutulmaz, **iddia edilir**: başka bir makinenin yolunu taşıyan her üye derlenmiş bir ikilidir ve **asla** spec'in kopyaladığı bir dosya değildir. Tarama üç yönde de ekili sızıntıda kırmızıdır — bizim ağacımızdaki bir üyede, arşivin herhangi bir yerindeki depo yolunda, ve `runneradmin` **düz metin** olduğu için her makinede aynı sonucu veren üçüncü taraf sürüşünde. Paketleme workflow'u bu testi **build'den sonra** koşar, çünkü bundle yokken karşılaştıracak bir şey yoktur | `test_packaging_boundary.py::test_the_shipped_archive_names_no_developer_and_no_home_directory`, `::test_the_leak_scan_reports_a_planted_path`, `::test_the_copied_scope_is_read_off_the_spec_and_finds_real_members`, `::test_a_leak_in_a_copied_member_is_reported`, `::test_a_third_party_binarys_upstream_build_path_is_not_our_leak`, `::test_the_repository_path_is_refused_anywhere_in_the_archive`, `::test_the_third_party_binaries_carry_their_own_build_machine` | I |
 
 ### Mutasyon kaydı (SI-314 … SI-325)
 
@@ -875,6 +875,44 @@ biri — `SIGBREAK` pencereden çıkarılıp Ctrl+Break testi koşturulursa —
 **test sürecini** CRT `abort()`'uyla sonlandırır. Üçü de tespittir ve ilgili
 testin docstring'inde bu açıkça yazılıdır, çünkü sessizce geçmekten farkı
 görülmelidir.
+
+### Mutasyon kaydı (SI-329) — makineye bağlılık turu
+
+Bu taramanın ilk sürümü **yerelde yeşil, CI'da kırmızıydı — aynı arşiv
+baytları için**. Sebep ölçüldü: iğnelerin hepsi `Path.home()`'dan geliyordu.
+Geliştirici makinesinde bu kendi hesabı, GitHub Actions runner'ında
+`runneradmin`, ve `cryptography` ile `pydantic-core`'un Windows
+wheel'lerini **upstream de** GitHub Actions'ta derliyor. Yerelde bulunan
+artefakt tarandı: tam **iki** üye `C:\Users\runneradmin` taşıyor —
+`_internal/cryptography/hazmat/bindings/_rust.pyd` ve
+`_internal/pydantic_core/_pydantic_core.cp312-win_amd64.pyd` — ve taşıdıkları
+şey `.cargo\registry\src\index.crates.io-<hash>\<crate>` biçiminde Rust panic
+konumları (openssl, pyo3, asn1, jiter, regex-automata ve yirmiden fazla
+crate). Arşivin **başka hiçbir** üyesi ne o dizeyi ne bu deponun mutlak
+yolunu taşıyor.
+
+CI koşulu yerelde birebir yeniden üretildi (`Path.home()` geçici olarak
+`C:\Users\runneradmin` yapıldı, gerçek arşiv tarandı): eski tarama **tam o
+iki dosyayı, tam o iki etiketle** (`account-name, home-directory`) raporladı;
+yeni tarama aynı koşulda **hesap iğneleri için 0**, **depo yolu iğnesi için
+0** verdi.
+
+| Mutasyon | Ölçülen sonuç |
+|---|---|
+| `_repository_needles` `{}` döndürdü | **1 kırmızı**: `test_the_repository_path_is_refused_anywhere_in_the_archive` |
+| `_leaking_entries`'in `within` süzgeci yok sayıldı (her zaman tüm arşiv) | **1 kırmızı**: `test_a_third_party_binarys_upstream_build_path_is_not_our_leak` |
+| `_spec_copied_prefixes` `()` döndürdü (kapsam boş) | **3 kırmızı**, aralarında `test_the_copied_scope_is_read_off_the_spec_and_finds_real_members` — kör geçiş yakalanıyor |
+| `BUNDLE_INTERNAL_DIR` `_internals` yazıldı (kapsam hayalî) | **1 kırmızı**: aynı test — önekler hiçbir gerçek üyeyle eşleşmiyor |
+| Kapsam yeniden bundle köküne genişletildi (**CI regresyonunun kendisi**) | **2 kırmızı**: `::test_a_third_party_binarys_upstream_build_path_is_not_our_leak`, `::test_the_third_party_binaries_carry_their_own_build_machine` — ikisi de `runneradmin`'i **düz metin** kullandığı için bu **her makinede** kırmızı |
+| `_build_account_needles` `{}` döndürdü | **2 kırmızı**: `::test_the_leak_scan_reports_a_planted_path`, `::test_a_leak_in_a_copied_member_is_reported` |
+| `_string_literals` `[]` döndürdü (spec okunamaz hâle geldi) | **4 kırmızı** |
+
+**Yedi mutasyonun yedisi** en az bir testi öldürdü. Ayrıca **gerçek
+artefaktın geçici bir kopyasına** üç ekim yapıldı ve üçü de kırmızı verdi:
+bizim ağacımızdaki bir `__pycache__/*.pyc` (bytecode yasağı), üçüncü taraf
+gibi adlandırılmış bir `.pyd` içinde **depo yolu** (arşiv geneli iğne), ve
+`station_web` altında ev dizini taşıyan bir dosya (kapsanmış hesap iğnesi).
+Kopya sonrasında silindi; gönderilen arşive dokunulmadı.
 
 ### Kapsanmayan, ve iddia edilmeyen
 
