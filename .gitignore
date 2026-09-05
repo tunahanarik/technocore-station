@@ -108,6 +108,16 @@ build/
 out/
 coverage/
 
+# The Windows bundle (ADR-0010 2). Anchored and narrow on purpose: the three
+# rules above are unanchored and match at any depth, so accepting
+# PyInstaller's default `build/` and `dist/` output names under packaging/
+# would have required exempting a source directory from
+# tests/security/test_tracked_sources.py - the exemption ADR-0010 3 says
+# swallows `packaging/build/helper.py` exactly the way `credentials.*`
+# swallowed `credentials.py` in Package G. packaging/build_bundle.py writes
+# here instead, and a test asserts it still does.
+/packaging/artifacts/
+
 # =============================================================================
 # EDITORS / OS
 # =============================================================================
