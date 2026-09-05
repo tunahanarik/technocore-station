@@ -1,6 +1,7 @@
 import { Alert, Card, Separator } from "@heroui/react";
 
 import { EvidenceLedgerPanel } from "../components/evidence/EvidenceLedgerPanel";
+import { ProofWorkspacePanel } from "../components/proof/ProofWorkspacePanel";
 
 interface TrustLevel {
   readonly level: number;
@@ -51,12 +52,22 @@ export function EvidencePage() {
       <Card.Header>
         <Card.Title>Kanitlar</Card.Title>
         <Card.Description>
-          Kanit kayitlari, dort guven seviyesi, audit zinciri ve disa aktarim.
+          Kanit kayitlari, dort guven seviyesi, audit zinciri, disa aktarim ve
+          bir gorevin kanit calisma alani. Buradaki hicbir sey bir sonuc
+          degildir; toplanmis malzemedir.
         </Card.Description>
       </Card.Header>
 
       <Card.Content className="flex flex-col gap-4">
         <EvidenceLedgerPanel />
+
+        <Separator />
+
+        {/* Paket H3. No new section was opened for it: nine of nine sections
+            are `ready: true` and `sections.ts` was not touched. The proof
+            workspace belongs to Kanitlar, because what it shows is what this
+            Station collected about one task (ADR-0009 9). */}
+        <ProofWorkspacePanel />
 
         <Separator />
 

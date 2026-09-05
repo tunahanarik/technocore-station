@@ -254,8 +254,12 @@ Bunların hiçbiri dışarıya istek göndermez: açılışta giden istek sayıs
 - ~~**Öneri üreticisi ve yürütücü.**~~ **Kapandı:** `suggested`'ı H1,
   `running`/`paused`'ı H2'nin deterministik yürütücüsü üretilebilir yaptı;
   `UNPRODUCIBLE_STATES` bugün boştur (ADR-0007, ADR-0008 §3).
-- **Dış paylaşım.** Dört kanıt alanının dördüncüsü daima boştur; H3'ün
-  konusudur (ADR-0004 §4).
+- ~~**Dış paylaşım.**~~ **Kapandı:** dördüncü kanıt alanı H3'te
+  doldurulabilir oldu. Yalnız **arşivlenmiş bir gönderimin kanıt kaydı
+  kimliğiyle**: `EvidenceRef` yapıcısı şekli, `TaskService.record_evidence`
+  satırın varlığını denetler ve `verified` o gönderimin kendi sonucundan
+  gelir. Alan `PUBLICATION_FIELDS`'e **girmedi** — yayımlamadan da bir görev
+  tamamlanabilir (ADR-0004 §4, ADR-0009 §1).
 - **Bütçe.** Bütçe alanı açılmadı ve bütçe varmış gibi davranılmıyor;
   erteleme [`task-modules.md`](task-modules.md) §6'da kayıtlıdır
   (ADR-0004 §7).

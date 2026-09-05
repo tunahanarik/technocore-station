@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-09-05T11:20:00Z",
+  "updated_utc": "2026-09-05T14:10:00Z",
   "base_sha": "5411171dd2302c6fea5a2af22695503859317c27",
   "note": "Kayit ile gercek Git/GitHub durumu celisirse Git/GitHub kaniti esastir.",
   "stages": [
@@ -164,12 +164,12 @@
     {
       "id": "H2",
       "name": "Agent calisma ortami + Activity Desk",
-      "status": "in_review",
+      "status": "merged",
       "branch": "stage-h2-agent-runtime",
       "pr": 18,
-      "reviewed_sha": "70f74d4",
-      "tested_sha": "70f74d4",
-      "merge_sha": null,
+      "reviewed_sha": "cb20c10",
+      "tested_sha": "cb20c10",
+      "merge_sha": "54fdf20",
       "findings": [
         "ADR-0008: izolasyon envanteri OLCULDU (Docker Desktop 4.89.0 kurulu ve daemon acik, WSL2 var, Sandbox yok, Hyper-V yonetim yuzeyi yok, kullanici local admin degil, optional feature durumlari OLCULEMEDI) ve yurutme YINE DE kapatildi: Docker kullanicinin kurulumudur, urunun degil; konteyner yolu CI'da dogrulanamaz",
         "Hicbir sey kurulmadi, hicbir konteyner calistirilmadi; urun kaynaginda subprocess/exec/eval/os.system hala yok",
@@ -197,23 +197,41 @@
         "INCELEMECI DE IKI YERDE YANILDI, olcerek gosterildi: ARBITRARY_EXECUTION_SUPPORTED zaten Literal[False] idi; get_tool'un dali olu degil. MAX_NAME_CHARS teshisi de yanlisti - dal erisilebilirmis ama iki dal AYNI gerekceyi donduruyordu",
         "BU PAKETIN KENDI RAPORUNDA IKI YANLIS IDDIA DUZELTILDI: 'tasks/ ve modules/ hic dokunulmadi' (olcum: 201 ekleme) ve safe_name mutasyonu '17 kirmizi' (olcum: 18)",
         "docs/architecture.md ve docs/agent-runtime.md'nin H2 gercegi tarafindan yalanlanan bes cumlesi duzeltildi (junction icin 'admin veya subprocess ister' iddiasi dahil - incelemeci admin olmadan olusturdu)",
-        "53 mutasyon / 42 oldurulen / 11 hayatta kalan -> 13 bulgunun HEPSI kapatildi. 1992 pytest (1974'ten +18)"
+        "53 mutasyon / 42 oldurulen / 11 hayatta kalan -> 13 bulgunun HEPSI kapatildi. 1992 pytest (1974'ten +18)",
+        "CI uc is de yesil (backend 4m8s -> 7m15s: yeni gercek-junction testleri runner'da fiilen kosuyor). Merge: 54fdf20"
       ],
       "failed_attempts": 0,
-      "next_safe_step": "Duzeltmeler indi (1992 pytest); kapilar yesilse commit + CI + merge."
+      "next_safe_step": null
     },
     {
       "id": "H3",
       "name": "Proof Workspace",
-      "status": "planned",
-      "branch": null,
-      "pr": null,
+      "status": "in_review",
+      "branch": "stage-h3-proof-workspace",
+      "pr": 19,
       "reviewed_sha": null,
-      "tested_sha": null,
+      "tested_sha": "f5d6b97",
       "merge_sha": null,
-      "findings": [],
+      "findings": [
+        "ADR-0009: yetki KUNYEDEN DEGIL kapsam ekinden ve prompt §14'ten geliyor - kunye Proof Workspace'i Proje 1'e koymustu; fark kayda gecirildi",
+        "public_share acildi ama kosul YAPIYA konuldu: uc gereksiz olmayan denetim (yapici kimlik BICIMINI, servis SATIRIN VARLIGINI, proof servisi verified'i arsivlenmis gonderimin KENDI write_outcome'undan turetiyor) - outcome_unknown kaydedilir ama DOGRULANMAZ. PUBLICATION_FIELDS UCTE KALDI (ADR-0004 §4 korundu)",
+        "ALANI ACMAK BIR KUSUR DOGURUYORDU: satir okuyucusu firlatan bir yapiciya bakar hale geldi; elle yazilmis TEK bir satir o gorevin HER okumasini (listeleme dahil) kirabilirdi - yakalandi, satir atlaniyor",
+        "UNFILLABLE_FIELDS bosalinca dort dal olu kalacak ve hicbiri kirmizi vermeyecekti (H2'nin UNPRODUCIBLE_STATES tuzaginin aynisi). Dordu de alani test suresince kapatarak suruluyor; kapatma HER TUKETEN MODULUN KENDI BAGLAMASI uzerinde (yalniz birini patch'lemek digerlerini surmeden birakirdi) ve her test IZINLI HALI ONCE okuyor",
+        "proof_workspace SON PLANNED kayitti: sozlesme bir fonksiyona cevrildi, testin kendi kurdugu kayitlar uzerinde suruluyor, 'artik planlanan modul yok' KENDI ADLANDIRILMIS iddiasi",
+        "Mevcut bir iddia YANLISA donecekti ve yesile cevirmenin yolu tam da ADR-0004'un yasakladigi duzenlemeydi; elle yazilmis kehanetle karsilastiriliyor",
+        "Paket hicbir yere yazilmiyor: iki bicim, Content-Disposition, yeni dosya koku yok, ZIP YOK (zip-slip ACMADAN dogar, uretmeden degil - ayrim ADR'ye yazildi)",
+        "Onay ExportConsent degil SendApproval kalibi: paket digest'i + gorev + icerik surumu + oturum, tek kullanimlik, ve REDDEDILEN TESLIM DE TOKEN'I HARCIYOR",
+        "YENI PAKET HICBIR SINIR TARAMASININ ICINDE DEGILDI (H2'nin PACKAGE_F_DIRS dersi); uc tarama genisletildi, iki yenisi eklendi, her biri IKI KEZ suruldu (dosyalari gercekten actigi + ekili ihlalin raporlandigi)",
+        "independent_check ve exit_code gerekcesiyle not_implemented: model lane kapali (ikinci gorus yok), yurutme kapali (exit code yok). Kabul hicbir durumu tasimiyor - gecisin girdisi",
+        "Hash'in ne kanitladigi iki bicime ve ekrana ILK DIGEST'IN USTUNE yazildi: baytlari tanimlar, dogrulugu degil",
+        "Frontend: bolum acilmadi (9/9 ready). types.ts'te public_share_available BAYATTI (false tiplenmisken backend true gonderiyordu); true'ya sabitlenmedi, boolean'a genisletildi - false'u geri koymak artik DERLEME HATASI",
+        "Bir test YANLIS SEBEPLE geciyordu (guard'i degil, basari sonrasi sifirlamayi suruyordu); istegi ucusta tutacak sekilde yeniden yazildi. Ajan busy guard'i ile isDisabled'in gereksiz oldugunu olctu ve DOM'dan erisilemeyen yari icin ZORLAMA TEST UYDURMADI",
+        "2105 pytest (1992'den) + 315 Vitest (289'dan) + 74 Playwright (65'ten). 16 mutasyon, 16'si en az bir test olduruyor. HeroUI 11'de (MCP ile dogrulandi, v3.2.4), yeni bagimlilik yok, migration yok, asama 8->9",
+        "ACIK BOSLUK: ready_to_publish HTTP'den hala erisilemiyor (TaskUserTransitionName tasimiyor, ADR-0009 kapsaminda degil). Kapatilmis karar DEGIL, acik bosluk - proof-workspace.md §10",
+        "proof.spec.ts her rotayi mock'luyor: onayin gercekten tek kullanimlik/digest'e bagli/sunucuda harcandigi ve paket deterministligi hakkinda HICBIR SEY kanitlamiyor - bunlar Python suite'inde"
+      ],
       "failed_attempts": 0,
-      "next_safe_step": null
+      "next_safe_step": "PR #19 CI + bagimsiz inceleme; bulgular kapaninca merge."
     },
     {
       "id": "I",

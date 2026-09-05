@@ -268,16 +268,22 @@ _WORK_SCAN_REQUIREMENTS: tuple[ModuleRequirement, ...] = (
 
 #: What Package H2 undertook to establish for the agent working environment.
 #:
-#: Two of the seven are ``implemented=False`` and both are the honest half.
+#: One of the seven is ``implemented=False`` and it is the honest half.
 #: ``run_test_result_recorded`` cannot be produced because running a check is
 #: exactly the capability ADR-0008 1 closes - a run records what its plan said
 #: would establish success and never a result, so the field reports
-#: ``not_implemented`` and the task cannot reach ``ready_to_publish``. It is
-#: deliberately **not** in :data:`POLICY_REFUSED_REQUIREMENTS`: the lobby
-#: greeting is refused by a policy this product intends to keep, while
-#: execution is closed by an architecture decision a later package may revisit
-#: with real isolation. Reporting the two identically would lose that
-#: difference, which is the whole reason the separate list exists.
+#: ``not_implemented`` and the task cannot reach ``ready_to_publish`` from a
+#: run alone. It is deliberately **not** in
+#: :data:`POLICY_REFUSED_REQUIREMENTS`: the lobby greeting is refused by a
+#: policy this product intends to keep, while execution is closed by an
+#: architecture decision a later package may revisit with real isolation.
+#: Reporting the two identically would lose that difference, which is the
+#: whole reason the separate list exists.
+#:
+#: The seventh, ``user_accepted_the_run_output``, was the second one until
+#: Package H3. H2 wrote it ``implemented=False`` with stage ``H3`` because no
+#: surface recorded a person's acceptance; H3 opened that route, so the flag
+#: moved with the code rather than ahead of it (ADR-0009 8).
 _AGENT_WORKSPACE_REQUIREMENTS: tuple[ModuleRequirement, ...] = (
     ModuleRequirement(
         key="execution_closed_and_stated",
@@ -349,11 +355,135 @@ _AGENT_WORKSPACE_REQUIREMENTS: tuple[ModuleRequirement, ...] = (
         key="user_accepted_the_run_output",
         detail=(
             "Kullanici ciktiyi acikca kabul eder. Kabul bir kisinin "
-            "eylemidir; bu surumde onu kaydeden bir yuzey yoktur ve hicbir "
-            "otomatik yol bu alani dolduramaz."
+            "eylemidir ve Paket H3 onu kaydeden yuzeyi acti: kabul rotasi "
+            "gorulen paket ozetine baglanir. Hicbir otomatik yol bu alani "
+            "dolduramaz; kabul gecisin girdisidir, ciktisi degil."
         ),
         evidence=EvidenceField.USER_ACCEPTANCE,
         stage="H3",
+        # Flipped by Package H3, which wrote the surface this requirement was
+        # waiting for (ADR-0009 8). It is the same edit H1 made for
+        # ``work_scan`` and H2 for ``agent_workspace``: the flag moves on the
+        # commit that builds the thing, not before it.
+        implemented=True,
+    ),
+)
+
+
+#: What Package H3 undertook to establish for the proof workspace.
+#:
+#: Two of the nine are ``implemented=False`` and both are architectural
+#: closures rather than queue items - the same distinction
+#: ``run_test_result_recorded`` is written under, and for the same reason it
+#: is deliberately **not** in :data:`POLICY_REFUSED_REQUIREMENTS`. The model
+#: lane is closed (ADR-0008 2), so there is no second opinion to record and
+#: presenting a run's own output as a third party's check would be the exact
+#: lie ADR-0009 6 refuses; and arbitrary execution is closed (ADR-0008 1), so
+#: there is no exit code to record and inventing one would be worse than
+#: leaving the field empty (ADR-0009 7).
+_PROOF_WORKSPACE_REQUIREMENTS: tuple[ModuleRequirement, ...] = (
+    ModuleRequirement(
+        key="artifact_set_is_hashed",
+        detail=(
+            "Her artifact kendi SHA-256 degerini tasir ve kume icin tek bir "
+            "ozet uretilir; ozet kanonik JSON uzerinden hesaplanir, yani ayni "
+            "dosya kumesi her kosuda ayni degeri verir."
+        ),
+        evidence=EvidenceField.TASK_OUTCOME,
+        stage="H3",
+        implemented=True,
+    ),
+    ModuleRequirement(
+        key="hash_scope_is_stated",
+        detail=(
+            "Ozetin neyi gosterdigi yazilir: bir SHA-256 yalnizca dosyanin "
+            "bayt bakimindan ayni kaldigini tanimlar. Icerigin dogru veya "
+            "yararli oldugunu gostermez ve 'Kanit' basligi 'dogrulandi' diye "
+            "okunmamalidir."
+        ),
+        evidence=EvidenceField.TASK_OUTCOME,
+        stage="H3",
+        implemented=True,
+    ),
+    ModuleRequirement(
+        key="missing_pieces_are_named",
+        detail=(
+            "Eksik olan sey adiyla listelenir. Bir alanin bos olmasi, "
+            "okuyucunun fark etmesine birakilmaz; her eksik kalem kendi "
+            "cumlesiyle raporlanir."
+        ),
+        evidence=EvidenceField.TASK_OUTCOME,
+        stage="H3",
+        implemented=True,
+    ),
+    ModuleRequirement(
+        key="bundle_is_never_written_to_a_path",
+        detail=(
+            "Paket hicbir yola yazilmaz; tarayiciya teslim edilir. Yeni bir "
+            "dosya koku acilmaz ve arsiv uretilmez, bu yuzden yol asimi, "
+            "baglanti ve uzerine yazma sorulari bu ozellikte hic dogmaz."
+        ),
+        evidence=EvidenceField.TASK_OUTCOME,
+        stage="H3",
+        implemented=True,
+    ),
+    ModuleRequirement(
+        key="share_needs_a_single_use_approval",
+        detail=(
+            "Dis paylasim ayri ve tek kullanimlik bir onay ister. Onay paket "
+            "ozetine baglidir: artifact degisirse ozet degisir ve eski onay "
+            "duser."
+        ),
+        evidence=EvidenceField.TASK_OUTCOME,
+        stage="H3",
+        implemented=True,
+    ),
+    ModuleRequirement(
+        key="user_acceptance_has_a_surface",
+        detail=(
+            "Kabul icin ayri bir rota vardir ve 'dogrulandi' yalnizca bir "
+            "insanin eyleminden dogar. Kabul, yayima hazir gecisinin "
+            "girdisidir; hicbir gecis kendi kabulunu yan etki olarak "
+            "uretemez."
+        ),
+        evidence=EvidenceField.USER_ACCEPTANCE,
+        stage="H3",
+        implemented=True,
+    ),
+    ModuleRequirement(
+        key="public_share_needs_a_real_send",
+        detail=(
+            "Dis paylasim alani yalnizca gerceklesmis bir gonderimin kanit "
+            "kaydi kimligiyle doldurulabilir. Alan gorevin bitmesini "
+            "engellemez: yayimlamadan da bir gorev tamamlanabilir."
+        ),
+        evidence=EvidenceField.PUBLIC_SHARE,
+        stage="H3",
+        implemented=True,
+    ),
+    ModuleRequirement(
+        key="independent_check_recorded",
+        detail=(
+            "Bagimsiz kontrolun kim tarafindan ve hangi araci ile yapildigi "
+            "kaydedilir. Bu surumde model yolu kapalidir (ADR-0008 2): "
+            "ikinci bir model gorusu diye bir sey yoktur, ve ayni kosmanin "
+            "kendi ciktisi ucuncu taraf onayi gibi sunulmaz. Alan "
+            "'uygulanmadi' kalir ve nedenini soyler."
+        ),
+        evidence=EvidenceField.TEST_RESULT,
+        stage="-",
+        implemented=False,
+    ),
+    ModuleRequirement(
+        key="real_exit_code_recorded",
+        detail=(
+            "Denetimin gercek cikis kodu kaydedilir. Keyfi yurutme kapali "
+            "oldugu icin (ADR-0008 1) kosacak bir sey yoktur ve bir cikis "
+            "kodu uretilmez. Plan basari olcutu ve yeniden uretme talimati "
+            "metin olarak paketlenir; sayi uydurulmaz."
+        ),
+        evidence=EvidenceField.TEST_RESULT,
+        stage="-",
         implemented=False,
     ),
 )
@@ -425,10 +555,27 @@ MODULES: tuple[ModuleRecord, ...] = (
         id=ModuleId.PROOF_WORKSPACE,
         name="Kanit Calisma Alani",
         purpose="Artifact, hash, test kaniti ve eksikler; dis paylasim onayi.",
-        state=ModuleState.PLANNED,
-        owners=(),
-        requirements=(),
-        available_from="H3",
+        # Package H3 wrote the owning code, so the record stops saying it does
+        # not exist. The state, the owners, the requirements and
+        # ``available_from`` move together, the way they did for ``work_scan``
+        # (H1) and ``agent_workspace`` (H2), and the honest half travels with
+        # them: two of the nine requirements are ``implemented=False`` because
+        # the capabilities behind them are closed, not queued.
+        #
+        # This was the **last** ``planned`` record. The contract a planned
+        # record has to satisfy is therefore no longer exercised by anything in
+        # this tuple, and the test that used to loop over ``MODULES`` looking
+        # for one would have gone quietly vacuous. It is now two assertions:
+        # a named claim that nothing is planned any more, and the contract
+        # itself driven over records built in the test (ADR-0009 2).
+        state=ModuleState.AVAILABLE,
+        owners=(
+            "station_api.proof.service",
+            "station_api.proof.bundle",
+            "station_api.proof.approvals",
+            "station_api.proof.language",
+        ),
+        requirements=_PROOF_WORKSPACE_REQUIREMENTS,
     ),
 )
 

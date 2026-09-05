@@ -56,8 +56,6 @@ has to drive the guard.
 from __future__ import annotations
 
 import os
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -80,6 +78,8 @@ from station_api.agent.workspace import (
     write_text,
 )
 from station_api.vault.windows_acl import acl_grantee_sids, current_user_sid, is_windows
+
+from tests.security.agent_fixtures import plant_a_real_reparse_point
 
 pytestmark = pytest.mark.security
 
@@ -110,41 +110,13 @@ HOSTILE_NAMES = (
 #: directory ``ensure_workspace`` has not created yet.
 TEST_ONLY_OTHER_TASK_ID = "fedcba9876543210fedcba9876543210"
 
-#: ``mklink``'s host. Read from the environment rather than spelled, and with
-#: the documented default when it is unset.
-_COMSPEC = os.environ.get("COMSPEC", r"C:\Windows\System32\cmd.exe")
-
-
-def _plant_a_real_reparse_point(link: Path, target: Path) -> bool:
-    """Create a real link at ``link`` pointing at ``target``; say whether it worked.
-
-    A symbolic link first, because it is the one the standard library can
-    make. Where Windows refuses it - developer mode off, which is the common
-    case for this product's users - an NTFS junction is created with
-    ``mklink /J``, which needs no administrator right. The measurement that
-    made this function necessary is in this module's docstring.
-
-    ``subprocess`` is forbidden in the **product source**, where
-    ``test_agent_boundary.py`` reads the syntax tree to say so. A test may
-    spawn one, and several in ``tests/conformance`` already do.
-    """
-    try:
-        link.symlink_to(target, target_is_directory=target.is_dir())
-    except (OSError, NotImplementedError):
-        pass
-    else:
-        return True
-
-    if sys.platform != "win32" or not target.is_dir():
-        return False
-    result = subprocess.run(  # noqa: S603 - fixed argv, no shell, tmp_path operands
-        [_COMSPEC, "/c", "mklink", "/J", str(link), str(target)],
-        capture_output=True,
-        check=False,
-    )
-    # Asserted rather than inferred from the exit code: a reparse point the
-    # predicate does not recognise would not be driving the guard.
-    return result.returncode == 0 and os.path.isjunction(link)
+#: The shared planter, imported under this file's own name.
+#:
+#: It was defined here and moved to ``agent_fixtures.py`` when the proof
+#: workspace needed the same real junction to drive its own refusal. The
+#: measurement that made a real reparse point necessary is in this module's
+#: docstring; the alias keeps the call sites below reading as they did.
+_plant_a_real_reparse_point = plant_a_real_reparse_point
 
 
 @pytest.fixture

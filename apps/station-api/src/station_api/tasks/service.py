@@ -48,11 +48,14 @@ two states "need an executor this release does not have" and that
 :data:`~station_api.tasks.states.UNPRODUCIBLE_STATES` is empty today and that
 function refuses nothing by name. The gate on those two states is now a
 closed transition set on the surface, not an unproducible state.) Fill
-``public_share``: that field belongs to Package H3
-and :class:`~station_api.modules.fields.EvidenceRef` refuses to be constructed
-for it. Become ``ready_to_publish`` by request: that state is derived from
-three separately verified pieces of evidence, and asking for it without them
-is refused.
+``public_share`` **with a string somebody typed**: this paragraph used to say
+the field could not be filled at all, and Package H3 changed that fact rather
+than the sentence. The field is fillable now, and it is fillable only with the
+identity of an evidence record that exists in this database - the constructor
+checks the shape and :meth:`TaskService.record_evidence` checks the row
+(ADR-0009 1). Become ``ready_to_publish`` by request: that state is derived
+from three separately verified pieces of evidence, and asking for it without
+them is refused.
 """
 
 from __future__ import annotations
@@ -65,7 +68,12 @@ from datetime import UTC, datetime
 from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
 
-from station_api.db.models import TaskEvidenceOutcome, TaskRecord, TaskStateTransition
+from station_api.db.models import (
+    EvidenceRecord,
+    TaskEvidenceOutcome,
+    TaskRecord,
+    TaskStateTransition,
+)
 from station_api.modules.completion import ModuleCompletion, evaluate_module
 from station_api.modules.fields import (
     UNFILLABLE_FIELDS,
@@ -139,7 +147,8 @@ class TaskView:
     detail: str
     created_at: datetime
     updated_at: datetime
-    #: At most one reference per field, and never one for ``public_share``.
+    #: At most one reference per field. ``public_share`` may be among them
+    #: since Package H3, and only when it names an archived send.
     refs: tuple[EvidenceRef, ...]
 
     @property
@@ -174,18 +183,33 @@ def _field_columns(field: EvidenceField) -> tuple[str, str, str, str, str]:
 def _refs_from_row(row: TaskEvidenceOutcome | None) -> tuple[EvidenceRef, ...]:
     """Rebuild the references one task recorded.
 
-    ``public_share`` is skipped **before its columns are read**. That is a
-    weaker statement than the one this docstring used to make, and the weaker
-    one is the true one: a row written straight into the database with a
-    ``public_share_ref_id`` is not surfaced and is not raised over - it is
-    passed by, and this function returns the three fields that can exist.
+    A field in :data:`UNFILLABLE_FIELDS` is skipped **before its columns are
+    read**, so a row written straight into the database under a closed field
+    is passed by rather than surfaced or raised over. Silence is the safe side
+    there: nothing the release says is impossible becomes a reference.
 
-    Silence is the safe side here (nothing this release says is impossible
-    becomes a reference), and the loud side is covered elsewhere: no code path
-    writes that column, :class:`EvidenceRef` cannot be constructed for the
-    field at all, and the gate reports it ``not_implemented`` regardless of
-    what the row holds. A direct database edit is outside this product's
-    threat model in either case.
+    That set is empty since Package H3, so today the loop reads all four
+    fields and ``public_share`` comes back like the rest - which is right,
+    because the value in that column can no longer be arbitrary. It went
+    through :class:`EvidenceRef`, whose constructor refuses anything that is
+    not an evidence-record identity, and through
+    :meth:`TaskService.record_evidence`, which refuses an identity with no row
+    behind it.
+
+    A column group that **cannot** form a valid reference is skipped for the
+    same reason a closed field is: silence, not a raised exception. This half
+    is new and it is not decoration. While ``public_share`` was unfillable the
+    field was skipped before its columns were read, so a hand-edited row could
+    not reach the constructor at all; opening the field pointed that path
+    straight at a constructor that raises, and a task carrying one edited row
+    would have failed *every* read of itself - a listing included - with an
+    unhandled error. A direct database edit stays outside this product's
+    threat model, and the answer to one is still to pass it by rather than to
+    stop working.
+
+    The closed-field skip stays because the *mechanism* is what a later closed
+    field would need, and it is driven under a temporarily closed field rather
+    than left unexecuted (ADR-0009 2).
     """
     if row is None:
         return ()
@@ -199,15 +223,18 @@ def _refs_from_row(row: TaskEvidenceOutcome | None) -> tuple[EvidenceRef, ...]:
         ref_id = str(getattr(row, ref_id_column))
         if not ref_id:
             continue
-        refs.append(
-            EvidenceRef(
-                field=field,
-                ref_id=ref_id,
-                verified=bool(getattr(row, verified_column)),
-                source_version_id=str(getattr(row, version_column)),
-                detail=str(getattr(row, detail_column)),
+        try:
+            refs.append(
+                EvidenceRef(
+                    field=field,
+                    ref_id=ref_id,
+                    verified=bool(getattr(row, verified_column)),
+                    source_version_id=str(getattr(row, version_column)),
+                    detail=str(getattr(row, detail_column)),
+                )
             )
-        )
+        except EvidenceFieldError:
+            continue
     return tuple(refs)
 
 
@@ -450,6 +477,15 @@ class TaskService:
         ``ref_id`` is swept and bounded the same way ``detail`` is. A pointer
         that swept down to nothing is refused rather than stored: an empty
         pointer would be a reference to nowhere wearing a reference's shape.
+
+        ``public_share`` gets a second refusal that no other field gets. The
+        constructor has already required the pointer to *look* like an
+        evidence-record identity; this requires the row to actually be there
+        (ADR-0009 1). The two are separate on purpose: the shape check runs
+        everywhere an :class:`EvidenceRef` is built, including where no
+        database is at hand, and the existence check is the half that makes
+        "a send that actually happened" a fact about this machine rather than
+        about a string's spelling.
         """
         view = self.get(task_id)
         try:
@@ -462,6 +498,9 @@ class TaskService:
             )
         except EvidenceFieldError as exc:
             raise TaskError(str(exc), reason="evidence_field_refused") from exc
+
+        if ref.field is EvidenceField.PUBLIC_SHARE:
+            self._assert_evidence_record_exists(ref.ref_id)
 
         ref_column, verified_column, version_column, detail_column, recorded_column = (
             _field_columns(ref.field)
@@ -483,6 +522,30 @@ class TaskService:
                 task.updated_at = now
 
         return self.get(task_id)
+
+    def _assert_evidence_record_exists(self, evidence_id: str) -> None:
+        """Refuse a public-share pointer that names no archived send.
+
+        One ``SELECT`` against the archive's primary key. The task layer reads
+        that table and writes nothing to it - it does not import
+        :mod:`station_api.evidence`, does not build an
+        :class:`~station_api.evidence.service.EvidenceService` and does not
+        touch the audit chain - so this adds no second owner for the archive,
+        only a lookup (ADR-0004 2, ADR-0009 1).
+
+        The refusal names no id back to the caller. There is one user on this
+        machine, so it is not a disclosure boundary; it is the same rule every
+        other refusal here follows - a sentence a person can act on, with no
+        value echoed into it.
+        """
+        with Session(self._engine) as session:
+            if session.get(EvidenceRecord, evidence_id) is None:
+                raise TaskError(
+                    "Bu kimlikle arsivlenmis bir gonderim yok. Dis paylasim "
+                    "yalnizca gerceklesmis bir gonderimin kanit kaydina "
+                    "baglanabilir.",
+                    reason="evidence_record_missing",
+                )
 
     # --- the state machine -------------------------------------------------
 

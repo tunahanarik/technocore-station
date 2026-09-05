@@ -1095,3 +1095,123 @@ sağlayıcı yanıtı için alan bulunmaz.
 - Bir olayı "başarılı iş" diye özetleyen tek bir rozet.
 - Zincirin atıfta bulunduğu bir satırı silen bir yol.
 - Tarayıcı depolaması: filtre ve akış yalnız React state'tedir (SI-24).
+
+## 15. Kanıt çalışma alanı (Paket H3)
+
+Kapsam kararları: [`ADR-0009`](decisions/0009-paket-h3-kapsam-kararlari-2026-09-05.md).
+Uygulama ayrıntısı: [`proof-workspace.md`](proof-workspace.md).
+
+**Yeni bölüm açılmadı.** Dokuz bölümün dokuzu `ready: true` ve `sections.ts`'e
+dokunulmadı (ADR-0009 §9). Yüzey ikiye bölünür:
+
+- **Kanıtlar / Kanıt çalışma alanı** (`components/proof/ProofWorkspacePanel.tsx`):
+  paketi okuma, tek kullanımlık onay, teslim.
+- **Görevler / Görev ayrıntısı** (`components/tasks/TasksPanel.tsx`): dört
+  alandan ikisinin — `user_acceptance` ve `public_share` — doldurulması.
+
+### 15.1 Çağrılan işlevler
+
+| Eylem | İşlev | Yol | Süre |
+|---|---|---|---|
+| Görev listesi (mount) | `fetchTasks` | `GET /api/tasks` | 15 000 ms |
+| Paketi oku | `fetchProof` | `GET /api/proof/{id}` | 15 000 ms |
+| Onay hazırla | `prepareProofShare` | `POST /api/proof/{id}/prepare` | 15 000 ms |
+| Paketi indir | `takeProofBundle` | `POST /api/proof/{id}/share` | 15 000 ms |
+| Kabulü kaydet | `recordProofAcceptance` | `POST /api/proof/{id}/acceptance` | 15 000 ms |
+| Gönderimi işaretle | `recordProofPublicShare` | `POST /api/proof/{id}/public-share` | 15 000 ms |
+| Arşivi listele | `fetchEvidenceRecords` | `GET /api/evidence/records` | 15 000 ms |
+
+Hiçbiri dışarı çıkmaz; hepsi yerel servistir ve varsayılan süreyle sınırlıdır.
+Mount'ta yalnız **bir** okuma vardır (`/api/tasks`); paket ve arşiv okumaları
+düğmenin arkasındadır (SI-272). Görevler bölümünün mount okuması **ikide
+kaldı** — H3 oraya yeni bir mount okuması eklemedi.
+
+### 15.2 "Kanıt" kelimesi ne demek değildir
+
+`hash_scope` cümlesi **backend'den gelir ve olduğu gibi** basılır
+(`proof-hash-scope`); UI kendi ikinci sürümünü yazmaz, çünkü aynı cümleyi iki
+yüzeyin ayrı ayrı yazması ikisinin zamanla ayrışmasının yoludur. Cümle **ilk
+özetten önce** ekrandadır. `bundle_scope` ve `reproduction` da aynı şekilde
+verbatim basılır. Kabul yüzeyinde de aynı cümle tekrar gösterilir
+(`tasks-acceptance-hash-scope`), çünkü orada bir özete bakarak onay veriliyor.
+
+Hiçbir özet **tam** basılmaz: 64 hex'lik bir dizi seed ile aynı şekildedir ve
+`shortDigest` on iki karakter verir. Vitest ve Playwright ayrı ayrı ölçer.
+
+### 15.3 Üretilmeyen üç kayıt
+
+`independent_check`, `exit_code` ve `test_result` `not_implemented` olarak,
+**kendi gerekçeleriyle** basılır (`proof-claim-<key>`). Rozet tonu `inactive`;
+o bölgede ✓ glifi ve "doğrulandı / kanıtlandı / onaylandı" kelimeleri **hiç
+geçmez** ve bu gerçek DOM üzerinde ölçülür. Model yolu ADR-0008 §2 ile, keyfi
+yürütme ADR-0008 §1 ile kapalıdır; ikisi de politika reddi değil mimari
+kapanıştır ve `proof-claims-rule` bunu söyler.
+
+### 15.4 Eksikler adıyla listelenir
+
+`proof-missing-<key>` her boşluğu kendi anahtarı ve durumu ile gösterir. Puan,
+yüzde, tamamlanma oranı ve tek rozet **yoktur**; kural ekranda yazılıdır
+(`proof-missing-rule`) ve testler gerçek DOM'da `%` işaretini, `<progress>` ve
+`role="progressbar"` öğelerini ve `animate-`/`spinner` sınıflarını sayıp sıfır
+bekler.
+
+### 15.5 Tek kullanımlık onay
+
+Şartlar **düğmeden önce** okunur (`proof-share-terms`): onay bir kez harcanır,
+180 saniye geçerlidir, paket özetine + göreve + oturuma bağlıdır, ve
+**reddedilen bir teslim de onayı harcar**. Teslim iki koşula bağlıdır: onay
+hazır **ve** onay kutusu işaretli. Teslimden sonra `proof-share-state` "Onay
+harcandi" der ve iki biçim düğmesi de kilitlenir.
+
+"Paketi yeniden oku" (`proof-reread`) bir okumadır ve **bekleyen onayı
+düşürür**: onay paket özetine bağlıdır ve yeniden okumanın değiştirebileceği
+tam olarak o özettir.
+
+Dosya hiçbir yola yazılmaz. İndirme, kurtarma dosyası ve kanıt dışa
+aktarımıyla aynı yoldan gider: geçici bir object URL, tıklanır ve hemen
+`revokeObjectURL` ile bırakılır. İndirme adı **istemci tarafında sabittir**
+(`technocore-station-kanit-paketi.json` / `.md`); sunucunun
+`Content-Disposition` başlığı geri okunmaz.
+
+### 15.6 Kabul geçişin girdisidir
+
+Okunmamış bir paket kabul edilemez: kabul düğmesi paket okunana kadar
+**hiç yoktur** (`tasks-acceptance-unread`). Okunduktan sonra paket özeti,
+adlandırılmış eksikler ve hash cümlesi onay kutusunun yanındadır.
+
+İstek gövdesi **iki alan** taşır: `bundle_sha256` ve `detail`. Durum, hedef ve
+geçiş adı yoktur. Kabul sonrası `tasks-acceptance-no-transition` görevin
+kabulden **önceki ve sonraki** durumunu yan yana yazar — ikisi aynıdır. Çift
+aktivasyon kuralı (§1.4) geçerlidir ve istek uçarken ikinci bir kabul
+başlamaz.
+
+`ready_to_publish` HTTP'den hâlâ istenemez (`proof-workspace.md` §10). Bu
+**açık bir boşluktur** ve iki yerde yazılıdır: `tasks-publish-unreachable` ve
+`proof-publish-unreachable`. Durum değişikliği düğmeleri arasında karşılığı
+yoktur ve bir test "yayima hazir" adlı bir düğme bulunmadığını ölçer.
+
+### 15.7 Dördüncü alan: arşivlenmiş bir gönderime işaret
+
+İşlem **hiçbir şey göndermez ve gönderemez** (`tasks-public-share-no-send`);
+istek gövdesi `evidence_id` ve `detail`'den ibarettir — oda, adres, metin
+yoktur, yani buradan bir giden istemciye ulaşan bir şekil bulunmaz.
+`OUTBOUND_CLIENT_MODULES` beşte kalır.
+
+**Arşivlenmiş olmak doğrulanmış olmak değildir**
+(`tasks-public-share-verification-rule`). Listedeki her satır kendi yazma
+sonucunu taşır; yalnız `accepted` "dogrulanmis olarak kaydedilir" der,
+`outcome_unknown` "kaydedilir, dogrulanmis sayilmaz" der ve ✓ glifi taşımaz.
+Ayrımı ekran yapmaz — sunucu kaydın kendi `write_outcome` değerinden türetir.
+
+Alan yayım kararını vermez (`tasks-public-share-not-required`): yayımı üç alan
+belirler ve bir görev hiç paylaşılmadan tamamlanabilir (ADR-0004 §4).
+
+### 15.8 Bu bölümde bilerek olmayanlar
+
+- Dosyanın yazılacağı bir dizin, dosya adı veya yol parametresi.
+- Zip veya başka bir arşiv.
+- Bir şeyi gönderen düğme; bu yüzeyden bir giden istemciye ulaşılamaz.
+- Görevi ilerleten bir kabul; kabul hiçbir durumu taşımaz.
+- `ready_to_publish`'i isteyen bir kontrol.
+- Puan, yüzde, tamamlanma çubuğu veya eksikleri toplayan tek bir rozet.
+- Zamanlayıcı, otomatik yenileme ve tarayıcı depolaması (SI-272, SI-24).

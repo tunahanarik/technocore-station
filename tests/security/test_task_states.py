@@ -173,7 +173,15 @@ TEST_ONLY_CONTENT = b"TEST-ONLY task content, not a real work item."
 #: The agent package passes because it has no state writer at all: it moves a
 #: task by calling ``TaskService.transition``, and its own bookkeeping column
 #: is deliberately named ``phase`` rather than ``state``.
-STATE_WRITER_DIRS = ("modules", "tasks", "agent")
+#:
+#: Package H3 adds ``proof`` for the identical reason (ADR-0009 5). A proof
+#: workspace is the natural place for somebody to write
+#: ``row.state = "ready_to_publish"`` after an acceptance, and the whole of
+#: ADR-0009 8 is that acceptance must **not** do that. A scan that read three
+#: directories while the fourth was free to write the column would have
+#: reported "one writer" about a product with two - the same hole H2 found,
+#: one package later.
+STATE_WRITER_DIRS = ("modules", "tasks", "agent", "proof")
 
 #: The one function permitted to write a task's state, as
 #: ``<file>:<function>``. Anything else in the two packages is an offender.
@@ -697,10 +705,11 @@ def test_the_state_write_scan_would_see_a_second_writer(tmp_path: Path) -> None:
     """
     package = tmp_path / "station_api" / "tasks"
     package.mkdir(parents=True)
-    (tmp_path / "station_api" / "modules").mkdir()
-    # H2 tree is scanned too, so the probe has to build it or the scan would
-    # walk a missing directory instead of reporting the planted writers.
-    (tmp_path / "station_api" / "agent").mkdir()
+    # Every scanned tree has to exist, or the scan would walk a missing
+    # directory instead of reporting the planted writers - and a probe that
+    # skipped a directory would be a probe that never checked the newest one.
+    for name in STATE_WRITER_DIRS:
+        (tmp_path / "station_api" / name).mkdir(exist_ok=True)
     (package / "service.py").write_text(
         "class TaskService:\n"
         "    def transition(self, task_id):\n"
@@ -717,6 +726,41 @@ def test_the_state_write_scan_would_see_a_second_writer(tmp_path: Path) -> None:
         "service.py:start_running",
         THE_ONLY_STATE_WRITER,
     ]
+
+
+def test_the_state_write_scan_reaches_the_proof_package(
+    api_source_root: Path, tmp_path: Path
+) -> None:
+    """The H3 extension, driven with a planted writer (ADR-0009 5).
+
+    Two halves. The first proves the scan really opens
+    ``station_api/proof`` - a directory name that is simply wrong produces a
+    clean result, which is how a widened rule widens nothing. The second
+    plants the exact write ADR-0009 8 forbids - an acceptance that moves the
+    task itself - in a throwaway tree, and requires it to be reported.
+    """
+    real = sorted((api_source_root / "station_api" / "proof").rglob("*.py"))
+
+    assert len(real) >= 4, real
+    assert {"service.py", "bundle.py"} <= {path.name for path in real}
+    # The real package writes no state, which is the claim the scan makes
+    # about it above; here it is stated for this directory alone.
+    assert [
+        offender
+        for offender in _state_writers(api_source_root)
+        if offender.startswith("service.py:record_")
+    ] == []
+
+    for name in STATE_WRITER_DIRS:
+        (tmp_path / "station_api" / name).mkdir(parents=True, exist_ok=True)
+    (tmp_path / "station_api" / "proof" / "service.py").write_text(
+        "class ProofService:\n"
+        "    def record_acceptance(self, task_id):\n"
+        "        row.state = 'ready_to_publish'\n",
+        encoding="utf-8",
+    )
+
+    assert _state_writers(tmp_path) == ["service.py:record_acceptance"]
 
 
 def test_the_service_refuses_a_state_the_build_has_closed(

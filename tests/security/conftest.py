@@ -22,8 +22,10 @@ from station_api.app import create_app
 from station_api.config import Settings
 from station_api.evidence.audit import AuditChain
 from station_api.evidence.audit_envelope import AuditEnvelope
+from station_api.evidence.service import EvidenceService
 from station_api.logging_setup import clear_secret_registry
 from station_api.modules.registry import ModuleId
+from station_api.proof.service import ProofService
 from station_api.security.tokens import BootstrapTokenStore
 from station_api.tasks.service import TaskService, TaskView
 from station_api.tasks.sources import TaskSourceId
@@ -192,3 +194,45 @@ def task(tasks: TaskService) -> TaskView:
         content=TEST_ONLY_CONTENT,
         title="TEST-ONLY agent gorevi",
     )
+
+
+# ---------------------------------------------------------------------------
+# Package H3: the proof workspace
+# ---------------------------------------------------------------------------
+#
+# Declared here rather than in a fixtures module for the reason the H2 block
+# above gives: a fixture that is imported and then named as a parameter is a
+# redefinition of the imported name, which hides the fact that the parameter
+# is resolved by pytest rather than by the import.
+
+
+@pytest.fixture
+def evidence(engine: Engine, data_dir: Path) -> EvidenceService:
+    """A started evidence archive, so the public-share lookup has one to read.
+
+    ``start()`` creates the chain's MAC material through the same DPAPI
+    envelope the application uses. Nothing here contacts anything.
+    """
+    service = EvidenceService(
+        engine=engine, chain=AuditChain(engine, AuditEnvelope(data_dir))
+    )
+    service.start()
+    return service
+
+
+@pytest.fixture
+def proof(
+    tasks: TaskService, agent: AgentService, evidence: EvidenceService
+) -> ProofService:
+    return ProofService(tasks=tasks, agent=agent, evidence=evidence)
+
+
+@pytest.fixture
+def proof_without_archive(tasks: TaskService, agent: AgentService) -> ProofService:
+    """A proof workspace on a machine where the audit envelope did not open.
+
+    The bundle still assembles; the one operation that needs the archive -
+    marking the fourth field from an archived send - refuses instead of
+    pretending.
+    """
+    return ProofService(tasks=tasks, agent=agent, evidence=None)

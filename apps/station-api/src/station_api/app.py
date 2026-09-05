@@ -30,6 +30,7 @@ from station_api.evidence.audit_envelope import AuditEnvelope, AuditEnvelopeErro
 from station_api.evidence.service import EvidenceService
 from station_api.identity.service import IdentityService
 from station_api.opencode.service import OpenCodeService
+from station_api.proof.service import ProofService
 from station_api.routes import agent as agent_routes
 from station_api.routes import api as api_routes
 from station_api.routes import compose as compose_routes
@@ -37,6 +38,7 @@ from station_api.routes import conformance as conformance_routes
 from station_api.routes import evidence as evidence_routes
 from station_api.routes import identity as identity_routes
 from station_api.routes import opencode as opencode_routes
+from station_api.routes import proof as proof_routes
 from station_api.routes import session as session_routes
 from station_api.routes import technocore as technocore_routes
 from station_api.routes import workscan as workscan_routes
@@ -326,6 +328,38 @@ def create_app(
         else None
     )
 
+    # The proof workspace (ADR-0009). Built when the task service and the
+    # agent runtime are both there, because it owns neither and reads both: a
+    # bundle is assembled out of rows those two services already own, and this
+    # package adds no table, no file root and no outbound client.
+    #
+    # The evidence archive is passed when it started, and is optional for the
+    # same reason it is optional elsewhere: on a machine where the audit
+    # envelope cannot be opened, the proof workspace still assembles and
+    # simply refuses the one operation that needs the archive - marking the
+    # fourth field from an archived send.
+    #
+    # Building it starts nothing and contacts nobody. There is no scheduler,
+    # no background task and no request at launch; the single-use share
+    # approvals it mints live in process memory, stop being valid on their own
+    # after ``SHARE_TOKEN_TTL_SECONDS`` and are *removed* on the next mint.
+    #
+    # The second half of that sentence is newer than the first. There is no
+    # sweeper here and there never will be - a scheduler is exactly what this
+    # process refuses to grow - so the store purges and caps itself inside
+    # ``issue``, the way the composer's draft store always has. Before that,
+    # "expire on their own" was true of validity and false of memory: fifty
+    # abandoned approvals stayed fifty entries for the life of the process.
+    app.state.proof = (
+        ProofService(
+            tasks=app.state.tasks,
+            agent=app.state.agent,
+            evidence=app.state.evidence,
+        )
+        if app.state.tasks is not None and app.state.agent is not None
+        else None
+    )
+
     # The read-only reconciliation scan (ADR-0004 6). ``in_flight`` has been
     # written since Package D and never read back; this reads it. One SELECT,
     # no outbound request, no row changed and no send continued. Whether to
@@ -362,6 +396,7 @@ def create_app(
     app.include_router(opencode_routes.router)
     app.include_router(workscan_routes.router)
     app.include_router(agent_routes.router)
+    app.include_router(proof_routes.router)
 
     # Registered last so it cannot shadow /api or /session.
     if web_dist is not None:

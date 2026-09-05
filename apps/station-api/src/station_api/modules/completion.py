@@ -22,6 +22,14 @@ The rule the whole file exists for is in :func:`_check`: a reference that
 merely *exists* produces ``blocked``. Presence of a result row, a file or a
 build output is not success; the reference has to say it was checked, and
 ``EvidenceRef.verified`` is where the producer has to say it.
+
+The ``UNFILLABLE_FIELDS`` half of that first condition is not taken by any
+field in this build - the set is empty since Package H3 - and it stays because
+it is the refusal a later closed field would rely on. It is driven under a
+temporarily closed field rather than left unexecuted (ADR-0009 2). The other
+half, ``not requirement.implemented``, is very much live: two of the proof
+workspace's nine requirements and one of the agent workspace's seven report
+``not_implemented`` because the capability behind them is closed.
 """
 
 from __future__ import annotations

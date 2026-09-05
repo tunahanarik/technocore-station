@@ -18,6 +18,8 @@ never move.
 from __future__ import annotations
 
 import ast
+import dataclasses
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -29,6 +31,8 @@ from station_api.modules.registry import (
     MODULES,
     POLICY_REFUSED_REQUIREMENTS,
     ModuleId,
+    ModuleRecord,
+    ModuleRequirement,
     ModuleState,
     get_module,
     requirement_keys,
@@ -36,10 +40,18 @@ from station_api.modules.registry import (
 
 pytestmark = pytest.mark.security
 
-#: The two packages Package F added. Both are scanned as one surface: a
-#: loading path that moved from the registry into the task service would be
-#: the same hole in a different file.
-PACKAGE_F_DIRS = ("modules", "tasks")
+#: The trees the registry-boundary scans read as one surface.
+#:
+#: Package F's two, because a loading path that moved from the registry into
+#: the task service would be the same hole in a different file - and Package
+#: H3's ``proof``, because a new package is outside every boundary scan until
+#: somebody widens one (ADR-0009 5). H2 learned that with the state-writer
+#: scan: the guard read ``modules`` and ``tasks`` while the new writer sat in
+#: ``agent``, and the rule was silently holed on the exact commit that made
+#: the hole reachable. The name changed with the contents: a constant called
+#: ``PACKAGE_F_DIRS`` that listed an H3 package would have been a comment that
+#: lied about its own scope.
+REGISTRY_SCANNED_DIRS = ("modules", "tasks", "proof")
 
 #: Modules that would turn a compile-time registry into a loader. ``builtins``
 #: is here because it is the doorway to the attribute spelling of every banned
@@ -86,7 +98,7 @@ DYNAMIC_LOADING_FUNCTIONS = (
 #: rather than imported: the number says which release the file on disk was
 #: written for, and a constant that derived it from one of the call sites
 #: would agree with whichever one drifted (F-10).
-CURRENT_SCHEMA_STAGE = 8
+CURRENT_SCHEMA_STAGE = 9
 
 #: Proje 0's completion outputs, charter 7.2, in charter order. Written out
 #: here rather than imported so a silent reordering or deletion in the
@@ -104,12 +116,68 @@ CHARTER_REQUIREMENT_KEYS = (
 )
 
 
-def _package_f_sources(api_source_root: Path) -> list[Path]:
+def _registry_sources(api_source_root: Path) -> list[Path]:
     paths: list[Path] = []
-    for name in PACKAGE_F_DIRS:
+    for name in REGISTRY_SCANNED_DIRS:
         paths.extend((api_source_root / "station_api" / name).rglob("*.py"))
-    assert paths, "the Package F source tree should not be empty"
+    assert paths, "the scanned source tree should not be empty"
     return paths
+
+
+#: Imports that would give a scanned package an outbound surface, at one
+#: remove or none. The whole of ``station_api.opencode``, not just its client:
+#: the service reaches the network on a caller's behalf, so importing *it*
+#: would be an outbound surface with an extra function call in the way.
+OUTBOUND_IMPORTS = (
+    "httpx",
+    "requests",
+    "aiohttp",
+    "urllib3",
+    "urllib.request",
+    "http.client",
+    "socket",
+    "station_api.technocore.client",
+    "station_api.technocore.write_client",
+    "station_api.technocore.evidence_client",
+    "station_api.workscan.client",
+    "station_api.opencode",
+)
+
+#: Prefixes no scanned package may import: the vault stack and the signer.
+SECRET_BOUNDARY_PREFIXES = ("station_api.vault", "station_api.compose")
+
+
+def _imported_names(tree: ast.AST) -> list[str]:
+    names: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            names.append(node.module or "")
+    return names
+
+
+def _outbound_offenders(root: Path) -> list[str]:
+    offenders: list[str] = []
+    for path in _registry_sources(root):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for name in _imported_names(tree):
+            if any(
+                name == item or name.startswith(f"{item}.")
+                for item in OUTBOUND_IMPORTS
+            ):
+                offenders.append(f"{path.name}: {name}")
+    return offenders
+
+
+def _secret_boundary_offenders(root: Path) -> list[str]:
+    offenders: list[str] = []
+    for path in _registry_sources(root):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for name in _imported_names(tree):
+            if name.startswith(SECRET_BOUNDARY_PREFIXES):
+                offenders.append(f"{path.name}: {name}")
+    return offenders
 
 
 def _dynamic_loading_offenders(source: str, label: str) -> list[str]:
@@ -211,7 +279,7 @@ def test_no_module_is_ever_loaded_from_disk(api_source_root: Path) -> None:
     """
     offenders: list[str] = []
 
-    for path in _package_f_sources(api_source_root):
+    for path in _registry_sources(api_source_root):
         offenders.extend(
             _dynamic_loading_offenders(path.read_text(encoding="utf-8"), path.name)
         )
@@ -374,15 +442,100 @@ def test_no_module_record_moved_code_into_the_registry_package(
                 assert not imported.startswith("station_api.vault"), path.name
 
 
-def test_planned_modules_name_the_package_that_opens_them() -> None:
-    """A registered-but-unbuilt module says so, the ``sections.ts`` way."""
-    for record in MODULES:
+def _planned_contract_offenders(records: Sequence[ModuleRecord]) -> list[str]:
+    """Every record that breaks the planned/available contract.
+
+    Extracted from the test below by Package H3, and the extraction is the
+    point. ``proof_workspace`` was the last ``planned`` record; opening it
+    left the ``if record.state is ModuleState.PLANNED`` branch with nothing to
+    match, so three assertions stopped executing and the test went on passing.
+    That is the ``HIDDEN_SECTIONS`` shape and it gets the ADR-0009 2 answer:
+    the contract becomes a function, the registry is checked against it, and
+    the function is **driven** over records built in the test - including a
+    valid planned one, so a checker that rejected everything would fail too.
+    """
+    offenders: list[str] = []
+    for record in records:
         if record.state is ModuleState.PLANNED:
-            assert record.available_from, record.id
-            assert record.owners == (), "a planned module owns no code yet"
-            assert record.requirements == ()
-        else:
-            assert record.available_from == ""
+            if not record.available_from:
+                offenders.append(f"{record.id}: planned without available_from")
+            if record.owners:
+                offenders.append(f"{record.id}: a planned module owns no code yet")
+            if record.requirements:
+                offenders.append(f"{record.id}: a planned module has no requirements")
+        elif record.available_from:
+            offenders.append(f"{record.id}: available but names an opening package")
+    return offenders
+
+
+def test_the_registry_satisfies_the_planned_module_contract() -> None:
+    """A registered-but-unbuilt module says so, the ``sections.ts`` way."""
+    assert _planned_contract_offenders(MODULES) == []
+
+
+def test_no_module_is_registered_as_planned_any_more() -> None:
+    """The named claim, so the empty branch above is stated rather than implied.
+
+    Package H1 opened ``work_scan``, H2 opened ``agent_workspace`` and H3
+    opened ``proof_workspace`` - the last one. A reader of the test above
+    would otherwise have no way to tell "every planned record satisfies the
+    contract" from "there are no planned records", and those are very
+    different sentences. This is the second one, said out loud.
+
+    A package that registers a new planned module makes this test red on
+    purpose: the assertion is then updated, and updating it is the moment
+    somebody re-reads the contract.
+    """
+    planned = [record.id for record in MODULES if record.state is ModuleState.PLANNED]
+
+    assert planned == [], planned
+    assert {record.state for record in MODULES} == {ModuleState.AVAILABLE}
+    assert all(record.available_from == "" for record in MODULES)
+    assert all(record.owners for record in MODULES)
+    assert all(record.requirements for record in MODULES)
+
+
+def test_the_planned_module_contract_would_catch_a_record_that_breaks_it() -> None:
+    """The mechanism, driven on records built here so no probe ever ships.
+
+    The permitted case is checked **first**. Without it a contract function
+    that reported every record as an offender would pass the four refusals
+    below and prove nothing - the way a driven mutation goes quietly wrong.
+    """
+    valid_planned = ModuleRecord(
+        id=ModuleId.PROOF_WORKSPACE,
+        name="TEST-ONLY",
+        purpose="TEST-ONLY",
+        state=ModuleState.PLANNED,
+        owners=(),
+        requirements=(),
+        available_from="TEST-ONLY-package",
+    )
+    assert _planned_contract_offenders([valid_planned]) == []
+
+    requirement = ModuleRequirement(
+        key="test_only",
+        detail="TEST-ONLY",
+        evidence=EvidenceField.TASK_OUTCOME,
+        stage="-",
+        implemented=False,
+    )
+    broken = {
+        "planned without available_from": dataclasses.replace(
+            valid_planned, available_from=""
+        ),
+        "planned but owns code": dataclasses.replace(
+            valid_planned, owners=("station_api.proof.service",)
+        ),
+        "planned but carries requirements": dataclasses.replace(
+            valid_planned, requirements=(requirement,)
+        ),
+        "available but names an opening package": dataclasses.replace(
+            valid_planned, state=ModuleState.AVAILABLE
+        ),
+    }
+    for label, record in broken.items():
+        assert _planned_contract_offenders([record]) != [], label
 
 
 # ---------------------------------------------------------------------------
@@ -465,50 +618,57 @@ def test_the_task_layer_has_no_outbound_surface(api_source_root: Path) -> None:
     imported *it* would have an outbound surface at one remove, which is
     exactly the shape this scan was written to catch.
     """
-    banned = (
-        "httpx",
-        "requests",
-        "aiohttp",
-        "urllib3",
-        "urllib.request",
-        "http.client",
-        "socket",
-        "station_api.technocore.client",
-        "station_api.technocore.write_client",
-        "station_api.technocore.evidence_client",
-        "station_api.opencode",
-    )
-    offenders: list[str] = []
+    offenders = _outbound_offenders(api_source_root)
 
-    for path in _package_f_sources(api_source_root):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                names = [alias.name for alias in node.names]
-            elif isinstance(node, ast.ImportFrom):
-                names = [node.module or ""]
-            else:
-                continue
-            for name in names:
-                if any(name == item or name.startswith(f"{item}.") for item in banned):
-                    offenders.append(f"{path.name}: {name}")
-
-    assert offenders == [], f"the task layer grew an outbound surface: {offenders}"
+    assert offenders == [], f"the scanned layer grew an outbound surface: {offenders}"
 
 
 def test_the_task_layer_reaches_no_vault_and_no_signer(api_source_root: Path) -> None:
     """No second vault stack (ADR-0004 2). Nothing here touches key material."""
-    offenders: list[str] = []
+    offenders = _secret_boundary_offenders(api_source_root)
 
-    for path in _package_f_sources(api_source_root):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom):
-                imported = node.module or ""
-                if imported.startswith(("station_api.vault", "station_api.compose")):
-                    offenders.append(f"{path.name}: {imported}")
+    assert offenders == [], f"the scanned layer reached the secret boundary: {offenders}"
 
-    assert offenders == [], f"the task layer reached the secret boundary: {offenders}"
+
+def test_the_registry_scans_reach_the_proof_package(
+    api_source_root: Path, tmp_path: Path
+) -> None:
+    """The H3 extension of :data:`REGISTRY_SCANNED_DIRS`, driven (ADR-0009 5).
+
+    The three scans above - dynamic loading, outbound surface, vault and
+    signer - all read :func:`_registry_sources`, so widening that one helper
+    widened all three. This proves the widening is real in both directions: it
+    opens files under ``station_api/proof``, and a planted violation in a
+    throwaway ``proof`` directory is reported rather than walked past.
+
+    Without this, "the scan covers proof" would rest on a tuple literal that
+    nothing checks - which is exactly how ``PACKAGE_F_DIRS`` came to exclude
+    the package that mattered.
+    """
+    scanned = _registry_sources(api_source_root)
+    proof_files = [path for path in scanned if path.parent.name == "proof"]
+
+    assert len(proof_files) >= 4, proof_files
+    assert {"service.py", "bundle.py"} <= {path.name for path in proof_files}
+
+    planted_dir = tmp_path / "station_api" / "proof"
+    planted_dir.mkdir(parents=True)
+    for name in ("modules", "tasks"):
+        (tmp_path / "station_api" / name).mkdir(parents=True)
+    (planted_dir / "planted.py").write_text(
+        "import importlib\n"
+        "import httpx\n"
+        "from station_api.vault.service import VaultService\n"
+        "loader = importlib.import_module\n",
+        encoding="utf-8",
+    )
+
+    dynamic = _dynamic_loading_offenders(
+        (planted_dir / "planted.py").read_text(encoding="utf-8"), "planted.py"
+    )
+    assert dynamic != [], "the dynamic-loading scan cannot see a planted loader"
+    assert _outbound_offenders(tmp_path) != []
+    assert _secret_boundary_offenders(tmp_path) != []
 
 
 def test_the_task_gate_reuses_the_write_gates_check_state(

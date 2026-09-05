@@ -415,6 +415,16 @@ function jsonOk(body: unknown): Promise<Response> {
   );
 }
 
+//: TEST-ONLY. An empty task list: this fixture opens no tasks, so the proof
+//: workspace has nothing to build a bundle for and says so.
+const EMPTY_TASK_LIST = {
+  tasks: [],
+  task_count: 0,
+  producible_states: [],
+  unproducible_states: [],
+  unproducible_detail: "TEST-ONLY: uretilemeyen durum yok.",
+};
+
 function stubIdentity(
   status: IdentityStatus,
   conformance: ConformanceStatus | null = CONFORMANT,
@@ -487,6 +497,16 @@ function stubIdentity(
             headers: { "Content-Type": "application/json" },
           }),
         );
+      }
+
+      // Paket H3: the Kanitlar page now mounts the proof workspace beside the
+      // ledger, and that panel reads the task list on mount. The branch is
+      // added because the page really did gain a second read - not to quieten
+      // anything: an empty list is the honest answer for a fixture with no
+      // tasks, and it is what puts the "no task to build a bundle for" empty
+      // state on screen instead of a crash.
+      if (url.endsWith("/api/tasks")) {
+        return jsonOk(EMPTY_TASK_LIST);
       }
 
       if (url.includes("/api/session/bootstrap")) {

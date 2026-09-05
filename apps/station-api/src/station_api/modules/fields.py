@@ -11,11 +11,28 @@ their conjunction cannot recover which of them was actually established.
 * ``user_acceptance`` a person looked at it and accepted it.
 * ``public_share``    the proof was shared outside this machine.
 
-The fourth is **always empty in this release**. External sharing is Package
-H3's subject and it asks for its own single-use consent there; F opens the
-field and never fills it (ADR-0004 4). A field that is defined but unfillable
-is stated as unfillable rather than left looking available - the same rule
-that keeps ``external_anchor`` written as ``null`` instead of omitted.
+The fourth was **always empty** until Package H3. F opened the field and never
+filled it, and stated the emptiness rather than leaving it to be inferred -
+the same rule that keeps ``external_anchor`` written as ``null`` instead of
+omitted (ADR-0004 4).
+
+H3 fills it, under the condition ADR-0009 1 sets: ``public_share`` accepts a
+pointer **only** when that pointer is the identity of a real evidence record,
+so the sentence "the proof was shared" always rests on a send that actually
+happened. A hand-written string is refused by :class:`EvidenceRef`'s own
+constructor.
+
+``PUBLICATION_FIELDS`` stays at three. Moving ``public_share`` into it would
+mean no task could ever be finished without publishing it externally, which
+ADR-0004 4 rejected on purpose and ADR-0009 1 keeps rejecting.
+
+:data:`UNFILLABLE_FIELDS` is empty as a result, and is written out as an empty
+set rather than deleted. It is the oracle for "this release closes nothing",
+and the four branches that consult it are the refusal machinery a later
+package relies on the day it defines a fifth field it cannot fill. Those
+branches are **driven** under a temporarily closed field rather than left to
+rot unexecuted (ADR-0009 2) - an empty set nothing ever iterates is how a
+guard stops being one without anybody noticing.
 
 Nothing here is a claim about the evidence itself. An :class:`EvidenceRef` is
 a *pointer plus a verdict about that pointer*: it carries ``verified``, which
@@ -25,6 +42,7 @@ or a build output can never be mistaken for success on its own.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -54,9 +72,10 @@ FIELD_DETAIL: dict[EvidenceField, str] = {
         "kabul bir kisinin eylemidir."
     ),
     EvidenceField.PUBLIC_SHARE: (
-        "Kanitin bu makinenin disinda paylasilmasi. Bu surumde alan daima "
-        "bostur: dis paylasim Paket H3'un konusudur ve orada ayri, tek "
-        "kullanimlik bir onay ister."
+        "Kanitin bu makinenin disinda paylasilmasi. Alan doldurulabilir, "
+        "fakat yalnizca gerceklesmis bir gonderimin kanit kaydi kimligiyle: "
+        "elle yazilan bir dize kabul edilmez. Bu alan bir gorevin bitmesi icin "
+        "aranmaz; yayimlamadan da bir gorev tamamlanabilir."
     ),
 }
 
@@ -75,9 +94,61 @@ PUBLICATION_FIELDS: frozenset[EvidenceField] = frozenset(
     }
 )
 
-#: Fields no code path in this release can fill. Named so that opening one is
-#: a deliberate edit here rather than an accident somewhere else.
-UNFILLABLE_FIELDS: frozenset[EvidenceField] = frozenset({EvidenceField.PUBLIC_SHARE})
+#: Fields no code path in this release can fill. **Empty since Package H3**,
+#: and written out as an empty set rather than removed.
+#:
+#: Emptying it is the deliberate half of ADR-0009 1, exactly as emptying
+#: ``UNPRODUCIBLE_STATES`` was the deliberate half of ADR-0008 3. The constant
+#: stays because **five** branches consult it - the task gate, the task
+#: service's row reader, the module completion check, the constructor below,
+#: and :func:`station_api.tasks.views.to_task_status`, which derives what the
+#: wire says about ``public_share`` from it. The first four are the refusal
+#: machinery; the fifth is the *report* of it, and it is counted here because
+#: a report that drifts from the rule is how a user learns a field is
+#: available after the rule closed it. A package that defines a sixth field it
+#: cannot fill edits this one line and gets all five back; deleting the
+#: constant would mean writing them again from memory.
+#:
+#: The count was four until an adversarial review of H3 measured it. Mutating
+#: ``to_task_status``'s derivation to a hard-coded ``True`` killed nothing -
+#: the two tests that claimed "the wire and the rule cannot drift apart" both
+#: passed against a fixed literal - so the fifth reader is now named here and
+#: driven like the other four.
+#:
+#: The branches are not left unexecuted. ``tests/security`` closes one
+#: genuinely fillable field for the duration of a test and drives each of the
+#: five, having first checked that the same path is *permitted* with nothing
+#: closed - without that first half a function that refused everything would
+#: pass the second half too (ADR-0009 2).
+UNFILLABLE_FIELDS: frozenset[EvidenceField] = frozenset()
+
+#: The number of characters in an evidence-record identity: ``uuid4().hex``.
+EVIDENCE_RECORD_ID_CHARS = 32
+
+#: The shape of that identity, written here rather than imported.
+#:
+#: This module is inside ``station_api.modules``, which
+#: ``test_no_module_record_moved_code_into_the_registry_package`` forbids from
+#: importing ``station_api.evidence`` at all - the registry holds records, not
+#: responsibilities. So the *shape* is checked here and the *existence* of the
+#: row is checked where a database is at hand, in
+#: :meth:`station_api.tasks.service.TaskService.record_evidence`. Two
+#: independent refusals, and neither is the whole claim alone: the shape would
+#: admit any thirty-two hex characters, and the existence check sits behind a
+#: service whose other callers would have to remember it.
+_EVIDENCE_RECORD_ID_RE = re.compile(rf"\A[0-9a-f]{{{EVIDENCE_RECORD_ID_CHARS}}}\Z")
+
+
+def is_evidence_record_id(value: str) -> bool:
+    """Whether ``value`` has the shape an evidence record's id has.
+
+    Lower-case hex, exactly thirty-two characters, nothing else.
+    ``uuid.uuid4().hex`` produces nothing else either, so an upper-case
+    spelling, a truncated id or a sentence somebody typed is refused rather
+    than normalised - normalising a pointer is how a pointer to nothing
+    acquires a plausible shape.
+    """
+    return _EVIDENCE_RECORD_ID_RE.fullmatch(value) is not None
 
 
 class EvidenceFieldError(Exception):
@@ -118,6 +189,20 @@ class EvidenceRef:
             )
         if not self.ref_id:
             raise EvidenceFieldError("Kanit isaretcisi bos olamaz.")
+        if self.field is EvidenceField.PUBLIC_SHARE and not is_evidence_record_id(
+            self.ref_id
+        ):
+            # ADR-0009 1. The field is fillable, and this is the condition it
+            # is fillable under: the pointer has to be an evidence record's own
+            # identity, so "the proof was shared" always rests on a send that
+            # actually happened. A sentence somebody typed has the wrong shape
+            # and stops here - in the constructor, where every caller passes -
+            # rather than at whichever caller remembered to check.
+            raise EvidenceFieldError(
+                "Dis paylasim yalnizca gerceklesmis bir gonderimin kanit "
+                "kaydi kimligiyle isaretlenebilir; elle yazilan bir dize "
+                "kabul edilmez."
+            )
         if not self.source_version_id:
             raise EvidenceFieldError(
                 "Kanit bir icerik surumune baglanmadan kaydedilemez."
@@ -125,10 +210,12 @@ class EvidenceRef:
 
 
 __all__ = [
+    "EVIDENCE_RECORD_ID_CHARS",
     "FIELD_DETAIL",
     "PUBLICATION_FIELDS",
     "UNFILLABLE_FIELDS",
     "EvidenceField",
     "EvidenceFieldError",
     "EvidenceRef",
+    "is_evidence_record_id",
 ]

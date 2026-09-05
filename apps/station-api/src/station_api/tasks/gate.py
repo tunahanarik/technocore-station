@@ -15,12 +15,23 @@ mode ADR-0004 2 named: two gates that agree today and drift quietly.
 
 Why ``public_share`` does not block
 -----------------------------------
-It is always ``not_implemented``, and it is deliberately **not** one of
+It is deliberately **not** one of
 :data:`~station_api.modules.fields.PUBLICATION_FIELDS`. Making it a
 precondition would mean no task could ever be finished without publishing it
 externally, which inverts the property this product wants. It is reported at
 full volume instead, so a reader is never told a task is finished *and* left
 to assume its proof went somewhere.
+
+This paragraph used to open "it is always ``not_implemented``", and Package H3
+changed that fact rather than the sentence (ADR-0009 1): the field is fillable
+now, so it reports ``blocked`` until a real send is recorded against it and
+``passed`` afterwards. The reason it does not gate publication is unchanged
+and is the reason above, which never depended on the field being empty.
+
+The ``UNFILLABLE_FIELDS`` branch below is therefore not taken by any field in
+this build. It stays because it is the refusal a later closed field would rely
+on, and ``tests/security`` drives it under a temporarily closed field rather
+than leaving it to rot (ADR-0009 2).
 """
 
 from __future__ import annotations

@@ -13,7 +13,11 @@ file copies values and reads enum members' string spellings.
 from __future__ import annotations
 
 from station_api.modules.completion import ModuleCompletion
-from station_api.modules.fields import FIELD_DETAIL, EvidenceField
+from station_api.modules.fields import (
+    FIELD_DETAIL,
+    UNFILLABLE_FIELDS,
+    EvidenceField,
+)
 from station_api.modules.registry import ModuleRecord
 from station_api.schemas import (
     ModuleCheckStatus,
@@ -122,6 +126,12 @@ def to_task_status(view: TaskView, status: TaskGateStatus) -> TaskStatusResponse
         ],
         ready_to_publish=status.ready_to_publish,
         blocking_fields=list(status.blocking_fields),
+        # Derived from the constant rather than written out. It was a
+        # hard-coded ``False`` on the model until Package H3 made the field
+        # fillable, and a second hard-coded value would have been a claim with
+        # no link to the fact - the mistake ``arbitrary_execution_supported``
+        # was fixed for one package earlier.
+        public_share_available=EvidenceField.PUBLIC_SHARE not in UNFILLABLE_FIELDS,
         public_share_detail=FIELD_DETAIL[EvidenceField.PUBLIC_SHARE],
         budget_detail=BUDGET_DETAIL,
     )

@@ -154,14 +154,20 @@ const TASK: TaskStatusResponse = {
     {
       evidence_field: "public_share",
       state: "blocked",
-      detail: "TEST-ONLY: Dis paylasim bu surumde acilmadi.",
+      detail: "TEST-ONLY: Dis paylasim isareti henuz konmadi.",
       ref_id: "",
     },
   ],
   ready_to_publish: false,
   blocking_fields: ["task_outcome", "test_result", "user_acceptance"],
-  public_share_available: false,
-  public_share_detail: "TEST-ONLY: Dis paylasim Paket H3'un konusudur ve kendi tek seferlik onayini ister.",
+  // Paket H3 opened this field, so the wire carries `true` here now. The
+  // fixture is updated because the backend changed, not to make anything
+  // pass: `UNFILLABLE_FIELDS` is empty and the response derives this value
+  // from it (ADR-0009 1). A fixture still saying `false` would be describing
+  // the release before this one while looking perfectly correct.
+  public_share_available: true,
+  public_share_detail:
+    "TEST-ONLY: Dis paylasim yalnizca arsivlenmis bir gonderime baglanabilir ve yayimi belirleyen uc alandan biri degildir.",
   budget_available: false,
   budget_detail: "TEST-ONLY: Gorev katmaninda butce alani yoktur; tavan calismanin kendisine aittir.",
 };
@@ -258,6 +264,132 @@ const LIST: TaskListResponse = {
     "TEST-ONLY: Bu surumde uretilemeyen durum yoktur; liste bos ve yeni bir durum once burada reddedilmis olarak gorunur.",
 };
 
+//: TEST-ONLY. The proof workspace for this task, as the acceptance surface
+//: reads it. The bundle digest is a full 64-hex run on purpose, so the
+//: "never render a seed-shaped value" rule is tested against the component's
+//: shortening rather than against a pre-trimmed fixture.
+const BUNDLE_SHA = "ef".repeat(32);
+
+const PROOF_HASH_SCOPE =
+  "TEST-ONLY: Bir SHA-256 ozeti yalnizca dosyanin bayt bakimindan ayni kaldigini tanimlar; icerigin dogrulugu hakkinda hicbir sey soylemez.";
+
+const PROOF = {
+  task: TASK,
+  module: {
+    id: "agent_workspace",
+    name: "Agent calisma alani",
+    purpose: "TEST-ONLY: bir gorevin calisma alani.",
+    state: "available",
+    available_from: "",
+    owners: ["station_api.agent.service"],
+    checks: [],
+    complete: false,
+    blocking_keys: [],
+    not_implemented_keys: [],
+  },
+  artifacts: [{ name: "rapor.md", byte_count: 812, sha256: "cd".repeat(32) }],
+  file_count: 1,
+  total_bytes: 812,
+  artifact_set_sha256: "ab".repeat(32),
+  bundle_sha256: BUNDLE_SHA,
+  missing: [
+    {
+      key: "evidence.test_result",
+      state: "not_implemented",
+      detail: TEST_RESULT_DETAIL,
+    },
+  ],
+  claims: [
+    {
+      key: "independent_check",
+      state: "not_implemented",
+      detail: "TEST-ONLY: Bagimsiz kontrol bu surumde uygulanmadi.",
+    },
+    {
+      key: "exit_code",
+      state: "not_implemented",
+      detail: "TEST-ONLY: Gercek bir cikis kodu uretilmedi.",
+    },
+    { key: "test_result", state: "not_implemented", detail: TEST_RESULT_DETAIL },
+  ],
+  formats: ["json", "markdown"],
+  hash_scope: PROOF_HASH_SCOPE,
+  bundle_scope: "TEST-ONLY: Paket hicbir yola yazilmaz; tarayiciya teslim edilir.",
+  reproduction: "TEST-ONLY: Yeniden uretmek icin ozetleri kendi kopyanizla karsilastirin.",
+  approval_ttl_seconds: 180,
+};
+
+//: TEST-ONLY. Two archived sends whose outcomes differ, because the whole
+//: point of the fourth field is that "archived" and "verified" are not the
+//: same thing. A fixture with one `accepted` row could not show that.
+const ACCEPTED_SEND_ID = "11223344556677889900aabbccddeeff";
+const UNKNOWN_SEND_ID = "ffeeddccbbaa00998877665544332211";
+
+const ARCHIVE = {
+  records: [
+    {
+      id: ACCEPTED_SEND_ID,
+      reservation_id: "res-test-only-1",
+      room: "test-only-room",
+      did: "did:key:z6MkTESTONLYFIXTURE",
+      nonce: "424242",
+      canonical_sha256: "ab".repeat(32),
+      signature: "TESTONLYSIGNATUREVALUE",
+      http_status: 200,
+      write_outcome: "accepted",
+      capture_state: "",
+      capture_detail: "",
+      captured_at: null,
+      room_generation: "1",
+      capture_generation: "",
+      generation_changed: false,
+      captured_line_offset: null,
+      captured_line_length: null,
+      stream_sha256: "",
+      stream_bytes: 0,
+      stream_truncated: false,
+      unreadable_lines: 0,
+      request_sha256: "cd".repeat(32),
+      response_sha256: "ef".repeat(32),
+      recorded_at: "2026-09-05T09:10:00Z",
+      external_anchor: null,
+      levels: [],
+    },
+    {
+      id: UNKNOWN_SEND_ID,
+      reservation_id: "res-test-only-2",
+      room: "test-only-room-two",
+      did: "did:key:z6MkTESTONLYFIXTURE",
+      nonce: "434343",
+      canonical_sha256: "ba".repeat(32),
+      signature: "TESTONLYSIGNATUREVALUE",
+      http_status: 0,
+      write_outcome: "outcome_unknown",
+      capture_state: "",
+      capture_detail: "",
+      captured_at: null,
+      room_generation: "1",
+      capture_generation: "",
+      generation_changed: false,
+      captured_line_offset: null,
+      captured_line_length: null,
+      stream_sha256: "",
+      stream_bytes: 0,
+      stream_truncated: false,
+      unreadable_lines: 0,
+      request_sha256: "dc".repeat(32),
+      response_sha256: "fe".repeat(32),
+      recorded_at: "2026-09-05T09:11:00Z",
+      external_anchor: null,
+      levels: [],
+    },
+  ],
+  record_count: 2,
+  chain_state: "intact",
+  chain_detail: "TEST-ONLY: zincir tutarli.",
+  chain_link_count: 2,
+};
+
 function runsFor(runs: readonly AgentRunStatus[]): AgentTaskRunsResponse {
   return {
     task: TASK,
@@ -291,6 +423,10 @@ function stub(
   options: {
     readonly sent?: Recorded[];
     readonly onPost?: (url: string, body: unknown) => Response | null;
+    readonly proof?: unknown;
+    readonly archive?: unknown;
+    /** Keeps every answered POST pending until it resolves. */
+    readonly hold?: Promise<void>;
   } = {},
 ): ReturnType<typeof vi.fn> {
   const mock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -305,11 +441,28 @@ function stub(
         typeof init.body === "string" ? (JSON.parse(init.body) as unknown) : null;
       options.sent?.push({ url, body });
       const answer = options.onPost?.(url, body);
-      if (answer !== null && answer !== undefined) return Promise.resolve(answer);
+      if (answer !== null && answer !== undefined) {
+        // `hold` keeps the response pending, which is the only way to
+        // observe an in-flight guard: a mock that answers immediately makes
+        // every second activation land *after* the first one finished, and a
+        // double-activation test written against it passes whether the guard
+        // exists or not.
+        return options.hold === undefined
+          ? Promise.resolve(answer)
+          : options.hold.then(() => answer);
+      }
     }
     if (url === "/api/tasks/surface") return Promise.resolve(jsonOk(SURFACE));
     if (url === "/api/tasks") return Promise.resolve(jsonOk(LIST));
     if (url === `/api/tasks/${TASK.id}/runs`) return Promise.resolve(jsonOk(runs));
+    // Paket H3. Both are reads behind a button, never on mount - which is
+    // why the "exactly two mount reads" assertion above still holds.
+    if (url === `/api/proof/${TASK.id}`) {
+      return Promise.resolve(jsonOk(options.proof ?? PROOF));
+    }
+    if (url === "/api/evidence/records") {
+      return Promise.resolve(jsonOk(options.archive ?? ARCHIVE));
+    }
     return Promise.resolve(jsonOk({ detail: "not_found" }, 404));
   });
   vi.stubGlobal("fetch", mock);
@@ -787,5 +940,262 @@ describe("Gorevler: approval and control", () => {
     ]);
     expect(payload["section"]).toBe("Gorevler");
     expect(payload["code"]).toBe("http_409");
+  });
+});
+
+describe("Gorevler: kabul gecisin girdisidir", () => {
+  it("offers no acceptance control until the bundle has actually been read", async () => {
+    const sent: Recorded[] = [];
+    stub(runsFor([PLANNED_RUN]), { sent });
+    const user = userEvent.setup();
+    await bootstrapSession();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    expect(screen.getByTestId("tasks-acceptance-unread")).toHaveTextContent(
+      "Okunmamis bir paket kabul edilemez",
+    );
+    expect(screen.queryByRole("button", { name: /Kabulumu kaydet/ })).toBeNull();
+    expect(
+      sent.filter((entry) => entry.url.includes("/acceptance")),
+      "nothing may be accepted before it is read",
+    ).toEqual([]);
+  });
+
+  it("shows the digest, the named gaps and the hash sentence beside the tick", async () => {
+    stub(runsFor([PLANNED_RUN]));
+    const user = userEvent.setup();
+    await bootstrapSession();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.click(screen.getByRole("button", { name: /Kabul edilecek paketi oku/ }));
+    await screen.findByTestId("tasks-acceptance-digest");
+
+    // Twelve characters, never the whole 64-hex run.
+    expect(screen.getByTestId("tasks-acceptance-digest")).toHaveTextContent("efefefefefef");
+    expect(document.body.textContent ?? "").not.toMatch(/\b[0-9a-fA-F]{64}\b/);
+
+    // The gap is named while the tick is being given, not summarised.
+    expect(screen.getByTestId("tasks-acceptance-missing")).toHaveTextContent(
+      "evidence.test_result",
+    );
+    // And the backend's own sentence about what a digest establishes is
+    // beside it, rather than a second version written here.
+    expect(screen.getByTestId("tasks-acceptance-hash-scope")).toHaveTextContent(
+      PROOF_HASH_SCOPE,
+    );
+  });
+
+  it("sends the digest of the bundle that was read, and nothing else", async () => {
+    const sent: Recorded[] = [];
+    stub(runsFor([PLANNED_RUN]), {
+      sent,
+      onPost: (url) => (url.endsWith("/acceptance") ? jsonOk(PROOF) : null),
+    });
+    const user = userEvent.setup();
+    await bootstrapSession();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.click(screen.getByRole("button", { name: /Kabul edilecek paketi oku/ }));
+    await screen.findByTestId("tasks-acceptance-digest");
+
+    const accept = screen.getByRole("button", { name: /Kabulumu kaydet/ });
+    expect(accept, "an unread bundle may not be accepted by an untouched tick").toBeDisabled();
+
+    await user.click(
+      screen.getByRole("checkbox", { name: /Bu paketi okudum/ }),
+    );
+    expect(accept).toBeEnabled();
+    await user.click(accept);
+
+    await waitFor(() => {
+      expect(sent.filter((entry) => entry.url.endsWith("/acceptance"))).toHaveLength(1);
+    });
+    const body = sent.find((entry) => entry.url.endsWith("/acceptance"))?.body as Record<
+      string,
+      unknown
+    >;
+    expect(body.bundle_sha256).toBe(BUNDLE_SHA);
+    // Two keys and no third: there is no state, no transition and no target
+    // in this request, because acceptance is not a transition (SI-222).
+    expect(Object.keys(body).sort()).toEqual(["bundle_sha256", "detail"]);
+  });
+
+  it("records the acceptance without moving the task, and says the state did not move", async () => {
+    const sent: Recorded[] = [];
+    stub(runsFor([PLANNED_RUN]), {
+      sent,
+      onPost: (url) => (url.endsWith("/acceptance") ? jsonOk(PROOF) : null),
+    });
+    const user = userEvent.setup();
+    await bootstrapSession();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.click(screen.getByRole("button", { name: /Kabul edilecek paketi oku/ }));
+    await screen.findByTestId("tasks-acceptance-digest");
+    await user.click(screen.getByRole("checkbox", { name: /Bu paketi okudum/ }));
+    await user.click(screen.getByRole("button", { name: /Kabulumu kaydet/ }));
+
+    const note = await screen.findByTestId("tasks-acceptance-no-transition");
+    // The state before and the state after are both on screen and they are
+    // the same one. Saying "kabul edildi" alone would leave a reader to
+    // assume the task advanced.
+    expect(note).toHaveTextContent("kabulden once 'Onay bekliyor' idi");
+    expect(note).toHaveTextContent("simdi 'Onay bekliyor'");
+
+    // No transition request was made as a side effect of the acceptance.
+    expect(
+      sent.filter((entry) => entry.url.endsWith("/state")),
+      "acceptance must not move the task",
+    ).toEqual([]);
+    expect(screen.getByTestId("tasks-publish-state")).toHaveTextContent("Yayima hazir degil");
+  });
+
+  it("starts no second acceptance while the first one is still in flight", async () => {
+    const sent: Recorded[] = [];
+    let release = (): void => {};
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    stub(runsFor([PLANNED_RUN]), {
+      sent,
+      hold,
+      onPost: (url) => (url.endsWith("/acceptance") ? jsonOk(PROOF) : null),
+    });
+    const user = userEvent.setup();
+    await bootstrapSession();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.click(screen.getByRole("button", { name: /Kabul edilecek paketi oku/ }));
+    await screen.findByTestId("tasks-acceptance-digest");
+    await user.click(screen.getByRole("checkbox", { name: /Bu paketi okudum/ }));
+
+    // Both activations happen while the request is still open. The
+    // double-activation rule (ui-action-map 1.4) is what has to stop the
+    // second one; the post-success reset cannot, because it has not run.
+    const accept = screen.getByRole("button", { name: /Kabulumu kaydet/ });
+    await user.click(accept);
+    await user.click(accept);
+    expect(sent.filter((entry) => entry.url.endsWith("/acceptance"))).toHaveLength(1);
+
+    release();
+    await waitFor(() => {
+      expect(screen.getByTestId("tasks-acceptance-no-transition")).toBeInTheDocument();
+    });
+    expect(sent.filter((entry) => entry.url.endsWith("/acceptance"))).toHaveLength(1);
+  });
+
+  it("says the publish-ready state cannot be asked for, and offers no control that would", async () => {
+    stub(runsFor([PLANNED_RUN]));
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    expect(screen.getByTestId("tasks-publish-unreachable")).toHaveTextContent(
+      "tasiyan bir kullanici yolu bu surumde yoktur",
+    );
+    // The five user transitions, and `ready_to_publish` is not among them.
+    const labels = screen
+      .getAllByRole("button")
+      .map((element) => element.textContent ?? "");
+    expect(labels.filter((label) => /yayima hazir/i.test(label))).toEqual([]);
+  });
+});
+
+describe("Gorevler: the fourth field points at an archived send", () => {
+  it("states that it sends nothing and that archived is not verified", async () => {
+    stub(runsFor([PLANNED_RUN]));
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    expect(screen.getByTestId("tasks-public-share-no-send")).toHaveTextContent(
+      "hicbir sey gondermez ve gonderemez",
+    );
+    expect(screen.getByTestId("tasks-public-share-verification-rule")).toHaveTextContent(
+      "Arsivlenmis olmak dogrulanmis olmak degildir",
+    );
+    expect(screen.getByTestId("tasks-public-share-not-required")).toHaveTextContent(
+      "hic paylasilmadan da tamamlanabilir",
+    );
+  });
+
+  it("keeps an accepted send and an unknown one apart in the list", async () => {
+    stub(runsFor([PLANNED_RUN]));
+    const user = userEvent.setup();
+    await bootstrapSession();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.click(
+      screen.getByRole("button", { name: /Arsivlenmis gonderimleri listele/ }),
+    );
+    await screen.findByTestId("tasks-public-share-archive");
+
+    const accepted = screen.getByTestId(`tasks-archived-send-${ACCEPTED_SEND_ID}`);
+    const unknown = screen.getByTestId(`tasks-archived-send-${UNKNOWN_SEND_ID}`);
+
+    expect(accepted).toHaveTextContent("Kabul edildi");
+    expect(accepted).toHaveTextContent("dogrulanmis olarak kaydedilir");
+
+    // The unknown outcome is recorded and *not* verified, and the row says
+    // exactly that rather than flattening to "paylasildi".
+    expect(unknown).toHaveTextContent("Sonuc bilinmiyor");
+    expect(unknown).toHaveTextContent("kaydedilir, dogrulanmis sayilmaz");
+    expect(unknown.textContent ?? "", "an unknown outcome may not carry a success glyph")
+      .not.toContain("✓");
+  });
+
+  it("sends an evidence identity and nothing that could reach a write client", async () => {
+    const sent: Recorded[] = [];
+    stub(runsFor([PLANNED_RUN]), {
+      sent,
+      onPost: (url) => (url.endsWith("/public-share") ? jsonOk(PROOF) : null),
+    });
+    const user = userEvent.setup();
+    await bootstrapSession();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.click(
+      screen.getByRole("button", { name: /Arsivlenmis gonderimleri listele/ }),
+    );
+    await screen.findByTestId("tasks-public-share-archive");
+
+    const mark = screen.getByRole("button", { name: /Bu gonderimi bu goreve isaretle/ });
+    expect(mark, "nothing may be marked before a record is chosen").toBeDisabled();
+
+    await user.click(
+      within(screen.getByTestId(`tasks-archived-send-${UNKNOWN_SEND_ID}`)).getByRole("radio"),
+    );
+    await user.click(mark);
+
+    await waitFor(() => {
+      expect(sent.filter((entry) => entry.url.endsWith("/public-share"))).toHaveLength(1);
+    });
+    const body = sent.find((entry) => entry.url.endsWith("/public-share"))?.body as Record<
+      string,
+      unknown
+    >;
+    expect(body.evidence_id).toBe(UNKNOWN_SEND_ID);
+    // Two keys and no third. No room, no address, no text: there is no shape
+    // in this request that an outbound client could be reached with.
+    expect(Object.keys(body).sort()).toEqual(["detail", "evidence_id"]);
+    for (const key of ["room", "url", "path", "text", "message", "did"]) {
+      expect(body, `the request may not carry ${key}`).not.toHaveProperty(key);
+    }
   });
 });

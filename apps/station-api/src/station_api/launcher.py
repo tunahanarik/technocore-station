@@ -64,7 +64,7 @@ def main() -> int:
     settings = load_settings()
     settings.ensure_data_dir()
 
-    engine = initialise_database(settings.database_path, stage=8)
+    engine = initialise_database(settings.database_path, stage=9)
     sock, port = reserve_loopback_socket(settings)
 
     app = create_app(
