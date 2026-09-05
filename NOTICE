@@ -8,9 +8,10 @@ LICENSE MAP
 ================================================================================
 
 The following table states, per directory, which license applies. There is no
-other third-party source vendored into this repository. The DISTRIBUTED
-WINDOWS BUNDLE is a different question and is answered further down, under
-"packaging/artifacts/".
+other third-party source vendored into this repository. packaging/ holds only
+this project's own build scripts (build_bundle.py, station.spec); its output
+directory packaging/artifacts/ is untracked and is a different question,
+answered further down.
 
   PATH                          LICENSE       COPYRIGHT
   ----------------------------  ------------  --------------------------------
@@ -19,6 +20,7 @@ WINDOWS BUNDLE is a different question and is answered further down, under
   packages/technocore-conform/  MIT           Technocore Station contributors
   tests/                        MIT           Technocore Station contributors
   docs/                         MIT           Technocore Station contributors
+  packaging/                    MIT           Technocore Station contributors
   vendor/technocore-reference/  Apache-2.0    Copyright 2026 FLOP Labs
 
 ================================================================================

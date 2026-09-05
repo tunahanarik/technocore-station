@@ -98,7 +98,7 @@ DYNAMIC_LOADING_FUNCTIONS = (
 #: rather than imported: the number says which release the file on disk was
 #: written for, and a constant that derived it from one of the call sites
 #: would agree with whichever one drifted (F-10).
-CURRENT_SCHEMA_STAGE = 10
+CURRENT_SCHEMA_STAGE = 11
 
 #: Proje 0's completion outputs, charter 7.2, in charter order. Written out
 #: here rather than imported so a silent reordering or deletion in the

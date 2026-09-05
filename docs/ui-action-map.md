@@ -3,7 +3,8 @@
 > Paket C çıktısı; Paket D ile "Oluştur ve Doğrula" bölümü (§5), Paket E ile
 > "Kanıtlar" bölümü (§7), Paket G ile "Ayarlar ve Yardım" bölümü (§8), Paket
 > H1 ile "Is Tara" bölümü (§12), Paket H2 ile "Gorevler" (§13) ve "Aktivite"
-> (§14) bölümleri dolduruldu.
+> (§14) bölümleri dolduruldu; Paket H3 "Kanıt çalışma alanı" bölümünü (§15)
+> ekledi. Dokuz bölümün dokuzu bu belgede kayıtlıdır.
 > Sol menülü dashboard kabuğundaki **her** etkileşimin sözleşmesi: önkoşul,
 > çağrılan işlev, loading/success/error/timeout/iptal davranışı ve otomatik
 > test kimliği.

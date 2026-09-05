@@ -57,8 +57,9 @@ biri DPAPI nedeniyle hiçbir şey elde edemez; bu Windows kullanıcısı olarak
 çalışan biri ise Argon2id ile karşılaşır.
 
 **Parola ne zaman sorulur?** Uygulama açılışında değil, yalnız secret kullanan
-işlemlerde: recovery dosyası üretimi ve (Aşama 4'te) imzalama. Salt okunur
-kullanımda sürtünme yoktur.
+işlemlerde: recovery dosyası üretimi ve imzalama. İmzalama Paket D ile
+geldi; parola imzalama çağrısı boyunca redaksiyon registry'sindedir ve çağrı
+bitince düşürülür (SI-162). Salt okunur kullanımda sürtünme yoktur.
 
 Parola politikası: **en az 16 karakter**, en fazla 1024 UTF-8 baytı. Yapay
 büyük/küçük/sembol kuralı yoktur — bu kurallar tahmin edilebilir kalıplara
@@ -150,19 +151,34 @@ Merkezî `WriteGate` (`identity/write_gate.py`) saf bir fonksiyondur ve tüm dı
 yazmaların tek kapısıdır. Override bayrağı, ortam değişkeni veya debug
 bypass'ı **yoktur**.
 
-| Kontrol | Aşama | Bugün |
-|---|---:|---|
-| `identity_present` | 2 | uygulanıyor |
-| `identity_not_revoked` | 2 | uygulanıyor |
-| `vault_present` | 2 | uygulanıyor |
-| `recovery_verified` | 2 | uygulanıyor |
-| `conformance_verified` | 4 | **`not_implemented`** |
-| `manifest_current` | 4 | **`not_implemented`** |
+Kapı **altı** kontrol sayar. Aşama sütunu `write_gate.py`'deki
+`IDENTITY_STAGE` / `CONFORMANCE_STAGE` / `MANIFEST_STAGE` sabitleridir ve
+sayı değil **metindir** — yol haritasında `2B` diye bir aşama var ve bir
+tamsayı onu adlandıramıyor.
 
-Uygulanmamış bir gereksinim **asla geçmiş sayılmaz**. Bu yüzden tamamen
-kurtarılmış bir kimlikte bile `allowed = False` döner: doğrulanmış bir
-canonicalization motoru olmadan imza üretmek, sunucunun sakladığı baytlarla
-eşleşmeyen bir kayıt üretebilir.
+| Kontrol | Aşama | Bugünkü durum |
+|---|---|---|
+| `identity_present` | 2 | `PASSED` / `BLOCKED` |
+| `identity_not_revoked` | 2 | `PASSED` / `BLOCKED` |
+| `vault_present` | 2 | `PASSED` / `BLOCKED` |
+| `recovery_verified` | 2 | `PASSED` / `BLOCKED` |
+| `conformance_verified` | 2B | `PASSED` / `BLOCKED` |
+| `manifest_current` | 3 | `PASSED` / `BLOCKED` |
+
+**Bu tablo Paket J'de koda karşı denetlenerek düzeltildi (ADR-0011 §9).**
+Eski hâli `conformance_verified` ve `manifest_current` için "Aşama 4 /
+`not_implemented`" diyordu; ikisini Aşama 2B ve Aşama 3 gerçekledi ve
+`evaluate` bugün **hiçbir kontrolü** `NOT_IMPLEMENTED` durumunda
+üretmiyor — altı `GateCheck`'in altısı da `PASSED` ya da `BLOCKED`.
+`CheckState.NOT_IMPLEMENTED` üyesi **duruyor**: kaldırılırsa "yapılmadı"
+diyemeyen bir kapı onu er geç "geçti" diye söyler
+(`test_write_gate.py::test_unimplemented_requirements_are_never_counted_as_passed`,
+`::test_each_check_names_the_stage_that_delivers_it`).
+
+Uygulanmamış bir gereksinim **asla geçmiş sayılmaz** ve altı kontrolün
+**hepsi** geçmeden `allowed` doğru olmaz
+(`::test_every_precondition_together_opens_the_gate`,
+`::test_no_check_can_be_bypassed_by_a_flag`).
 
 `identity_ready` alanı Aşama 2 yarısının tamamlandığını ayrıca bildirir.
 

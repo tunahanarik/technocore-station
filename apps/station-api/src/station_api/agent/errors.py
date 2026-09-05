@@ -36,10 +36,6 @@ class WorkspaceError(AgentError):
     """A workspace path, name or ceiling was refused."""
 
 
-class BudgetError(AgentError):
-    """The run's ceiling was reached, or a ceiling was asked to move."""
-
-
 class RunError(AgentError):
     """A run operation was refused: wrong phase, missing plan, stopped."""
 
@@ -51,7 +47,6 @@ class ActivityError(AgentError):
 __all__ = [
     "ActivityError",
     "AgentError",
-    "BudgetError",
     "RunError",
     "ToolArgumentError",
     "ToolRegistryError",

@@ -23,7 +23,21 @@ geçerlidir. Türetilmiş belgeler:
 | [`docs/security-invariants.md`](docs/security-invariants.md) | Test edilebilir güvenlik değişmezleri |
 | [`docs/evidence-model.md`](docs/evidence-model.md) | Dört seviyeli kanıt güven modeli |
 | [`docs/task-modules.md`](docs/task-modules.md) | Derleme zamanı modül registry'si, dokuz görev durumu, dört kanıt alanı |
-| [`docs/decisions/README.md`](docs/decisions/README.md) | ADR indeksi |
+| [`docs/identity-lifecycle.md`](docs/identity-lifecycle.md) | DID/seed yaşam döngüsü, DPAPI kasası, write gate ön koşulları |
+| [`docs/recovery-format-v1.md`](docs/recovery-format-v1.md) | `.tcrec` kurtarma dosyası biçimi ve KDF politikası |
+| [`docs/threat-model.md`](docs/threat-model.md) | Tehdit modeli ve savunulmayan durumlar |
+| [`docs/work-scan.md`](docs/work-scan.md) | Kamuya açık oda taraması, aday çıkarımı, yetki seviyeleri |
+| [`docs/agent-runtime.md`](docs/agent-runtime.md) | Agent çalışma ortamı, izolasyon envanteri, koşu tavanı |
+| [`docs/proof-workspace.md`](docs/proof-workspace.md) | Kanıt çalışma alanı, paket biçimi, tek kullanımlık paylaşım onayı |
+| [`docs/opencode-connection.md`](docs/opencode-connection.md) | OpenCode Go bağlantısı, katalog ve kimlik bilgisi kasası |
+| [`docs/packaging.md`](docs/packaging.md) | Windows paketleme, artefaktlar ve imzasızlık kaydı |
+| [`docs/ui-action-map.md`](docs/ui-action-map.md) | Her UI eylemi: tetikleyici, ön koşul, sonuç, test |
+| [`docs/browser-qa.md`](docs/browser-qa.md) | Playwright tarayıcı QA kapsamı ve harness'ı |
+| [`docs/execution-plan.md`](docs/execution-plan.md) | A→J paket planı |
+| [`docs/kullanim-kilavuzu.md`](docs/kullanim-kilavuzu.md) | Son kullanıcı kılavuzu (Paket J) |
+| [`docs/kullanici-kabul-listesi.md`](docs/kullanici-kabul-listesi.md) | Kullanıcı kabul listesi (Paket J) |
+| [`docs/decisions/README.md`](docs/decisions/README.md) | ADR indeksi (ADR-0001…ADR-0011) |
+| [`docs/verification/`](docs/verification/) | Paket başına doğrulama raporu (`paket-a.md`…`paket-i.md`) |
 
 Her turda önce bu dosyayı, `CLAUDE.md`'yi ve `PROJECT_STATUS.md`'yi oku.
 
@@ -122,7 +136,7 @@ Ayrıntı için [`README.md`](README.md) → "Geliştirme komutları".
 # Backend
 uv run --directory apps/station-api ruff check .
 uv run --directory apps/station-api mypy src
-uv run --directory apps/station-api pytest ../../tests -q
+uv run --directory apps/station-api pytest ../../tests
 
 # Frontend
 npm --prefix apps/station-web run lint

@@ -173,11 +173,6 @@ class ProofBundle:
     document: dict[str, Any]
     sha256: str
 
-    @property
-    def missing_count(self) -> int:
-        entries = self.document["missing"]
-        return len(entries) if isinstance(entries, list) else 0
-
 
 def safe_text(value: str) -> str:
     """Sweep, neutralise and bound one piece of the user's own text.

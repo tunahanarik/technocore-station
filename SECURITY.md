@@ -141,6 +141,58 @@ oturum/bootstrap yanıtlarında `Cache-Control: no-store`.
 - Uzak değerler UI'a girmeden önce sweep edilir ve kısaltılır; hiçbir uzak
   metin HTML veya tıklanabilir link olarak render edilmez (AC-17).
 
+## 6.3 Paket D'den Paket I'ya: bugün açık olan yüzeyler
+
+Bu bölüm **dar tutulur**. Her paketin ayrıntısı
+[`docs/security-invariants.md`](docs/security-invariants.md) içindedir ve
+orada her satır bir test adı taşır; burada tekrarlanan bir ayrıntı
+**dördüncü bir bayatlama yüzeyi** olurdu. Aşağıdakiler yalnız "bu yüzey
+var ve politikası şudur" der.
+
+- **İmzalama ve onay zinciri (Paket D).** Dış yazma üç adımdır — taslak,
+  imzala, gönder — ve kapı **her adımda yeniden koşar**; UI'ın disable
+  durumuna güvenilmez. Gönderim onayı **tek kullanımlık**, oturuma bağlı
+  ve **180 saniyede** dolar; metin, hedef, kimlik veya manifest verdict'i
+  değişirse düşer. Yazma yolunda **hiçbir otomatik tekrar yoktur** ve sonuç
+  üç durumludur: `accepted`, `refused`, `outcome_unknown` — üçüncüsü
+  gizlenmez. Lobby açıkça reddedilir (§9e: SI-55, SI-129…SI-170).
+- **Kanıt defteri ve HMAC audit zinciri (Paket E).** Kanıt **ham baytlardır**
+  ve asla budanmaz. Zincir materyali ve zincir başı **ayrı DPAPI
+  zarflarındadır**, hiçbir tabloya girmez. Zincirin iddiası
+  **"çevrimdışı değişikliğe karşı tespit edicidir"**; "değişmez kayıt"
+  değildir — baş da birlikte yeniden yazılırsa kesme görünmez ve bunu
+  ölçen bir test vardır. Materyal açılamıyorsa sonuç `unavailable`'dır,
+  asla "geçti" değil. Dışa aktarım **açık onay** ister
+  (§9f: SI-171…SI-209).
+- **Provider API anahtarı (Paket G).** OpenCode bağlantısı için bir sağlayıcı
+  anahtarı **girilebilir**. Bu, INV-01'in bir istisnası değil, ADR-0001
+  §6'nın yetkilendirdiği **dar** bir istisnadır: anahtar kullanıcının kendi
+  üçüncü-taraf kimlik bilgisidir, seed veya private key değildir. Ayrı bir
+  DPAPI zarfında saklanır, veritabanına yalnız **fingerprint** ve yol
+  girer, ve **hiçbir alan anahtarı geri göstermez** — reddedilen bir gövde
+  bile 422'de yankılanmaz. Anahtar tam olarak **bir** giden header'da
+  görünür ve istek bitince redaksiyon registry'sinden düşer
+  (§9h: SI-234, SI-243, SI-257).
+- **Agent çalışma ortamı (Paket H2).** Keyfi kod ve kabuk yürütmesi
+  **yapısal olarak kapalıdır**: `agent/` ağacında `subprocess`,
+  `multiprocessing`, `ctypes`, `importlib` importu ve `exec`/`eval`/
+  `__import__`/`system`/`popen` adı yoktur, ve bunu tarayan denetim ekili
+  bir çağrıyla sürülmüştür. Ölçülemeyen bir izolasyon olanağı **"yok" diye
+  yazılmaz**; envanterdeki her bulgu `relied_upon: false` taşır. Koşu
+  tavanı `agent/budget.py`'dedir ve **agent kendi tavanını yükseltemez**
+  (§9j: SI-285…SI-297).
+- **Kanıt çalışma alanı ve dış paylaşım (Paket H3).** Dış paylaşım
+  **tek kullanımlık** bir onay ister; onay paket digest'ine, göreve, içerik
+  sürümüne ve oturuma bağlıdır ve **reddedilen bir teslimde bile**
+  harcanır. Onaylama tek katta, `Literal[True]` ve varsayılansız bir alan
+  olarak uygulanır (§9k: SI-300…SI-310).
+- **Windows paketleme (Paket I).** Yayımlanan artefakt **imzasızdır**.
+  Yanındaki SHA-256 yalnız **o derlemenin** bütünlüğünü tanımlar; kimin
+  ürettiğini kanıtlamaz ve iki derleme farklı hash verdi. Windows
+  SmartScreen imzasız bir indirme için uyarı gösterecektir; bu **beklenen**
+  davranıştır ve bu belge SmartScreen'i **kapatmanızı istemez**
+  (§9l: SI-314…SI-329, ADR-0010 §9).
+
 ## 7. Bilinen sınırlar (dürüst kapsam)
 
 Bu ürünün **savunmadığı** durumlar:
@@ -157,6 +209,17 @@ Bu ürünün **savunmadığı** durumlar:
 - **`.tcrec` güvenliği tamamen recovery parolasının gücüne bağlıdır.**
 - Revoke bir **güvenli disk silme değildir** ve mevcut recovery dosyaları
   geçerli kalmaya devam eder.
+- **Yayımlanan Windows artefaktı imzasızdır.** Kod imzalama sertifikası
+  yoktur; SmartScreen uyarısı beklenir ve SHA-256 özeti bütünlüğü
+  tanımlar, **kaynağı değil**. Derleme ayrıca **bit-bit yeniden
+  üretilebilir değildir** — bu ölçüldü ve olumsuz çıktı.
+- **Bu ürün bir insan güvenlik incelemesinden geçmedi.** Buradaki ve
+  `docs/security-invariants.md`'deki iddiaların tamamı **kendi
+  testlerimizin** ölçtüğü şeydir. INV-06 "güvenlik testleri
+  gevşetilemez" der, ama bir coding agent dosyayı değiştirebilir; test
+  tabanı yalnız **yardımcı** bir kontroldür. Bağımsız inceleme
+  **ertelenmiş, kapatılmamış** bir risktir (ADR-0001 §5) ve Paket J onu
+  kapatmaz — görünür kılar.
 
 Audit zinciri için kullanılan ifade **"çevrimdışı değişikliğe karşı
 tespit edici"**dir; "değişmez kayıt" veya "güvenilir zaman kanıtı" değildir.

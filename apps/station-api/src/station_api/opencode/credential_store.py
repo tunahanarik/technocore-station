@@ -78,7 +78,6 @@ import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -163,15 +162,6 @@ _BINARY_FLAG: int = getattr(os, "O_BINARY", 0)
 #: rename and far shorter than a user notices.
 _READ_ATTEMPTS = 4
 _READ_BACKOFF_SECONDS = 0.02
-
-
-@dataclass(frozen=True, slots=True)
-class StoredCredential:
-    """What the *metadata* knows. Never the key."""
-
-    fingerprint: str
-    envelope_relpath: str
-    created_at: datetime
 
 
 def credential_dir(data_dir: Path) -> Path:
@@ -511,7 +501,6 @@ __all__ = [
     "MAX_KEY_LENGTH",
     "MIN_KEY_LENGTH",
     "ApiKeyEnvelope",
-    "StoredCredential",
     "assert_storable",
     "credential_dir",
     "credential_path",
