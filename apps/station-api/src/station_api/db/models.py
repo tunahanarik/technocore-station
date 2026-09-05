@@ -797,10 +797,25 @@ class AgentRun(Base):
     stop_requested: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
-    #: Digest over the frozen plan: steps, expected artifacts, test condition.
+    #: Digest over the frozen plan: steps, expected artifacts, test condition
+    #: **and the acceptance conditions**.
     plan_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    #: The check the plan says would establish success. Recorded, never run.
+    #: The sentence the plan says would establish success. Recorded, never
+    #: run: a sentence is not a check, and interpreting one would be the
+    #: arbitrary execution ADR-0008 1 closes.
     test_condition: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: Canonical JSON array of the machine-checkable acceptance conditions,
+    #: each a member of the closed registry in
+    #: :mod:`station_api.agent.acceptance` with arguments already validated
+    #: against that member's declared parameter types. Empty for a plan that
+    #: recorded only the sentence above, which is what every row written
+    #: before migration ``0010`` carries and exactly what those rows meant.
+    #:
+    #: Inside ``plan_sha256`` on purpose: an acceptance condition edited after
+    #: a plan was approved is a *loosened success criterion*, and the whole
+    #: point of writing the plan down first is that this is a refusal rather
+    #: than a silent change.
+    acceptance_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     #: Canonical JSON array of the file names the plan promises to produce.
     expected_artifacts: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     tool_calls_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

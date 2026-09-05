@@ -80,16 +80,21 @@ USER_AGENT = "TechnocoreStation/0.1 (+https://github.com/tunahanarik/technocore-
 # The authentication header: declared, and declared unverified
 # ---------------------------------------------------------------------------
 
-#: NOT VERIFIED IN THE OFFICIAL DOCUMENTATION.
+#: STILL NOT PUBLISHED IN THE OFFICIAL DOCUMENTATION - BUT NOW MEASURED.
 #:
-#: ADR-0005 3: none of ``opencode.ai/docs/go``, ``/docs/zen``,
-#: ``/docs/providers`` or ``/docs/config`` names an authentication header.
-#: ``Authorization: Bearer`` is the near-universal convention and the claims
-#: circulating on the web trace back to third-party proxy repositories, which
-#: is not a contract. Assuming it silently would have hidden the assumption;
-#: omitting it would have left the feature a demonstration. So it is written
-#: **once**, here, labelled - and the label is repeated to the user in the
-#: status endpoint, not only in this comment.
+#: ADR-0005 3 recorded that none of ``opencode.ai/docs/go``, ``/docs/zen``,
+#: ``/docs/providers`` or ``/docs/config`` names an authentication header,
+#: so ``Authorization: Bearer`` was written here as a labelled assumption.
+#: **That half is now measured** (ADR-0012): a metered
+#: ``POST /zen/go/v1/chat/completions`` carrying this header answered 200,
+#: which no unauthenticated request can. The header is therefore correct.
+#:
+#: What did **not** change: the documentation still does not publish it, so
+#: the provider is free to alter it without a contract we could point at.
+#: That is why the label survives rather than being deleted - it is now a
+#: statement about the *source*, not about our confidence. It stays written
+#: **once**, here, and the label still reaches the user in the status
+#: endpoint rather than living only in this comment.
 AUTH_HEADER_NAME = "Authorization"
 AUTH_SCHEME = "Bearer"
 
@@ -101,13 +106,33 @@ SESSION_HEADER_NAME = "x-opencode-session"
 #: The sentence carried to the UI beside the connection state. Turkish and
 #: diacritic-free, like every other user-visible string here.
 AUTH_HEADER_CAVEAT = (
-    "Kimlik dogrulama basligi resmi belgede yayimlanmamistir. Station "
-    "yaygin uygulamayi izleyerek 'Authorization: Bearer' gonderir; bu bir "
-    "varsayimdir ve dogrulanmamistir."
+    "Kimlik dogrulama basligi resmi belgede hala yayimlanmamistir. Station "
+    "'Authorization: Bearer' gonderir ve bunun calistigi canli olcumle "
+    "dogrulandi; belge yayimlamadigi icin saglayici onu bir sozlesmeye "
+    "dayanmadan degistirebilir."
 )
 
 #: Every phase is bounded. Left implicit, httpx would allow an unbounded read.
-TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
+#:
+#: ``read`` was 30 s while this client only fetched a catalogue and the shape
+#: of a completion was unknown. **Measured against the live provider (ADR-0012
+#: and the round that opened the model lane): a reasoning model exceeds it.**
+#: Two of roughly six live proposals ended in ``ReadTimeout`` at 30 s, and the
+#: cost of that is not a slow screen - the endpoint is metered, so a lost
+#: response is one the user may have paid for and will never see. The product
+#: refuses to retry it automatically and says so, which is right, but the
+#: refusal was firing on latency the provider considers ordinary.
+#:
+#: 120 s is this product's own existing answer to "how long may one thing
+#: take" (``agent/budget.py``'s wall-clock ceiling), so the model call is
+#: bounded by a number the codebase already had to defend rather than a new
+#: one invented here. It is a **ceiling, not a target**: the successful calls
+#: measured in that round returned in a few seconds.
+#:
+#: What is **not** measured: the provider's latency distribution. 120 s is
+#: chosen to sit above the observed failures, not because anybody counted how
+#: often 120 s is itself exceeded.
+TIMEOUT = httpx.Timeout(connect=5.0, read=120.0, write=10.0, pool=5.0)
 
 #: The free, unauthenticated catalog: one initial attempt plus one retry.
 MAX_CATALOG_ATTEMPTS = 2

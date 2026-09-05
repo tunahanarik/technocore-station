@@ -548,13 +548,32 @@ export interface OpenCodeSpendingContext {
   readonly unknown_cost_sentence: string;
 }
 
-/** The three families, and the two formats deliberately not built. */
+/** The three families, the format still not built, and the one measured. */
 export interface OpenCodeProtocolContext {
   readonly protocols: readonly string[];
+  /** Still a literal `false`. The streaming format was never published and
+   * has never been measured, so a mirror that could hold anything else here
+   * would be a mirror that could hold a guess. */
   readonly streaming_supported: false;
-  readonly tool_calls_supported: false;
+  /**
+   * A plain `boolean`, and it was a literal `false` for a reason that has
+   * stopped being true rather than for a reason that was dropped.
+   *
+   * ADR-0012 measured the tool-call contract against the provider's own
+   * `chat/completions` endpoint, so the backend widened this to `bool` and
+   * derives it from `TOOL_CALLS_SUPPORTED`. Widening rather than pinning to
+   * `true` is the repair `public_share_available` already got: what the field
+   * may carry is the server's decision, and a mirror that pinned the *new*
+   * value would be the same defect facing the other way.
+   */
+  readonly tool_calls_supported: boolean;
   readonly deferral: string;
   readonly shape_provenance: string;
+  /** What was measured, on which endpoint, and how far the measurement
+   * reaches. Empty until something is measured: a supported format with no
+   * provenance beside it is exactly the unsourced claim ADR-0005 1.2
+   * refuses. Rendered verbatim. */
+  readonly tool_call_provenance: string;
 }
 
 /** The whole connection, read-only. Reading it sends nothing outward. */
@@ -707,11 +726,75 @@ export interface WorkScanStaleness {
   readonly detail: string;
 }
 
-/** One room as the overview listed it. Both fields are caller-written. */
+/**
+ * The service's own machine-readable signal that history was dropped.
+ *
+ * Separate from `WorkScanStaleness` on the wire and separate on screen: "the
+ * list may be three seconds old" and "messages you never read are gone" are
+ * different findings and neither may stand in for the other.
+ */
+export interface WorkScanRingDrop {
+  readonly since: number;
+  readonly expected_first: number;
+  readonly first_seq: number;
+  readonly detail: string;
+}
+
+/**
+ * One aggregate the **service** reports about a room.
+ *
+ * A separate type from the room's `name`/`topic` because it is a separate
+ * kind of fact. The backend reads these structurally - every key on the entry
+ * that is *not* caller-written - because the published `rooms[]` item schema
+ * names no properties at all, so `key` is the service's own name for the
+ * number and never one this product invented.
+ */
+export interface WorkScanMeasuredField {
+  readonly key: string;
+  readonly value: string;
+}
+
+/**
+ * What the reply claimed about its own caller-written fields.
+ *
+ * Carried so a screen can show the claim, never so a screen can rely on it.
+ * The set that counts is the **union** of `build_fields` and `fields`: a reply
+ * may widen the untrusted set and can never narrow it, and `missing_fields`
+ * is the record of an attempt to narrow it.
+ */
+export interface WorkScanUntrusted {
+  /** Whether the reply carried an `untrusted` object at all. "No declaration"
+   * and "a declaration that omits our fields" are two different answers. */
+  readonly present: boolean;
+  /** The fields the reply named. */
+  readonly fields: readonly string[];
+  readonly note: string;
+  /** The fields this build treats as caller-written regardless. */
+  readonly build_fields: readonly string[];
+  /** Named by the reply and not by this build: the reply widened the set. */
+  readonly extra_fields: readonly string[];
+  /** Named by this build and not by the reply: an attempt to narrow it. */
+  readonly missing_fields: readonly string[];
+  readonly detail: string;
+}
+
+/**
+ * One room as the overview listed it, with its two halves kept apart.
+ *
+ * `name` and `topic` are strings a stranger typed - that is what `authority:
+ * 3` says, and the service's own `/rooms` description says the same thing in
+ * its own words. `measured` is the *other* half: the service's aggregates over
+ * its own bounded window, carried under the service's own key names. They are
+ * two fields rather than one object with a caveat beside it precisely so a
+ * reader never has to remember which is which.
+ */
 export interface WorkScanRoom {
   readonly name: string;
   readonly topic: string;
   readonly authority: 3;
+  readonly measured: readonly WorkScanMeasuredField[];
+  /** Whether the backend kept fewer measured fields than the entry carried. */
+  readonly measured_truncated: boolean;
 }
 
 export interface WorkScanRoomIndex {
@@ -725,6 +808,77 @@ export interface WorkScanRoomIndex {
   readonly room_name_caveat: string;
   /** `topic` is a world-writable KV note, not an endorsement. */
   readonly topic_caveat: string;
+  /** The sentence that travels with every `measured` list: these are the
+   * service's own numbers and nothing is derived from them. */
+  readonly measured_caveat: string;
+  /** Always present: an unlisted (`p-`) room is never enumerated here, so the
+   * listing's silence about one is not evidence that it does not exist. */
+  readonly unlisted_note: string;
+  readonly untrusted: WorkScanUntrusted;
+}
+
+/**
+ * One line of the discovery log (`GET /r/events`).
+ *
+ * A line, not an endorsement. There is deliberately no `recommended`, `score`
+ * or `rank` here. `selectable` is `false` for every line the backend could not
+ * read as a room name - including a line announcing a room the service says it
+ * never announces - and the raw `line` is kept so a reader sees the log's real
+ * format rather than this product's guess at one. `line` is empty only where
+ * repeating it would print a room this product never names.
+ */
+export interface WorkScanAnnouncedRoom {
+  readonly seq: number;
+  readonly ts: string;
+  /** The room this line announces, or `""` when none could be read. Never a
+   * placeholder: a placeholder would be a room name this build made up. */
+  readonly name: string;
+  readonly line: string;
+  /** Why no name was read, or `""` when one was. */
+  readonly unusable_reason: string;
+  readonly selectable: boolean;
+  readonly authority: 3;
+}
+
+/**
+ * One read of the discovery log: new public rooms, in announcement order.
+ *
+ * `since` is a cursor the *caller* carries back from the previous read's
+ * `last_seq`. Nothing on either side remembers it, because a remembered cursor
+ * is the first half of a loop somebody schedules.
+ */
+export interface WorkScanDiscovery {
+  readonly room: string;
+  readonly entries: readonly WorkScanAnnouncedRoom[];
+  readonly since: number | null;
+  /** What a caller passes back as `since` to continue - by pressing something. */
+  readonly last_seq: number;
+  readonly first_seq: number | null;
+  readonly lines_read: number;
+  /** The rooms this log offers as one-click scan choices. */
+  readonly selectable: readonly string[];
+  readonly unusable_count: number;
+  readonly ring_drop: WorkScanRingDrop | null;
+  readonly staleness: WorkScanStaleness;
+  readonly sha256: string;
+  readonly room_name_caveat: string;
+  readonly unlisted_note: string;
+  /** Why this build never writes here, and what would happen if it tried. */
+  readonly write_refusal: string;
+}
+
+/**
+ * A fact about a scanned room's class. Not a failure: the room was read.
+ *
+ * An unlisted room appears in no listing, so its name came from somewhere
+ * else; an ephemeral one can expire on read, so an absent line proves nothing.
+ * No note is produced for an ordinary listed room, which makes this a
+ * distinction rather than a banner.
+ */
+export interface WorkScanRoomNote {
+  readonly room: string;
+  readonly kind: "unlisted" | "ephemeral";
+  readonly detail: string;
 }
 
 /** One thing about an external service, and whether anybody confirmed it. */
@@ -772,6 +926,8 @@ export interface WorkScanResult {
   readonly rooms: readonly string[];
   readonly results: readonly WorkScanRoomResult[];
   readonly failures: readonly WorkScanRoomFailure[];
+  /** What was true of a scanned room's *class*, when anything was. */
+  readonly notes: readonly WorkScanRoomNote[];
   readonly candidate_count: number;
   readonly refusal_count: number;
 }
@@ -784,6 +940,10 @@ export interface WorkScanStatus {
   readonly capability: WorkScanCapability;
   readonly adapters: readonly WorkScanAdapter[];
   readonly room_index: WorkScanRoomIndex | null;
+  /** The last discovery-log read, or `null` until a person asked for one.
+   * `null` on a fresh process is the honest answer: a log that appeared
+   * without a request would be an automatic read (SI-224, SI-272). */
+  readonly discovery: WorkScanDiscovery | null;
   readonly last_scan: WorkScanResult | null;
   /** The query parameters this build refuses to send, named in the payload so
    * the absence of polling is checkable from outside the process. */
@@ -802,6 +962,26 @@ export interface WorkScanSuggestion {
   readonly source_version_id: string;
   readonly state: "suggested";
   readonly detail: string;
+  /**
+   * The workspace file carrying the request's full text, or `""` when the
+   * write did not happen.
+   *
+   * A scanned request is stored as a **digest**, so the readable form of one
+   * used to be its title and nothing else - which is all a model could ever
+   * be shown of it. The text is written into the new task's own workspace
+   * now, where the agent's existing read tool reaches it, and this names the
+   * file so a person can open the same bytes the model was given.
+   */
+  readonly request_file: string;
+  /**
+   * One sentence about that write, in either direction. Never empty.
+   *
+   * An empty `request_file` with a populated sentence here is a task that
+   * exists, whose digest is correct, and behind which there is nothing
+   * readable. That has to be sayable out loud rather than inferred from an
+   * empty directory, which is why it is a field and not a silence.
+   */
+  readonly request_file_detail: string;
 }
 
 // --- Tasks, the agent runtime and the Activity Desk (Paket H2) --------------
@@ -950,6 +1130,34 @@ export type AgentToolParamTypeName = "text" | "file_name" | "digest";
 /** What the measurement established. `not_measured` is not `absent`. */
 export type AgentIsolationStateName = "present" | "absent" | "not_measured";
 
+/**
+ * The five acceptance conditions a plan may be judged by.
+ *
+ * A closed vocabulary, mirroring `AgentAcceptanceKindName`. A plan that
+ * records none of them still reports `not_implemented`, which is what an
+ * unchecked plan has earned.
+ */
+export type AgentAcceptanceKindName =
+  | "artifact_exists"
+  | "artifact_is_json"
+  | "artifact_has_json_keys"
+  | "artifact_contains"
+  | "artifact_digest_is";
+
+/**
+ * What a run's test field reports. Three values, because they answer three
+ * different questions: the conditions held, at least one did not, or the plan
+ * never wrote one a machine could decide.
+ *
+ * It was `"not_implemented"` as a single literal here until Package H4, and
+ * the *fact* changed rather than the rule. Arbitrary execution is still
+ * closed and a `test_condition` sentence is still never run; what opened is a
+ * closed registry of deterministic conditions decided over the bytes a run
+ * produced. SI-222 is untouched: the state is still derived from evidence and
+ * still cannot be asked for.
+ */
+export type AgentTestResultStateName = "passed" | "failed" | "not_implemented";
+
 /** Who acted. There is no `model` actor, because there is no model lane. */
 export type ActivityActorName = "user" | "station_runner";
 
@@ -958,11 +1166,16 @@ export type ActivityOutcomeName = "ok" | "refused" | "failed" | "pending";
 /**
  * The kinds of moment the timeline distinguishes.
  *
- * Fourteen values rather than one `step_done`: "planned", "a tool was
+ * Seventeen values rather than one `step_done`: "planned", "a tool was
  * called", "an artifact was produced", "a check was recorded" and "waiting
  * for approval" answer different questions, and a timeline that folded them
  * into one badge could no longer say whether anything was actually checked
  * (ADR-0008 6).
+ *
+ * The last three arrived with the model planning lane (ADR-0012). They are
+ * *actions*, not an actor: `ActivityActorName` still has no `model` member,
+ * because a model turn is something the station's runner did on a person's
+ * behalf, and nothing a model says gets recorded as its own act.
  */
 export type ActivityActionName =
   | "run_planned"
@@ -978,12 +1191,36 @@ export type ActivityActionName =
   | "permission_denied"
   | "budget_exhausted"
   | "execution_unavailable"
-  | "activity_deleted";
+  | "activity_deleted"
+  | "model_called"
+  | "model_plan_proposed"
+  | "model_session_ended";
 
 export interface AgentToolParamStatus {
   readonly name: string;
   readonly type: AgentToolParamTypeName;
   readonly required: boolean;
+  readonly detail: string;
+}
+
+/** One acceptance condition the registry offers, and what it asks for. */
+export interface AgentAcceptanceCheckStatus {
+  readonly kind: AgentAcceptanceKindName;
+  readonly purpose: string;
+  readonly params: readonly AgentToolParamStatus[];
+}
+
+/**
+ * One condition a plan actually recorded, and how it stands right now.
+ *
+ * `satisfied` is recomputed from the workspace on every read rather than
+ * stored, so a condition that held yesterday and does not hold now reports
+ * the second thing.
+ */
+export interface AgentAcceptanceConditionStatus {
+  readonly kind: AgentAcceptanceKindName;
+  readonly label: string;
+  readonly satisfied: boolean;
   readonly detail: string;
 }
 
@@ -1062,9 +1299,14 @@ export interface AgentRunStatus {
   readonly plan_sha256: string;
   /** The check the plan says would establish success. Recorded, never run. */
   readonly test_condition: string;
-  /** `not_implemented` as a type: a run that produced files has still not
-   * been tested, and the task cannot become `ready_to_publish` (SI-222). */
-  readonly test_result_state: "not_implemented";
+  /** The machine-checkable conditions the plan recorded beside that sentence,
+   * each one a member of the closed acceptance registry, and each one
+   * re-decided over the workspace as it stands right now. */
+  readonly acceptance: readonly AgentAcceptanceConditionStatus[];
+  /** What those conditions establish. `not_implemented` when the plan
+   * recorded none - which is what a run that produced files and was never
+   * checked has earned, and which keeps the publication gate closed. */
+  readonly test_result_state: AgentTestResultStateName;
   readonly test_result_detail: string;
   readonly expected_artifacts: readonly string[];
   readonly steps: readonly AgentRunStepStatus[];
@@ -1081,6 +1323,11 @@ export interface AgentSurfaceResponse {
   readonly execution: AgentExecutionStatus;
   readonly ceiling: AgentCeilingStatus;
   readonly tools: readonly AgentToolStatus[];
+  /** The conditions a plan may be judged by, published beside the tools for
+   * the same reason the tools are published: a person approving a plan has to
+   * be able to see what "it worked" was defined to mean, and a set they
+   * cannot enumerate is a set they cannot check. */
+  readonly acceptance_checks: readonly AgentAcceptanceCheckStatus[];
   readonly honesty: string;
   readonly stop_statement: string;
   /** Runs a restart left in `running`. Listed, never resumed (SI-224). */
@@ -1094,6 +1341,68 @@ export interface AgentTaskRunsResponse {
   readonly runs: readonly AgentRunStatus[];
   readonly workspace_files: readonly AgentWorkspaceFileStatus[];
   readonly honesty: string;
+}
+
+// --- The model planning lane (ADR-0012) ------------------------------------
+//
+// The lane the mirror above said did not exist. It exists now, and the shape
+// of what it may return is the whole guarantee: `outcome` is never `"ran"`
+// and there is no such member, because the best a turn can do is record a
+// plan that a person then has to approve and start by hand.
+
+/**
+ * How one model planning turn ended. Seven, and none of them means "it ran".
+ *
+ * They are separate members rather than a success flag because they carry
+ * separate remedies: a recorded plan waiting for approval, a model that chose
+ * to stop, an answer cut off at the output ceiling, a turn whose ending this
+ * build could not read, a proposal naming something outside the registry, a
+ * session at its turn ceiling, and a provider that failed or never answered.
+ *
+ * `truncated` and `inconclusive` are the two that used to be spelled
+ * `finished`. A live turn came back `finish_reason: "length"` with the output
+ * ceiling spent to the token - the model had been **cut off** before it could
+ * name a tool - and the product reported that it had chosen to stop and then
+ * closed the session, so the person could not ask again. Two claims, neither
+ * measured. They are their own members now, and only `finished` means the
+ * model chose to stop.
+ */
+export type ModelProposalOutcomeName =
+  | "planned"
+  | "finished"
+  | "truncated"
+  | "inconclusive"
+  | "refused"
+  | "budget_exhausted"
+  | "provider_failed";
+
+/** What one turn produced, plus the task and its runs as they now stand. */
+export interface ModelProposalResponse {
+  readonly outcome: ModelProposalOutcomeName;
+  /** The run this turn recorded a plan for, or "" when it recorded none. */
+  readonly run_id: string;
+  readonly detail: string;
+  /** Turns spent by this task's session, against the compile-time ceiling. */
+  readonly model_calls_used: number;
+  readonly max_model_calls: number;
+  /** What the **provider** reported it counted and charged, in its own
+   * numbers. Recorded and shown; never read as a limit, and never presented
+   * as this station's own measurement (ADR-0008 4, SI-250). */
+  readonly usage_detail: string;
+  /** The model's closing words when it stopped proposing calls. Swept and
+   * bounded, shown once, stored nowhere. There is no reasoning trace here:
+   * `reasoning_content` is read, unused, unstored and undisplayed
+   * (ADR-0012 1). */
+  readonly closing_text: string;
+  /** The provenance of the tool-call wire format: measured, on which
+   * endpoint, and how far the measurement reaches. Rendered verbatim. */
+  readonly tool_call_provenance: string;
+  readonly task: TaskStatusResponse;
+  readonly runs: readonly AgentRunStatus[];
+  /** Structural. A proposal is a recorded plan; starting it is a separate
+   * request a person makes, and there is no code path from the planner to the
+   * runner's start. */
+  readonly model_can_start_a_run: false;
 }
 
 /** One timeline row. No reasoning trace, no prompt, no provider payload. */

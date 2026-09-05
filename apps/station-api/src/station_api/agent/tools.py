@@ -9,19 +9,28 @@
 this module                                      **agent tool schema**
 ===============================================  ==========================
 
-ADR-0008 2 settles what a "tool" is here. The wire format a provider would
-use to *call* one is unpublished, so this build claims none: the model lane
-stays closed, ``tool_calls_supported`` stays ``Literal[False]``, and no sixth
-outbound surface is opened. What is defined is the tool's **own schema** -
-its name, its typed parameters, its permission scope and what one call costs
-against the run ceiling - and that is Station's, not a provider's. It invents
-no external contract, which is exactly why it is allowed to exist.
+ADR-0008 2 settled what a "tool" is here, and what it settled has outlived
+the fact it rested on. The wire format a provider would use to *call* one was
+unpublished, so this build claimed none. What was defined instead is the
+tool's **own schema** - its name, its typed parameters, its permission scope
+and what one call costs against the run ceiling - and that is Station's, not
+a provider's. It invents no external contract, which is exactly why it was
+allowed to exist while the lane was closed.
 
-The consequence is worth stating plainly: "model output is never executed
-directly" stops being a promise and becomes a structural fact, because in
-this build **there is no model output**. A run is a list of registered tool
-identifiers with validated arguments, written down by a person before the run
-starts.
+ADR-0012 then measured the contract, so the schema has a consumer:
+:func:`json_schema` projects a record into plain JSON Schema and
+:mod:`station_api.opencode.planner` wraps that in the provider's envelope.
+The direction of that dependency is the point - nothing here knows about any
+provider, and nothing here changes if the envelope does.
+``OUTBOUND_CLIENT_MODULES`` stayed at five.
+
+The consequence is worth restating, because its *form* survived the change:
+"model output is never executed directly" is still a structural fact rather
+than a promise. It used to be structural because there was no model output;
+it is structural now because every proposed call is looked up in this tuple
+and every argument is bound against a declared type, one unregistered name
+drops the whole proposal, and what comes out the other side is a recorded
+plan a **person** starts.
 
 The agent cannot add a tool to itself
 --------------------------------------
@@ -501,33 +510,40 @@ def _validate(param: ToolParam, raw: str) -> str:
     return value
 
 
-def bind_arguments(
-    record: ToolRecord, raw: dict[str, str]
+def bind_params(
+    params: tuple[ToolParam, ...], raw: dict[str, str], *, owner: str
 ) -> tuple[ToolArgument, ...]:
-    """Validate a mapping against one tool's declared parameters.
+    """Validate a mapping against one declared parameter list.
 
-    Three refusals, in the order they matter: an argument the tool does not
+    Three refusals, in the order they matter: an argument the owner does not
     declare, a required argument that is missing, and a value that does not
     match its declared type. The result is a tuple of typed arguments in the
-    tool's own parameter order - never a string a shell could read, because
+    owner's own parameter order - never a string a shell could read, because
     there is no shell.
+
+    ``owner`` is the identifier quoted back in a refusal. The function is
+    written against a parameter tuple rather than against a
+    :class:`ToolRecord` because :mod:`station_api.agent.acceptance` declares
+    a second closed registry with the same parameter types, and it must be
+    validated by **this** function rather than by a second copy of it: two
+    validators that agree today is the duplication ADR-0004 2 named, and the
+    one place it would be most expensive is the one that decides whether a
+    task may be called finished.
     """
-    declared = {param.name for param in record.params}
+    declared = {param.name for param in params}
     unknown = sorted(set(raw) - declared)
     if unknown:
         raise ToolArgumentError(
-            f"'{record.id.value}' su parametreleri tanimiyor: "
-            + ", ".join(unknown)
-            + ".",
+            f"'{owner}' su parametreleri tanimiyor: " + ", ".join(unknown) + ".",
             reason="argument_unknown",
         )
 
     bound: list[ToolArgument] = []
-    for param in record.params:
+    for param in params:
         if param.name not in raw:
             if param.required:
                 raise ToolArgumentError(
-                    f"'{record.id.value}' icin '{param.name}' zorunlu.",
+                    f"'{owner}' icin '{param.name}' zorunlu.",
                     reason="argument_missing",
                 )
             continue
@@ -535,9 +551,68 @@ def bind_arguments(
     return tuple(bound)
 
 
+def bind_arguments(
+    record: ToolRecord, raw: dict[str, str]
+) -> tuple[ToolArgument, ...]:
+    """Validate a mapping against one tool's declared parameters."""
+    return bind_params(record.params, raw, owner=record.id.value)
+
+
 def argument_map(arguments: tuple[ToolArgument, ...]) -> dict[str, str]:
     """The validated arguments as a plain mapping, for the executor."""
     return {argument.param.name: argument.value for argument in arguments}
+
+
+#: How each parameter type is described in JSON Schema. A mapping rather than
+#: a formatter, so a type added to the enum without a description here is a
+#: ``KeyError`` at import of the projection rather than a parameter that
+#: quietly reaches a model with no shape at all.
+_SCHEMA_TYPES: dict[ToolParamType, dict[str, object]] = {
+    ToolParamType.TEXT: {"maxLength": MAX_TEXT_CHARS, "type": "string"},
+    ToolParamType.FILE_NAME: {
+        "maxLength": MAX_NAME_CHARS,
+        "pattern": _FILE_NAME_RE.pattern.replace("\\A", "^").replace("\\Z", "$"),
+        "type": "string",
+    },
+    ToolParamType.DIGEST: {
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string",
+    },
+}
+
+
+def json_schema(record: ToolRecord) -> dict[str, object]:
+    """One tool's parameters as JSON Schema. **Station's schema, exported.**
+
+    ADR-0008 2 drew the line here and the line has not moved: what this
+    registry owns is the tool's *own* schema - its name, its typed parameters,
+    what one call costs - and that was always Station's rather than a
+    provider's. What was missing was a consumer for it, because the wire
+    format a provider would use to call one was unpublished.
+
+    That format has since been measured (see
+    :mod:`station_api.opencode.planner`), so the schema now has a consumer -
+    and the direction of the dependency is worth stating: this function
+    returns plain JSON Schema and knows nothing about any provider's envelope.
+    The envelope is built in the adapter, which is where a provider-shaped
+    thing belongs. Nothing here changes if the envelope does.
+
+    ``additionalProperties`` is ``False`` because the binder refuses an
+    undeclared argument anyway (``argument_unknown``); saying so in the schema
+    turns a refusal a model would have discovered into one it can avoid.
+    """
+    properties = {
+        param.name: {**_SCHEMA_TYPES[param.type], "description": param.detail}
+        for param in record.params
+    }
+    return {
+        "additionalProperties": False,
+        "properties": properties,
+        "required": [param.name for param in record.params if param.required],
+        "type": "object",
+    }
 
 
 def scopes_of(tool_ids: tuple[ToolId, ...]) -> tuple[ToolScope, ...]:
@@ -563,7 +638,9 @@ __all__ = [
     "ToolScope",
     "argument_map",
     "bind_arguments",
+    "bind_params",
     "get_tool",
+    "json_schema",
     "resolve_tool",
     "scopes_of",
 ]

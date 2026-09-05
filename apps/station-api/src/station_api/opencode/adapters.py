@@ -67,11 +67,53 @@ MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
 #: Default output ceiling for the family that requires one. Named rather than
 #: inlined so a reader sees that a bound exists at all.
-DEFAULT_MAX_OUTPUT_TOKENS = 1024
+#:
+#: **This is a truncation guard, not a spend control.** The ceiling that
+#: bounds what a session may cost is the model-call count
+#: (``station_api.agent.budget.RunCeiling.max_model_calls``): ADR-0008 4
+#: refused token and currency as ceiling units, and ADR-0012 3 kept that
+#: refusal after the provider began reporting ``usage`` and ``cost``, because
+#: both are the provider's statement rather than our measurement. What this
+#: number does is keep an answer from being cut off before it finishes. A
+#: reader who takes it for a budget will lower it to save money and
+#: reintroduce the defect it was raised to fix.
+#:
+#: It was ``1024``, and ``1024`` was **measured** to be too small. One live
+#: planning turn against this provider - the whole tool registry offered, a
+#: real task brief - answered with ``completion_tokens`` of exactly 1024 and
+#: ``finish_reason: "length"``. The model spent the entire ceiling and was
+#: cut off before it could name a tool. These models emit
+#: ``reasoning_content`` (ADR-0012; it is discarded in
+#: :func:`station_api.opencode.planner.parse_plan_response`) and that
+#: reasoning is charged against this same ceiling, so the budget was gone
+#: before the part we asked for began.
+#:
+#: ``4096`` is derived from the two figures this repository can point at
+#: rather than picked for roundness:
+#:
+#: * **1024** output tokens were observed to go by before any call appeared,
+#:   so the ceiling has to sit above that with room left over;
+#: * one proposed call's ``arguments`` are capped by this build itself at
+#:   :data:`station_api.opencode.planner.MAX_ARGUMENTS_CHARS` = 8000
+#:   characters, which is on the order of 2000 tokens.
+#:
+#: 1024 + 2000 is about 3072, and 4096 is the next power of two above it, so a
+#: turn that reasons as much as the measured one can still emit a full-size
+#: call. It is **not** a claim that 4096 is always enough: a turn that reaches
+#: it is now reported as *truncated* instead of as finished
+#: (:class:`station_api.planner.service.ProposalOutcome`), which is the half
+#: of the fix that does not depend on guessing this number correctly.
+DEFAULT_MAX_OUTPUT_TOKENS = 4096
 
 #: Status codes we can name. Anything else is ``PROVIDER_ERROR``: an error we
 #: can see and will not pretend to have classified.
-_STATUS_FAILURES: dict[int, FailureKind] = {
+#:
+#: Public rather than private since Package H4, because the tool-call adapter
+#: in :mod:`station_api.opencode.planner` reads the **same** mapping. Two
+#: copies of "which HTTP status means which failure" is the duplication
+#: ADR-0004 2 named, and the version that drifts is always the one on the
+#: newer lane.
+STATUS_FAILURES: dict[int, FailureKind] = {
     401: FailureKind.INVALID_CREDENTIAL,
     403: FailureKind.FORBIDDEN_MODEL,
     404: FailureKind.MODEL_NOT_FOUND,
@@ -201,7 +243,7 @@ def parse_response(
     # The status line first, but the body still parsed above so a named
     # failure can carry the provider's own words as data.
     if raw.status_code != 200:
-        kind = _STATUS_FAILURES.get(raw.status_code)
+        kind = STATUS_FAILURES.get(raw.status_code)
         if kind is None:
             kind = (
                 FailureKind.SERVER_ERROR
@@ -445,6 +487,7 @@ __all__ = [
     "MAX_REQUEST_BYTES",
     "MAX_RESPONSE_BYTES",
     "SHAPE_PROVENANCE",
+    "STATUS_FAILURES",
     "build_request",
     "parse_response",
 ]

@@ -39,7 +39,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
+from station_api.agent import workspace
+from station_api.agent.errors import WorkspaceError
 from station_api.modules.registry import ModuleId
 from station_api.tasks.service import TaskError, TaskService, TaskView
 from station_api.tasks.sources import TaskSourceId
@@ -53,6 +56,11 @@ from station_api.workscan.candidates import (
     derive_from_room,
 )
 from station_api.workscan.client import RoomScanClient
+from station_api.workscan.discovery import (
+    DiscoveryLog,
+    discovery_target,
+    parse_discovery,
+)
 from station_api.workscan.errors import (
     CandidateError,
     ScanTargetError,
@@ -60,6 +68,10 @@ from station_api.workscan.errors import (
 )
 from station_api.workscan.kibble import ADAPTERS, AdapterRecord
 from station_api.workscan.language import DERIVATION_HONESTY_SENTENCE
+from station_api.workscan.request_file import (
+    REQUEST_FILE_NAME,
+    render_request_file,
+)
 from station_api.workscan.snapshot import (
     RoomIndexSnapshot,
     RoomMessagesSnapshot,
@@ -67,7 +79,11 @@ from station_api.workscan.snapshot import (
     parse_room_index,
     parse_room_messages,
 )
-from station_api.workscan.targets import DEFAULT_LIMIT, resolve_room_target
+from station_api.workscan.targets import (
+    DEFAULT_LIMIT,
+    RoomScanTarget,
+    resolve_room_target,
+)
 
 #: Most rooms one scan will read, whatever the caller asked for. A bound on a
 #: single user action: a scan is several sequential HTTP reads against a rate
@@ -87,6 +103,64 @@ SCAN_MODULE_ID = ModuleId.WORK_SCAN
 SCAN_SOURCE_ID = TaskSourceId.PUBLIC_ROOM_SCAN
 
 
+#: Said when the request file was written. Carries the name, because the name
+#: is what a person needs in order to open the file themselves and see exactly
+#: what the model was given.
+REQUEST_FILE_WRITTEN = (
+    "Istegin tam metni gorevin calisma alanina '{name}' adiyla yazildi "
+    "({byte_count} bayt, ozet {sha256}). Model bu dosyayi mevcut okuma "
+    "araciyla okur; dosyanin icinde metnin bir yabanci tarafindan yazildigi "
+    "ve veri oldugu yazilidir."
+)
+
+#: Said when this build has no workspace root to write into at all.
+#:
+#: Reachable: :class:`WorkScanService` is built unconditionally at startup,
+#: and a data directory is not part of what "unconditionally" needs. A
+#: suggestion opened in that state is a real task with a real content digest
+#: and no readable text behind it, which is a fact worth one sentence rather
+#: than an empty workspace a reader has to interpret.
+REQUEST_FILE_UNAVAILABLE = (
+    "Istegin tam metni yazilamadi: bu yapida gorev calisma alani kokune "
+    "erisim yok. Gorev acildi ve icerik ozeti dogrudur, fakat modelin "
+    "okuyabilecegi bir istek dosyasi yoktur. Metni odayi yeniden tarayarak "
+    "gorebilirsiniz."
+)
+
+#: Said when the workspace refused the write, with the workspace's own reason.
+#:
+#: The reason code travels because it is the difference between problems with
+#: different answers: ``workspace_reparse_point`` is somebody's junction on
+#: this machine, ``workspace_file_too_large`` is a ceiling, and a reader who
+#: is only told "it failed" cannot tell those apart.
+REQUEST_FILE_REFUSED = (
+    "Istegin tam metni yazilamadi (neden: {reason}). Gorev acildi ve icerik "
+    "ozeti dogrudur, fakat modelin okuyabilecegi bir istek dosyasi yoktur. "
+    "Calisma alaninin kendi aciklamasi: {detail}"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SuggestionResult:
+    """One suggestion: the task that was opened, and what reached the model.
+
+    Two fields rather than one, and neither is a boolean. The task is a row
+    that exists; the request file is a write that may not have happened, and
+    the difference between "a model can read this request" and "a model can
+    read this request's title" is the difference this whole change is about.
+    A caller that only rendered :attr:`task` would be showing the state of the
+    row and saying nothing about what is behind it - which is exactly the
+    silence the defect lived in.
+    """
+
+    task: TaskView
+    #: The file's name, or ``""`` when nothing was written. Never a name that
+    #: is not on disk: it is taken from the workspace's own return value.
+    request_file: str
+    #: One sentence, always present, whichever way the write went.
+    request_file_detail: str
+
+
 @dataclass(frozen=True, slots=True)
 class RoomFailure:
     """One room that could not be read, named, with its reason."""
@@ -94,6 +168,61 @@ class RoomFailure:
     room: str
     reason: str
     detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class RoomNote:
+    """A fact about a room that changes what reading it means.
+
+    Not a failure and not a refusal: the room was read. It is a sentence the
+    scan owes a person about *which* room they chose, and it exists because
+    the read path used to owe it and never said it. ``RoomScanTarget`` has
+    carried :attr:`~station_api.workscan.targets.RoomScanTarget.is_unlisted`
+    and ``is_ephemeral`` since Package H1 and **no caller read either one** -
+    the write path warns about both on every send, and the read path dropped
+    them on the floor.
+    """
+
+    room: str
+    #: ``unlisted`` or ``ephemeral``. A closed set, from the room's class
+    #: markers, never from anything a reply said.
+    kind: str
+    detail: str
+
+
+#: What is said about a room whose name is not in any listing. Not a refusal:
+#: a name somebody already knows is theirs to read. What was missing is that
+#: the product never said which kind of room the person was pointing at.
+UNLISTED_ROOM_NOTE = (
+    "Bu oda listelenmez: oda listesinde ve kesif gunlugunde hicbir zaman "
+    "gorunmez, yani bu adi baska bir yerden ogrendiniz. Adi bilen herkes "
+    "okuyabilir; ad bir sirdir, erisim denetimi degildir."
+)
+
+#: What is said about an ephemeral room.
+EPHEMERAL_ROOM_NOTE = (
+    "Bu oda gecicidir: mesajlar okuma aninda suresi dolmus sayilabilir. "
+    "Burada bir satirin gorunmemesi, o satirin hic yazilmadigi anlamina "
+    "gelmez."
+)
+
+
+def room_notes(target: RoomScanTarget) -> tuple[RoomNote, ...]:
+    """The facts a room's own class markers carry, as sentences.
+
+    Built from the resolved target, so the markers came from the live
+    manifest check and not from a prefix somebody eyeballed.
+    """
+    notes: list[RoomNote] = []
+    if target.is_unlisted:
+        notes.append(
+            RoomNote(room=target.room, kind="unlisted", detail=UNLISTED_ROOM_NOTE)
+        )
+    if target.is_ephemeral:
+        notes.append(
+            RoomNote(room=target.room, kind="ephemeral", detail=EPHEMERAL_ROOM_NOTE)
+        )
+    return tuple(notes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +235,8 @@ class ScanResult:
     rooms: tuple[str, ...]
     results: tuple[DerivationResult, ...]
     failures: tuple[RoomFailure, ...]
+    #: What each scanned room's class markers mean for what was read.
+    notes: tuple[RoomNote, ...] = ()
     honesty: str = DERIVATION_HONESTY_SENTENCE
 
     @property
@@ -129,6 +260,10 @@ class WorkScanView:
     adapters: tuple[AdapterRecord, ...]
     #: The last room overview, if a person asked for one this process.
     room_index: RoomIndexSnapshot | None
+    #: The last discovery-log read, if a person asked for one this process.
+    #: ``None`` until then: reading the surface contacts nobody, and a log
+    #: that appeared without a request would be an automatic scan.
+    discovery: DiscoveryLog | None
     #: The last scan, if a person ran one this process.
     last_scan: ScanResult | None
     #: The compile-time capability reading, so a user can see before scanning
@@ -157,10 +292,20 @@ class WorkScanService:
         *,
         client: RoomScanClient | None = None,
         tasks: TaskService | None = None,
+        data_dir: Path | None = None,
     ) -> None:
         self._client = client if client is not None else RoomScanClient()
         self._tasks = tasks
+        # The same root the agent writes under, passed the way
+        # ``ProofService`` takes it and for the same reason: this is not a
+        # second file lane, it is the root that
+        # :mod:`station_api.agent.workspace`'s containment, reparse walk and
+        # ceilings are applied under. ``None`` means this build has no
+        # workspace to write into, which is a state a caller is *told* about
+        # rather than one that produces an empty directory.
+        self._data_dir = data_dir
         self._room_index: RoomIndexSnapshot | None = None
+        self._discovery: DiscoveryLog | None = None
         self._last_scan: ScanResult | None = None
         self._candidates: dict[str, WorkCandidate] = {}
 
@@ -178,6 +323,7 @@ class WorkScanService:
             honesty=DERIVATION_HONESTY_SENTENCE,
             adapters=ADAPTERS,
             room_index=self._room_index,
+            discovery=self._discovery,
             last_scan=self._last_scan,
             capability=capability_for(
                 SCAN_MODULE_ID, write_gate_open=write_gate_open
@@ -212,6 +358,34 @@ class WorkScanService:
         self._room_index = snapshot
         return snapshot
 
+    def refresh_discovery(
+        self,
+        *,
+        markers: frozenset[str],
+        since: int | None = None,
+        limit: int = DEFAULT_LIMIT,
+    ) -> DiscoveryLog:
+        """Read the discovery log once, because a person asked.
+
+        One request, inside the request that asked for it. ``since`` is a
+        cursor the **caller** supplies from the previous read's ``last_seq``:
+        this class deliberately does not remember one, because a remembered
+        cursor turns "read the rest" into a loop somebody schedules, and there
+        is no scheduler in this package (SI-272, ADR-0007 4).
+
+        A failure raises rather than returning an empty log. An empty
+        discovery log means "no new rooms were announced", and a log this
+        build could not read must never be able to say that.
+        """
+        target = discovery_target(markers=markers)
+        result = self._client.fetch_room_messages(target, since=since, limit=limit)
+        log = parse_discovery(
+            parse_room_messages(result, requested_room=target.room, since=since),
+            markers=markers,
+        )
+        self._discovery = log
+        return log
+
     def scan(
         self,
         rooms: Sequence[str],
@@ -245,10 +419,11 @@ class WorkScanService:
             for name in dropped
         ]
         scanned: list[str] = []
+        notes: list[RoomNote] = []
 
         for name in wanted:
             try:
-                snapshot = self._read_room(name, markers=markers, limit=limit)
+                target, snapshot = self._read_room(name, markers=markers, limit=limit)
             except ScanTargetError as exc:
                 failures.append(
                     RoomFailure(room=name, reason="room_refused", detail=str(exc))
@@ -280,6 +455,10 @@ class WorkScanService:
 
             scanned.append(snapshot.room)
             results.append(derived)
+            # Said about a room that *was* read, and only after it was. A note
+            # attached before the read would describe a room this scan never
+            # reached.
+            notes.extend(room_notes(target))
 
         result = ScanResult(
             started_at=started_at,
@@ -287,6 +466,7 @@ class WorkScanService:
             rooms=tuple(scanned),
             results=tuple(results),
             failures=tuple(failures),
+            notes=tuple(notes),
         )
         self._last_scan = result
         # Replaced, not merged. A candidate that is no longer in the newest
@@ -298,14 +478,34 @@ class WorkScanService:
 
     # --- the one write, and it is local ------------------------------------
 
-    def suggest(self, candidate_id: str) -> TaskView:
+    def suggest(self, candidate_id: str) -> SuggestionResult:
         """Turn one candidate into a local task in ``suggested``.
 
-        This is the only thing in the package that writes anything, and what
-        it writes is a row in this machine's own database. It sends nothing,
-        approves nothing and does not move the task forward: the walk from
-        ``suggested`` to ``awaiting_approval`` is the user's, through the task
-        service's own transition (ADR-0007 7, 8).
+        Two writes now, and both are local: a row in this machine's own
+        database, and one file in that task's own workspace. It still sends
+        nothing, approves nothing and does not move the task forward - the
+        walk from ``suggested`` to ``awaiting_approval`` is the user's,
+        through the task service's own transition (ADR-0007 7, 8).
+
+        The file is the repair for a measured defect: the row records
+        ``content_sha256`` and drops the bytes, so a model was being asked to
+        help with a request it could only see the title of. It goes into the
+        workspace rather than into a new column because the workspace is the
+        surface whose name allow-list, containment, reparse walk, ceilings and
+        secret coverage already exist - see
+        :mod:`station_api.workscan.request_file`.
+
+        **The task still opens when the file cannot be written.** The row and
+        its first state transition are written before the file - the workspace
+        is addressed by the task id, so there is no id to write under until
+        the row exists - and this product has no way to un-write them: a task
+        is a state machine with an audit trail and there is no delete. Raising
+        here would leave a real task in ``suggested`` while telling the caller
+        the suggestion failed, which is worse than the honest answer. So the
+        refusal travels on :class:`SuggestionResult` instead, in a field of
+        its own, and the caller shows it. ``content_sha256`` and
+        ``source_version_id`` are untouched by any of this: what a failed
+        write costs is readability, not identity.
         """
         if self._tasks is None:
             raise WorkScanError(
@@ -313,7 +513,7 @@ class WorkScanService:
             )
         candidate = self.candidate(candidate_id)
         try:
-            return self._tasks.suggest_task(
+            view = self._tasks.suggest_task(
                 module_id=SCAN_MODULE_ID,
                 source=SCAN_SOURCE_ID,
                 content=candidate_content(candidate),
@@ -321,6 +521,53 @@ class WorkScanService:
             )
         except TaskError as exc:
             raise CandidateError(str(exc)) from exc
+
+        name, detail = self._write_request_file(view.id, candidate)
+        return SuggestionResult(
+            task=view, request_file=name, request_file_detail=detail
+        )
+
+    def _write_request_file(
+        self, task_id: str, candidate: WorkCandidate
+    ) -> tuple[str, str]:
+        """Write the request into the task's workspace, or say why not.
+
+        Returns ``("", <sentence>)`` on every failure and never re-raises: see
+        :meth:`suggest` for why a failure here cannot be allowed to discard a
+        task that already exists.
+
+        ``OSError`` is caught beside :class:`WorkspaceError` because the two
+        cover different halves of the same event. ``WorkspaceError`` is this
+        product's own refusal - a name, a link, a ceiling - and ``OSError`` is
+        the machine's: a full disk, a denied ACL, a path the filesystem would
+        not take. Only ``strerror`` is carried out of it, never ``filename``,
+        so the sentence says what went wrong without printing a path into a
+        response body.
+        """
+        if self._data_dir is None:
+            return "", REQUEST_FILE_UNAVAILABLE
+        try:
+            directory = workspace.ensure_workspace(self._data_dir, task_id)
+            written = workspace.write_text(
+                directory,
+                REQUEST_FILE_NAME,
+                render_request_file(candidate),
+                replace_existing=False,
+            )
+        except WorkspaceError as exc:
+            return "", REQUEST_FILE_REFUSED.format(
+                reason=exc.reason, detail=str(exc)
+            )
+        except OSError as exc:
+            return "", REQUEST_FILE_REFUSED.format(
+                reason=type(exc).__name__,
+                detail=exc.strerror or "isletim sistemi bir aciklama vermedi.",
+            )
+        return written.name, REQUEST_FILE_WRITTEN.format(
+            name=written.name,
+            byte_count=written.byte_count,
+            sha256=written.sha256[:12],
+        )
 
     # --- internals ---------------------------------------------------------
 
@@ -345,7 +592,7 @@ class WorkScanService:
 
     def _read_room(
         self, room: str, *, markers: frozenset[str], limit: int
-    ) -> RoomMessagesSnapshot:
+    ) -> tuple[RoomScanTarget, RoomMessagesSnapshot]:
         """Resolve, read once, parse. No cursor, and therefore no follow-up.
 
         ``since`` is deliberately not carried between scans. A cursor is the
@@ -359,16 +606,28 @@ class WorkScanService:
         # The resolved room, not the one the reply names. A snapshot's scope
         # is a decision this process made; see ``snapshot`` for what happens
         # when the document disagrees.
-        return parse_room_messages(result, requested_room=target.room)
+        #
+        # The target travels back with the snapshot because its class markers
+        # are a fact about the room a person chose, and they were being thrown
+        # away here.
+        return target, parse_room_messages(result, requested_room=target.room)
 
 
 __all__ = [
+    "EPHEMERAL_ROOM_NOTE",
     "MAX_ROOMS_PER_SCAN",
     "MAX_TITLE_CHARS",
+    "REQUEST_FILE_REFUSED",
+    "REQUEST_FILE_UNAVAILABLE",
+    "REQUEST_FILE_WRITTEN",
     "SCAN_MODULE_ID",
     "SCAN_SOURCE_ID",
+    "UNLISTED_ROOM_NOTE",
     "RoomFailure",
+    "RoomNote",
     "ScanResult",
+    "SuggestionResult",
     "WorkScanService",
     "WorkScanView",
+    "room_notes",
 ]

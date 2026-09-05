@@ -302,15 +302,27 @@ def _string_literals(path: Path) -> list[str]:
 
 
 def test_the_unverified_header_assumption_is_labelled_where_it_lives() -> None:
-    """The assumption is only honest if it is visible.
+    """The label is only honest if it says what is actually known.
 
     Checked on the source rather than trusted, because a comment is exactly
     the thing a later edit drops while keeping the line it explained.
+
+    The claim this pins **changed** in ADR-0012. A metered request carrying
+    this header answered 200, so "unverified" became false and the caveat
+    would have been a lie kept for tidiness. What stayed true is the half
+    about the *source*: the documentation still does not publish the header,
+    so the provider may change it without breaking a published contract.
+    The test now pins that half, and pins that the measurement is named -
+    a caveat that dropped both would be a caveat nobody could check.
     """
     source = Path(client_module.__file__ or "").read_text(encoding="utf-8")
-    assert "NOT VERIFIED IN THE OFFICIAL DOCUMENTATION" in source
+    assert "STILL NOT PUBLISHED IN THE OFFICIAL DOCUMENTATION" in source
     assert "ADR-0005 3" in source
-    assert "dogrulanmamistir" in client_module.AUTH_HEADER_CAVEAT
+    assert "ADR-0012" in source
+    caveat = client_module.AUTH_HEADER_CAVEAT
+    assert "yayimlanmamistir" in caveat
+    assert "dogrulandi" in caveat
+    assert "dogrulanmamistir" not in caveat
 
 
 # ---------------------------------------------------------------------------

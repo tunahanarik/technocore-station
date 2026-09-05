@@ -26,11 +26,24 @@ Uygulanan paketler ve hangi aşamada geldikleri:
 | `station_api/evidence/` | 5 | Kanıt kayıtları, yakalama, HMAC audit zinciri, dışa aktarım |
 | `station_api/modules/` | 6 | **Derleme zamanı modül registry'si** ve dört alanlı kanıt sözlüğü |
 | `station_api/tasks/` | 6 | Görev kayıtları, dokuz durumlu makine, salt-okuma uzlaştırma |
+| `station_api/opencode/` | 7 (G) | Sağlayıcı bağlantısı: kapalı uç/model registry'si, katalog, kimlik bilgisi deposu, protokol adaptörleri |
+| `station_api/workscan/` | 8 (H1) | İş taraması ve aday üretimi |
+| `station_api/agent/` | 9 (H2) | Çalışma alanı, kapalı araç registry'si, koşu tavanı, aktivite; H4'te kabul koşulları registry'si |
+| `station_api/proof/` | 10 (H3) | Kanıt paketi, artifact gövdeleri, tek kullanımlık paylaşım onayı |
+| `station_api/planner/` | H4 | Model plan önerisi. `agent` ve `opencode`'u içe alan, ikisinin de içe **almadığı** üçüncü paket |
+
+Tablo aşama 6'da bitiyordu ve beş paket eksikti; sayı taşımayan bir mimari
+belgesi bayatlamaz ama **paket listesi** bayatlar.
 
 **Secret sınırı:** `station_api/vault/` paketini yalnız `identity` servisi,
-`compose/signer.py`, `evidence` zarfı ve CLI import eder. Gelecekteki bir
-LLM/model adaptörü bu paketi import edemez; sınır paket sınırıdır. Paket F'in
-iki yeni paketi de bu sınıra **dokunmaz** ve bir test bunu doğrular.
+`compose/signer.py`, `evidence` zarfı ve CLI import eder; sınır paket
+sınırıdır. Bu paragraf eskiden "**gelecekteki** bir LLM/model adaptörü bu
+paketi import edemez" diyordu. Adaptör artık gelecekte değil: `opencode/` ve
+`planner/` mevcut, ve kural bir öngörü değil **ölçülen** bir olgu —
+`test_planner_boundary.py::test_the_planner_reaches_no_signer_vault_or_credential_store`
+planner ağacının `vault.service`, `vault.dpapi`, `vault.passphrase` ve
+`vault.paths`'e ulaşmadığını sözdizim ağacından doğrular. Paket F'in iki yeni
+paketi de bu sınıra **dokunmaz** ve bir test bunu doğrular.
 
 ---
 

@@ -67,7 +67,12 @@ from typing import Any
 from station_api.strict_json import StrictJsonError, loads_strict
 from station_api.technocore.projection import safe_display
 from station_api.workscan.authority import (
+    CALLER_WRITTEN_ROOM_FIELDS,
     CONTENT_AUTHORITY,
+    MEASURED_CAVEAT,
+    ROOM_NAME_CAVEAT,
+    TOPIC_CAVEAT,
+    UNLISTED_NEVER_LISTED,
     AuthorDescription,
     AuthorityLevel,
     describe_author,
@@ -95,6 +100,23 @@ MAX_MESSAGES = 200
 #: would have accepted, and anything longer is a reply that outran its own
 #: contract.
 MAX_TEXT_CHARS = 4096
+
+#: Most service-measured fields kept from one listing entry.
+#:
+#: The published ``rooms[]`` item schema is a bare object naming no
+#: properties, so this build cannot enumerate the aggregates by name without
+#: inventing names nobody published. It reads them **structurally** instead -
+#: every key that is not caller-written - and a structural reader on an
+#: anonymous document needs a ceiling, because the document decides how many
+#: keys there are.
+MAX_MEASURED_FIELDS = 16
+
+#: Longest measured key or rendered value kept, in characters.
+MAX_MEASURED_CHARS = 200
+
+#: Most field names kept from a reply's own ``untrusted.fields`` array. The
+#: array is content like everything else on this surface.
+MAX_UNTRUSTED_FIELDS = 16
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,20 +196,88 @@ def ring_drop_notice(*, since: int | None, first_seq: int | None) -> RingDropNot
 
 
 @dataclass(frozen=True, slots=True)
+class MeasuredField:
+    """One thing the **service** says it measured about a room.
+
+    Kept apart from :attr:`RoomEntry.name` and :attr:`RoomEntry.topic` on
+    purpose. Those two are strings a stranger typed; these are the service's
+    own aggregates over its own window, and merging the two into one object
+    would make every reader responsible for remembering which is which.
+
+    The key is echoed, never chosen here. The published ``rooms[]`` item
+    schema names no properties at all, so a build that listed the aggregate
+    names would be listing names nobody published - the same mistake as
+    reading a field out of the prose beside a schema.
+    """
+
+    key: str
+    #: The value rendered as one bounded, swept string. Objects and arrays are
+    #: rendered rather than walked: a recursive reader on an anonymous
+    #: document is an unbounded reader, and nothing downstream indexes into
+    #: this value anyway.
+    value: str
+
+
+@dataclass(frozen=True, slots=True)
+class UntrustedDeclaration:
+    """What the reply itself said about which of its fields are caller-written.
+
+    Carried, and never relied on. The declaration is content on the same
+    anonymous surface as everything else here, so a reply that named *fewer*
+    fields would otherwise widen what this build treats as a measurement -
+    the exact inversion of the guard. The rule is therefore a **union**: a
+    reply may add to :data:`~station_api.workscan.authority.CALLER_WRITTEN_ROOM_FIELDS`
+    and can never subtract from it.
+
+    Both lists travel so the disagreement is visible rather than resolved
+    silently in favour of one of them.
+    """
+
+    #: Whether the reply carried the object at all.
+    present: bool
+    #: The field names the reply declared, swept and bounded.
+    fields: tuple[str, ...]
+    #: The reply's own note, swept. Data, like the rest of the document.
+    note: str
+    #: This build's compile-time list.
+    build_fields: tuple[str, ...]
+    #: Declared by the reply and not by this build. Honoured: treated as
+    #: caller-written from here on.
+    extra_fields: tuple[str, ...]
+    #: Named by this build and **not** by the reply. Not honoured, and this is
+    #: the direction that matters.
+    missing_fields: tuple[str, ...]
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
 class RoomEntry:
     """One room as the overview listed it.
 
-    ``room`` and ``topic`` are caller-written strings the service re-emits;
-    every other field on the wire is the service's own measurement. Only these
-    two are kept, because they are the only two this build has a use for and
-    keeping a measurement would invite a sentence that leans on it.
+    ``room`` and ``topic`` are caller-written strings the service re-emits.
+    Everything else on the entry is the service's own measurement and it now
+    travels in :attr:`measured`, separately - it used to be dropped on the
+    floor, which made the listing a name and a stranger's note with nothing to
+    tell one room from another.
     """
 
     name: str
     topic: str
+    #: The service's own aggregates for this room, by the names it used.
+    measured: tuple[MeasuredField, ...] = ()
+    #: Whether the entry carried more measurements than this build keeps.
+    measured_truncated: bool = False
 
     @property
     def authority(self) -> AuthorityLevel:
+        """The level of :attr:`name` and :attr:`topic`.
+
+        Deliberately the level of the caller-written half. The measured half
+        is the service reporting on itself and carries
+        :data:`~station_api.workscan.authority.MEASURED_CAVEAT` instead; one
+        number for two different kinds of fact would be the merge this type
+        exists to avoid.
+        """
         return CONTENT_AUTHORITY
 
 
@@ -203,6 +293,8 @@ class RoomIndexSnapshot:
     staleness: StalenessNote
     #: The digest of the exact bytes this snapshot was built from.
     sha256: str
+    #: What the reply claimed about its own caller-written fields.
+    untrusted: UntrustedDeclaration
 
     @property
     def kept_count(self) -> int:
@@ -212,6 +304,29 @@ class RoomIndexSnapshot:
     def truncated(self) -> bool:
         """Whether this build kept fewer rooms than the service reported."""
         return self.total > self.kept_count
+
+    @property
+    def room_name_caveat(self) -> str:
+        return ROOM_NAME_CAVEAT
+
+    @property
+    def topic_caveat(self) -> str:
+        return TOPIC_CAVEAT
+
+    @property
+    def measured_caveat(self) -> str:
+        return MEASURED_CAVEAT
+
+    @property
+    def unlisted_note(self) -> str:
+        """Always present, whether or not anything looks missing.
+
+        An unlisted room is never enumerated here, so the listing's silence
+        about one is not evidence. Shown on every snapshot rather than only
+        when something seems wrong, because a note nobody ever sees is a note
+        that is not there.
+        """
+        return UNLISTED_NEVER_LISTED
 
 
 @dataclass(frozen=True, slots=True)
@@ -310,19 +425,132 @@ def _str_or_empty(entry: dict[str, Any], key: str) -> str:
     return safe_display(value) if isinstance(value, str) else ""
 
 
+def _untrusted_declaration(document: dict[str, Any]) -> UntrustedDeclaration:
+    """Read the reply's own ``untrusted`` object, and say what it disagrees on.
+
+    Absent is a real answer and gets recorded as one. It is not the same as a
+    reply that carried the object and left this build's two fields out of it:
+    the first says nothing, the second says something this build refuses to
+    believe, and only the second produces a ``missing_fields`` entry.
+    """
+    build_fields = tuple(sorted(CALLER_WRITTEN_ROOM_FIELDS))
+    raw = document.get("untrusted")
+    if not isinstance(raw, dict):
+        return UntrustedDeclaration(
+            present=False,
+            fields=(),
+            note="",
+            build_fields=build_fields,
+            extra_fields=(),
+            missing_fields=(),
+            detail=(
+                "Yanit kendi 'untrusted' bildirimini tasimadi. Cagiran "
+                "tarafindan yazilan alanlar bu yapinin kendi listesinden "
+                f"okundu: {', '.join(build_fields)}."
+            ),
+        )
+
+    listed = raw.get("fields")
+    names: list[str] = []
+    if isinstance(listed, list):
+        for item in listed:
+            if not isinstance(item, str):
+                continue
+            shown = safe_display(item)[:MAX_MEASURED_CHARS]
+            if shown and shown not in names:
+                names.append(shown)
+            if len(names) >= MAX_UNTRUSTED_FIELDS:
+                break
+
+    declared = tuple(names)
+    extra = tuple(
+        sorted(name for name in declared if name not in CALLER_WRITTEN_ROOM_FIELDS)
+    )
+    missing = tuple(sorted(CALLER_WRITTEN_ROOM_FIELDS - set(declared)))
+
+    parts = [
+        "Yanit, su alanlarin cagiran tarafindan yazildigini bildirdi: "
+        f"{', '.join(declared) or 'hicbiri'}. Bu bildirim de ayni anonim "
+        "yuzeyden gelen bir icerik oldugu icin tek basina esas alinmaz; "
+        "guvenilmez kabul edilen alan kumesi, bu yapinin kendi listesiyle "
+        f"({', '.join(build_fields)}) birlesimidir."
+    ]
+    if missing:
+        parts.append(
+            f"Yanit su alanlari bildirmedi: {', '.join(missing)}. Bu alanlar "
+            "yine de cagiran tarafindan yazilmis sayilir; bir yanit "
+            "guvenilmezler listesini daraltamaz."
+        )
+    if extra:
+        parts.append(
+            f"Yanit su alanlari da ekledi: {', '.join(extra)}. Bunlar servis "
+            "olcumu olarak degil, cagiran metni olarak islenir."
+        )
+
+    return UntrustedDeclaration(
+        present=True,
+        fields=declared,
+        note=_str_or_empty(raw, "note"),
+        build_fields=build_fields,
+        extra_fields=extra,
+        missing_fields=missing,
+        detail=" ".join(parts),
+    )
+
+
+def _measured_fields(
+    entry: dict[str, Any], *, caller_written: frozenset[str]
+) -> tuple[tuple[MeasuredField, ...], bool]:
+    """Split the service's own numbers out of one listing entry.
+
+    Structural rather than by name: the published item schema names no
+    properties, so the only honest rule is "everything that is not
+    caller-written". Bounded, because the document decides how many keys it
+    has, and rendered rather than walked, because a recursive reader on an
+    anonymous document is an unbounded one.
+    """
+    kept: list[MeasuredField] = []
+    truncated = False
+    for key, value in entry.items():
+        if not isinstance(key, str) or key in caller_written:
+            continue
+        if len(kept) >= MAX_MEASURED_FIELDS:
+            truncated = True
+            break
+        kept.append(
+            MeasuredField(
+                key=safe_display(key)[:MAX_MEASURED_CHARS],
+                value=safe_display(value)[:MAX_MEASURED_CHARS],
+            )
+        )
+    return tuple(kept), truncated
+
+
 def parse_room_index(result: ScanFetchResult) -> RoomIndexSnapshot:
     """Parse the room overview.
 
     ``rooms`` entries are published as bare objects - the schema declares
-    ``items: {"type": "object"}`` and names no properties - so nothing here
-    reads a field the prose did not name. The two the prose does name are the
-    two caller-written ones, and those are the two kept.
+    ``items: {"type": "object"}`` and names no properties. Nothing here reads
+    an aggregate **by name**; the two fields the prose does name are read by
+    name because the prose names them as the caller-written ones, and the rest
+    of the entry is split off structurally into
+    :attr:`RoomEntry.measured` with the keys the reply used.
+
+    That split is the whole content of this function. Before it existed the
+    entry's other fields were dropped, which left a listing that could say
+    what a room is called and what a stranger wrote about it and nothing at
+    all about whether anybody had been there.
     """
     document = _object(result.body, max_bytes=len(result.body))
 
     listed = document.get("rooms")
     if not isinstance(listed, list):
         raise SnapshotParseError("'rooms' alani dizi olarak gelmedi.")
+
+    untrusted = _untrusted_declaration(document)
+    # The union, and it runs one way. ``extra_fields`` widens what counts as
+    # caller-written; nothing narrows it.
+    caller_written = CALLER_WRITTEN_ROOM_FIELDS | set(untrusted.fields)
 
     entries: list[RoomEntry] = []
     for item in listed[:MAX_ROOMS]:
@@ -334,13 +562,24 @@ def parse_room_index(result: ScanFetchResult) -> RoomIndexSnapshot:
             # than kept with a placeholder, which would be a room this build
             # invented.
             continue
-        entries.append(RoomEntry(name=name, topic=_str_or_empty(item, "topic")))
+        measured, measured_truncated = _measured_fields(
+            item, caller_written=frozenset(caller_written)
+        )
+        entries.append(
+            RoomEntry(
+                name=name,
+                topic=_str_or_empty(item, "topic"),
+                measured=measured,
+                measured_truncated=measured_truncated,
+            )
+        )
 
     return RoomIndexSnapshot(
         rooms=tuple(entries),
         total=_int_or_refuse(document, "total"),
         staleness=staleness_note(result.read_at),
         sha256=result.sha256,
+        untrusted=untrusted,
     )
 
 
@@ -425,15 +664,20 @@ def parse_room_messages(
 
 
 __all__ = [
+    "MAX_MEASURED_CHARS",
+    "MAX_MEASURED_FIELDS",
     "MAX_MESSAGES",
     "MAX_ROOMS",
     "MAX_TEXT_CHARS",
+    "MAX_UNTRUSTED_FIELDS",
+    "MeasuredField",
     "RingDropNotice",
     "RoomEntry",
     "RoomIndexSnapshot",
     "RoomMessage",
     "RoomMessagesSnapshot",
     "StalenessNote",
+    "UntrustedDeclaration",
     "parse_room_index",
     "parse_room_messages",
     "ring_drop_notice",

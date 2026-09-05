@@ -123,7 +123,13 @@ SECRET_IMPORTS = (
 
 #: The schema stage every entry point opens the database at. Written out
 #: rather than imported, for ``CURRENT_SCHEMA_STAGE``'s reason.
-CURRENT_MIGRATION_HEAD = "0009"
+#:
+#: ``0009`` until Package H4, which added ``0010``: one additive column,
+#: ``agent_run.acceptance_json``, carrying the plan's machine-checkable
+#: acceptance conditions. Bumping this constant is the point of writing it
+#: out - a migration is a change a reviewer has to see, and a head read off
+#: the script directory would have agreed with whatever the directory said.
+CURRENT_MIGRATION_HEAD = "0010"
 
 
 def _agent_sources(api_source_root: Path) -> list[Path]:
@@ -374,6 +380,40 @@ def test_migration_0009_changed_no_existing_table(engine: Engine) -> None:
         assert table in names, f"{table} was not created"
 
 
+def test_migration_0010_only_added_a_column(engine: Engine) -> None:
+    """H4's revision is one column on one table, and it changed nothing else.
+
+    ``agent_run.acceptance_json`` is where a plan's machine-checkable
+    acceptance conditions live, inside ``plan_sha256`` so they cannot be
+    loosened after approval. Asserted as *additive*: every column ``0009``
+    created is still there with the name it had, and exactly one is new.
+    """
+    columns = {
+        str(column["name"]) for column in inspect(engine).get_columns("agent_run")
+    }
+    before = {
+        "id",
+        "task_id",
+        "phase",
+        "created_at",
+        "started_at",
+        "finished_at",
+        "stop_requested",
+        "plan_sha256",
+        "test_condition",
+        "expected_artifacts",
+        "tool_calls_used",
+        "elapsed_ms",
+        "max_tool_calls",
+        "max_wall_clock_seconds",
+        "concurrency",
+        "detail",
+    }
+
+    assert before <= columns, sorted(before - columns)
+    assert columns - before == {"acceptance_json"}, sorted(columns - before)
+
+
 def test_the_agent_tables_have_no_secret_shaped_columns(engine: Engine) -> None:
     """``key`` and ``token`` included, as on the task and OpenCode tables."""
     forbidden = (
@@ -430,7 +470,8 @@ def test_no_agent_table_can_hold_a_model_reasoning_trace(engine: Engine) -> None
 
 
 def test_the_migration_chain_head_is_the_one_this_package_added() -> None:
-    """One head, and it is 0009. A branch would make the order ambiguous."""
+    """One head, and it is the one this constant names. A branch would make
+    the order ambiguous."""
     from station_api.db.migrations_runner import script_directory
 
     heads = list(script_directory().get_heads())

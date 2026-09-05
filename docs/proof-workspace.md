@@ -91,9 +91,25 @@ handoff'unu da kapsar; hepsi aynı depodur.
 
 | Alan | Durum | Gerekçe |
 |---|---|---|
-| `independent_check` | `not_implemented` | Model yolu kapalı (ADR-0008 §2): ikinci bir görüş **yoktur** ve aynı koşmanın kendi çıktısı üçüncü taraf onayı gibi sunulmaz |
+| `independent_check` | `not_implemented` | Modelin **kendi önerisi üçüncü taraf değildir**: planı öneren tarafın çıktısını bağımsız kontrol diye sunmak ADR-0009 §6'nın reddettiği yalandır |
 | `exit_code` | `not_implemented` | Keyfi yürütme kapalı (ADR-0008 §1): koşacak bir denetim yok, sayı **uydurulmaz** |
-| `test_result` | `not_implemented` | Aynı sebep; H2'den devralınır |
+
+**Bu tablo H4'te değişti ve iki satırı düzeltildi.**
+
+`test_result` **bu tablodan çıktı.** H3'te "H2'den devralınır" diye
+yazılıydı; H4 `station_api/agent/acceptance.py`'yi (yedinci kapalı registry)
+ekledi ve alan artık **gerçekten üretiliyor**: makinece denetlenebilir kabul
+koşulu taşıyan bir plan gerçek bir verdict alır. Yalnız **cümle** taşıyan bir
+plan hâlâ `not_implemented` raporlar — bu bir eksiklik değil, o planın hak
+ettiği cevaptır.
+
+`independent_check`'in **gerekçesi** değişti, **durumu** değişmedi. Eskiden
+"model yolu kapalı (ADR-0008 §2)" yazıyordu; ADR-0012 o yolu açtı, yani
+öncül ortadan kalktı. Alan yine de yerinde duruyor, çünkü öncül zaten asıl
+sebep değildi: asıl sebep ikinci yarıydı ve yolun açılması onu
+**keskinleştirdi**. Planı öneren model, o planı koşan çalışmanın üçüncü
+tarafı değildir; ortada hâlâ ikinci bir görüş yok, yalnızca ikinci bir görüş
+diye etiketlenmeye daha müsait bir şey var.
 
 İkisi de **politika reddi değil, mimari kapanıştır** — lobby selamı bu ürünün
 sürdürmeyi seçtiği bir politikayla reddedilir, bunlar gerçek izolasyonu olan
@@ -246,13 +262,31 @@ metottur.
   anahtar/DID/seed yok. İnsan güvenlik incelemesi ertelenmiş kalan risktir
   (ADR-0001 §5).
 
-## 10. Bu sürümde HTTP'den ulaşılamayan şey
+## 10. HTTP'den istenemeyen şey — ve H4'te kapanan boşluk
 
 `ready_to_publish` **hâlâ HTTP'den istenemez**: `TaskUserTransitionName` onu
 taşımaz (SI-222) ve H3 bunu değiştirmedi, çünkü ADR-0009 §8 kabulün geçişin
 **girdisi** olmasını şart koşuyor ve geçişi kabulün yan etkisi yapmayı
-yasaklıyor. Sonuç: üç yayım alanı doğrulanmış olsa bile görevi
-`ready_to_publish`'e taşıyan bir kullanıcı rotası yoktur. Bu, kapatılmış bir
-karar değil **açık bir boşluktur** ve burada yazılıdır; onu kapatmak
-`TaskUserTransitionName`'i genişletmek demektir ve o ADR-0009'un kapsamında
-değildir.
+yasaklıyor.
+
+Bu bölüm burada bitiyordu ve şöyle diyordu: *"üç yayım alanı doğrulanmış olsa
+bile görevi `ready_to_publish`'e taşıyan bir kullanıcı rotası yoktur. Bu,
+kapatılmış bir karar değil **açık bir boşluktur**."* **Boşluk H4'te
+kapandı** ve bu paragraf onunla birlikte güncellendi.
+
+`POST /api/tasks/{id}/publish-readiness` o rotadır ve **ayrı** bir rota
+olması kasıtlıdır — geçiş literaline yeni bir değer eklemek değil. SI-222'nin
+kuralı "bu duruma ulaşılamaz" değil, "bu durum **kanıttan türer ve
+istenemez**" idi; ikisi farklı cümlelerdir ve kapatılan yalnızca birincisiydi:
+
+* `TaskUserTransitionName` `ready_to_publish` **taşımıyor**, yani bu üründe
+  hiçbir istek durumu **adlandıramıyor**;
+* `TaskPublishReadinessRequest` gövdesinde **hedef alanı yok**, yani
+  adlandıracak alan da yok (hedef adı taşıyan gövde 422);
+* rota bir şey **istemiyor**, üç alanı **yeniden okuyor**; üçü de
+  doğrulanmamışsa `evidence_incomplete` ile reddediyor ve eksikleri
+  **adıyla** söylüyor;
+* geçişi yine `TaskService.transition` yazıyor — bu üründe bir görev durumunu
+  yazan tek fonksiyon odur, yani bu rota ikinci bir yazıcı değil.
+
+SI-342 bunu sabitler; SI-222 gevşetilmedi, korundu.

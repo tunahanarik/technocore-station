@@ -112,6 +112,23 @@ BUNDLE_SCOPE_SENTENCE = (
     "eksik olan her kalem adiyla listelenir."
 )
 
+#: The third, added when the bundle stopped being an inventory of the work and
+#: started carrying the work.
+#:
+#: Two things a reader has to be told the moment a file's own text appears
+#: inside a document this product authored: that the text is **not** this
+#: product's words, and that each digest beside a body describes that body
+#: rather than the package around it. The third sentence is the one that keeps
+#: an absence from reading as an oversight - a body that was left out is named
+#: and explained, never quietly missing.
+BODY_SCOPE_SENTENCE = (
+    "Paket, calisma alanindaki metin dosyalarinin govdesini oldugu gibi "
+    "tasir. Govde kosmanin urettigi metindir, bu urunun cumlesi degildir ve "
+    "degistirilmeden aktarilir. Her govdenin yanindaki SHA-256 o govdenin "
+    "kendi ozetidir. Pakete alinmayan her govde adiyla ve nedeniyle "
+    "listelenir."
+)
+
 #: Precomputed once. Each entry is the folded form of a forbidden phrase.
 _FOLDED = tuple(fold(phrase) for phrase in FORBIDDEN_PHRASES)
 
@@ -201,6 +218,7 @@ def _mask_one(text: str, needle: str) -> str:
 
 
 __all__ = [
+    "BODY_SCOPE_SENTENCE",
     "BUNDLE_SCOPE_SENTENCE",
     "FORBIDDEN_PHRASES",
     "HASH_SCOPE_SENTENCE",

@@ -268,17 +268,34 @@ _WORK_SCAN_REQUIREMENTS: tuple[ModuleRequirement, ...] = (
 
 #: What Package H2 undertook to establish for the agent working environment.
 #:
-#: One of the seven is ``implemented=False`` and it is the honest half.
-#: ``run_test_result_recorded`` cannot be produced because running a check is
-#: exactly the capability ADR-0008 1 closes - a run records what its plan said
-#: would establish success and never a result, so the field reports
-#: ``not_implemented`` and the task cannot reach ``ready_to_publish`` from a
-#: run alone. It is deliberately **not** in
-#: :data:`POLICY_REFUSED_REQUIREMENTS`: the lobby greeting is refused by a
-#: policy this product intends to keep, while execution is closed by an
-#: architecture decision a later package may revisit with real isolation.
-#: Reporting the two identically would lose that difference, which is the
-#: whole reason the separate list exists.
+#: One of the seven is ``implemented=False``, and **its reason expired in
+#: H4**. The flag has not been flipped yet; that is a deliberate pause, and
+#: leaving it without saying so would be the drift this file exists to catch.
+#:
+#: The original reason was that ``run_test_result_recorded`` could not be
+#: produced at all, because running a check is exactly the capability
+#: ADR-0008 1 closes. Half of that is still true - arbitrary execution stays
+#: closed and ``test_condition`` is still never run - but
+#: :mod:`station_api.agent.acceptance` (H4, ADR-0012) added the other half: a
+#: closed set of conditions decided by reading bytes already on disk. A run
+#: **can** now write a ``test_result`` reference, and a task **can** reach
+#: ``ready_to_publish``. So the ``detail`` sentence below, which says no code
+#: path can produce this evidence, is no longer accurate for a plan that
+#: carries machine-checkable conditions; it is still exactly right for a plan
+#: that recorded only a sentence.
+#:
+#: Flipping the flag is not a documentation edit: ``complete`` is derived, an
+#: unbuilt requirement is never a pass, so this one flag is what keeps the
+#: ``agent_workspace`` module from ever reporting itself finished. Moving it
+#: is a product-state claim and belongs to the package that measures it,
+#: exactly as H3 moved ``user_accepted_the_run_output`` on the commit that
+#: built its surface rather than ahead of it.
+#:
+#: It is deliberately **not** in :data:`POLICY_REFUSED_REQUIREMENTS`: the
+#: lobby greeting is refused by a policy this product intends to keep, while
+#: execution is closed by an architecture decision a later package may revisit
+#: with real isolation. Reporting the two identically would lose that
+#: difference, which is the whole reason the separate list exists.
 #:
 #: The seventh, ``user_accepted_the_run_output``, was the second one until
 #: Package H3. H2 wrote it ``implemented=False`` with stage ``H3`` because no
@@ -375,12 +392,22 @@ _AGENT_WORKSPACE_REQUIREMENTS: tuple[ModuleRequirement, ...] = (
 #: Two of the nine are ``implemented=False`` and both are architectural
 #: closures rather than queue items - the same distinction
 #: ``run_test_result_recorded`` is written under, and for the same reason it
-#: is deliberately **not** in :data:`POLICY_REFUSED_REQUIREMENTS`. The model
-#: lane is closed (ADR-0008 2), so there is no second opinion to record and
-#: presenting a run's own output as a third party's check would be the exact
-#: lie ADR-0009 6 refuses; and arbitrary execution is closed (ADR-0008 1), so
-#: there is no exit code to record and inventing one would be worse than
-#: leaving the field empty (ADR-0009 7).
+#: is deliberately **not** in :data:`POLICY_REFUSED_REQUIREMENTS`.
+#:
+#: ``independent_check_recorded``: this used to read "the model lane is closed
+#: (ADR-0008 2), so there is no second opinion to record". ADR-0012 opened the
+#: model lane, so that premise is gone - and the field does not move, because
+#: the premise was never the operative reason. The operative reason is the
+#: second half, and opening the lane made it **sharper** rather than weaker:
+#: a model that proposed the plan is not a third party to the run that
+#: executed it, and presenting one run's own suggestion as an independent
+#: check is the exact lie ADR-0009 6 refuses. There is still no second
+#: opinion here; there is now merely a more tempting thing to mislabel as one.
+#:
+#: ``real_exit_code_recorded``: unchanged and unchallenged. Arbitrary
+#: execution is closed (ADR-0008 1) and ADR-0012 7 explicitly does not open
+#: it, so there is no exit code to record and inventing one would be worse
+#: than leaving the field empty (ADR-0009 7).
 _PROOF_WORKSPACE_REQUIREMENTS: tuple[ModuleRequirement, ...] = (
     ModuleRequirement(
         key="artifact_set_is_hashed",

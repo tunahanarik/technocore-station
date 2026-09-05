@@ -980,13 +980,29 @@ class OpenCodeSpendingContext(StrictModel):
 
 
 class OpenCodeProtocolContext(StrictModel):
-    """The three families, and the two formats deliberately not built."""
+    """The three families, the format still not built, and the one measured."""
 
     protocols: list[str]
+    #: Still a ``Literal[False]``. The streaming format was never published
+    #: and has never been measured, so a build that could report anything
+    #: else here would be a build that could report a guess.
     streaming_supported: Literal[False] = False
-    tool_calls_supported: Literal[False] = False
+    #: A plain ``bool`` since Package H4, and it was ``Literal[False]`` before
+    #: that for a reason that has stopped being true rather than for a reason
+    #: that was dropped: ADR-0012 measured the tool-call contract, so the
+    #: field states a measurement instead of an assumption. The value is
+    #: **derived** from ``station_api.opencode.events.TOOL_CALLS_SUPPORTED``
+    #: in the route rather than written out here, so the wire cannot disagree
+    #: with the constant that decides it - the same repair
+    #: ``public_share_available`` got in H3.
+    tool_calls_supported: bool
     deferral: str
     shape_provenance: str
+    #: What was measured, on which endpoint, and how far the measurement
+    #: reaches. Empty until something is measured; a supported format with no
+    #: provenance beside it would be exactly the unsourced claim ADR-0005 1.2
+    #: exists to refuse.
+    tool_call_provenance: str = ""
 
 
 class OpenCodeStatusResponse(StrictModel):
@@ -1156,12 +1172,52 @@ class WorkScanRingDrop(StrictModel):
     detail: str
 
 
+class WorkScanMeasuredField(StrictModel):
+    """One aggregate the **service** reports about a room.
+
+    Separate from :class:`WorkScanRoom`'s ``name`` and ``topic`` on the wire,
+    not merged with a caveat beside them: those two are strings a stranger
+    typed and these are the service's own numbers, and a reader must not have
+    to remember which is which.
+    """
+
+    key: str
+    value: str
+
+
+class WorkScanUntrusted(StrictModel):
+    """What the reply claimed about its own caller-written fields.
+
+    Carried so a client can see the claim, never so a client can rely on it.
+    The set this build actually treats as caller-written is the **union** of
+    ``build_fields`` and ``fields``: a reply may widen it and can never
+    narrow it, which is what ``missing_fields`` records.
+    """
+
+    present: bool
+    fields: list[str]
+    note: str
+    build_fields: list[str]
+    extra_fields: list[str]
+    missing_fields: list[str]
+    detail: str
+
+
 class WorkScanRoom(StrictModel):
-    """One room as the overview listed it. Both fields are caller-written."""
+    """One room as the overview listed it.
+
+    ``name`` and ``topic`` are caller-written, which is what ``authority: 3``
+    says. ``measured`` is the other half of the entry - the service's own
+    aggregates, by the names the service used - and it carries no authority
+    field of its own precisely so the two halves cannot be read as one kind
+    of fact.
+    """
 
     name: str
     topic: str
     authority: Literal[3] = 3
+    measured: list[WorkScanMeasuredField] = Field(default_factory=list)
+    measured_truncated: bool = False
 
 
 class WorkScanRoomIndex(StrictModel):
@@ -1175,6 +1231,54 @@ class WorkScanRoomIndex(StrictModel):
     sha256: str
     room_name_caveat: str
     topic_caveat: str
+    #: The sentence that travels with every ``measured`` list.
+    measured_caveat: str
+    #: Always present: an unlisted room is never enumerated here, so the
+    #: listing's silence about one is not evidence.
+    unlisted_note: str
+    untrusted: WorkScanUntrusted
+
+
+class WorkScanAnnouncedRoom(StrictModel):
+    """One line of the discovery log.
+
+    A line, not an endorsement. There is deliberately no ``recommended``,
+    ``score`` or ``rank`` here, and ``selectable`` is false for every line
+    this build could not read as a room name - including one that announces a
+    room the service says it never announces.
+    """
+
+    seq: int
+    ts: str
+    name: str
+    line: str
+    unusable_reason: str
+    selectable: bool
+    authority: Literal[3] = 3
+
+
+class WorkScanDiscovery(StrictModel):
+    """One read of ``/r/events``: new public rooms, in announcement order."""
+
+    room: str
+    entries: list[WorkScanAnnouncedRoom]
+    #: The cursor this read used, or ``null``.
+    since: int | None
+    #: The service's ``last_seq``. What a caller passes back as ``since`` to
+    #: continue - by pressing something, because nothing here remembers it.
+    last_seq: int
+    first_seq: int | None
+    lines_read: int
+    #: The rooms this log offers as one-click scan choices.
+    selectable: list[str]
+    unusable_count: int
+    ring_drop: WorkScanRingDrop | None
+    staleness: WorkScanStaleness
+    sha256: str
+    room_name_caveat: str
+    unlisted_note: str
+    #: Why this build never writes here, and what would happen if it tried.
+    write_refusal: str
 
 
 class WorkScanAdapterFact(StrictModel):
@@ -1214,6 +1318,20 @@ class WorkScanAdapter(StrictModel):
     provenance: str
 
 
+class WorkScanRoomNote(StrictModel):
+    """A fact about a scanned room's class, and what it means for the read.
+
+    Not a failure: the room was read. It is the sentence the read path owed a
+    person about *which* room they pointed at - an unlisted room appears in no
+    listing, so the name came from somewhere else, and an ephemeral one can
+    expire on read, so an absent line proves nothing.
+    """
+
+    room: str
+    kind: Literal["unlisted", "ephemeral"]
+    detail: str
+
+
 class WorkScanResult(StrictModel):
     """One scan of one user-chosen room set."""
 
@@ -1222,6 +1340,7 @@ class WorkScanResult(StrictModel):
     rooms: list[str]
     results: list[WorkScanRoomResult]
     failures: list[WorkScanRoomFailure]
+    notes: list[WorkScanRoomNote] = Field(default_factory=list)
     candidate_count: int
     refusal_count: int
 
@@ -1234,6 +1353,10 @@ class WorkScanStatusResponse(StrictModel):
     capability: WorkScanCapability
     adapters: list[WorkScanAdapter]
     room_index: WorkScanRoomIndex | None
+    #: The last discovery-log read, or ``null`` until a person asks for one.
+    #: Null on a fresh process is the honest answer: a log that appeared
+    #: without a request would be an automatic scan (SI-224, SI-272).
+    discovery: WorkScanDiscovery | None
     last_scan: WorkScanResult | None
     #: The parameters this package refuses to send, named in the payload so
     #: the absence of polling is checkable from outside the process.
@@ -1251,8 +1374,31 @@ class WorkScanRefreshRequest(StrictModel):
     limit: int = Field(default=50, ge=1, le=200)
 
 
+class WorkScanDiscoveryRequest(StrictModel):
+    """Read the discovery log once.
+
+    ``since`` is the cursor the client carries back from the previous read's
+    ``last_seq``. It lives in the request rather than in the service because a
+    cursor the server remembered would be the first half of a loop somebody
+    schedules, and there is no scheduler in this package. Absent means "the
+    newest lines", which is what a first read wants.
+
+    There is no long-wait parameter here and there is no field that could
+    become one: the request carries a cursor and a count, and nothing
+    addressable.
+    """
+
+    since: int | None = Field(default=None, ge=0)
+    limit: int = Field(default=50, ge=1, le=200)
+
+
 class WorkScanScanRequest(StrictModel):
-    """Scan the rooms the user chose. The scope is this list and nothing else."""
+    """Scan the rooms the user chose. The scope is this list and nothing else.
+
+    ``max_length`` is the scan ceiling, and it does not move because the rooms
+    can now be picked off a list instead of typed. A list to choose from is
+    not a licence to scan the list.
+    """
 
     rooms: list[str] = Field(min_length=1, max_length=10)
     limit: int = Field(default=50, ge=1, le=200)
@@ -1265,7 +1411,22 @@ class WorkScanSuggestRequest(StrictModel):
 
 
 class WorkScanSuggestResponse(StrictModel):
-    """The task that was opened. Born ``suggested``; approved by nobody."""
+    """The task that was opened. Born ``suggested``; approved by nobody.
+
+    ``request_file`` and ``request_file_detail`` are the wire half of the
+    repair for a measured defect: this product stores a scanned request as a
+    **digest**, so everything a model could see of one was its title. The
+    request's full text is written into the new task's own workspace, where
+    the agent's existing ``read_workspace_file`` tool reaches it, and these
+    two fields say whether that happened.
+
+    They are two fields and not one for the reason nothing here is ever one
+    field: a name is what a person opens, and a sentence is what a person
+    reads when there is no name to open. An empty ``request_file`` with a
+    populated ``request_file_detail`` is a task that exists, whose digest is
+    correct, and behind which there is nothing readable - which the caller has
+    to be able to say out loud rather than infer from an empty directory.
+    """
 
     task_id: str
     module_id: str
@@ -1273,6 +1434,12 @@ class WorkScanSuggestResponse(StrictModel):
     source_version_id: str
     state: Literal["suggested"] = "suggested"
     detail: str
+    #: The workspace file carrying the request's full text, or ``""`` when the
+    #: write did not happen. Taken from the workspace's own return value, so
+    #: it never names a file that is not on disk.
+    request_file: str = ""
+    #: One sentence about that write, in either direction. Never empty.
+    request_file_detail: str = ""
 
 
 # --- the agent runtime and the Activity Desk (Package H2) -------------------
@@ -1353,7 +1520,33 @@ ActivityActionName = Literal[
     "budget_exhausted",
     "execution_unavailable",
     "activity_deleted",
+    "model_called",
+    "model_plan_proposed",
+    "model_session_ended",
 ]
+
+
+#: The five acceptance conditions a plan may be judged by. A closed literal,
+#: so a route that started accepting a sixth is a type error at build time.
+AgentAcceptanceKindName = Literal[
+    "artifact_exists",
+    "artifact_is_json",
+    "artifact_has_json_keys",
+    "artifact_contains",
+    "artifact_digest_is",
+]
+
+#: What a run's test field reports. Three values, and they are three because
+#: they answer three different questions: the conditions held, at least one
+#: did not, or the plan never wrote one a machine could decide.
+#:
+#: It was ``Literal["not_implemented"]`` before Package H4, and the fact
+#: changed rather than the rule: arbitrary execution is still closed and a
+#: ``test_condition`` sentence is still never run, but a closed registry of
+#: deterministic conditions can now be decided over the bytes a run produced
+#: (ADR-0008 1 unchanged, SI-222 unchanged - the state is still derived from
+#: evidence and still cannot be asked for).
+AgentTestResultStateName = Literal["passed", "failed", "not_implemented"]
 
 
 class AgentToolParamStatus(StrictModel):
@@ -1362,6 +1555,28 @@ class AgentToolParamStatus(StrictModel):
     name: str
     type: AgentToolParamTypeName
     required: bool
+    detail: str
+
+
+class AgentAcceptanceCheckStatus(StrictModel):
+    """One acceptance condition the registry offers, and what it asks for."""
+
+    kind: AgentAcceptanceKindName
+    purpose: str
+    params: list[AgentToolParamStatus]
+
+
+class AgentAcceptanceConditionStatus(StrictModel):
+    """One condition a plan actually recorded, and how it stands right now.
+
+    ``satisfied`` is recomputed from the workspace on every read rather than
+    stored, so a condition that held yesterday and does not hold now reports
+    the second thing.
+    """
+
+    kind: AgentAcceptanceKindName
+    label: str
+    satisfied: bool
     detail: str
 
 
@@ -1459,12 +1674,18 @@ class AgentRunStatus(StrictModel):
     #: Digest over the frozen plan: steps, expected artifacts, test condition.
     #: A start whose recomputed digest differs is refused (ADR-0008 7).
     plan_sha256: str
-    #: The check the plan says would establish success. Recorded, never run.
+    #: The sentence the plan says would establish success. Recorded, and
+    #: **never run**: interpreting a sentence is the arbitrary execution
+    #: ADR-0008 1 closes, and closing it has not moved.
     test_condition: str
-    #: Always ``not_implemented`` in this release, and it is a field rather
-    #: than an omission: a run that produced files has still not been tested,
-    #: and the task cannot become ``ready_to_publish`` (SI-222).
-    test_result_state: Literal["not_implemented"] = "not_implemented"
+    #: The machine-checkable conditions the plan recorded beside that
+    #: sentence, each one a member of the closed acceptance registry, and each
+    #: one re-decided over the workspace as it stands right now.
+    acceptance: list[AgentAcceptanceConditionStatus]
+    #: What those conditions establish. ``not_implemented`` when the plan
+    #: recorded none - which is what a run that produced files and was never
+    #: checked has earned, and which keeps the gate closed.
+    test_result_state: AgentTestResultStateName
     test_result_detail: str
     expected_artifacts: list[str]
     steps: list[AgentRunStepStatus]
@@ -1482,6 +1703,11 @@ class AgentSurfaceResponse(StrictModel):
     execution: AgentExecutionStatus
     ceiling: AgentCeilingStatus
     tools: list[AgentToolStatus]
+    #: The conditions a plan may be judged by. Published beside the tools for
+    #: the same reason the tools are published: a person approving a plan has
+    #: to be able to see what "it worked" was defined to mean, and a set they
+    #: cannot enumerate is a set they cannot check.
+    acceptance_checks: list[AgentAcceptanceCheckStatus]
     honesty: str
     stop_statement: str
     #: Runs a restart left in ``running``. Listed, never resumed: continuing
@@ -1510,6 +1736,19 @@ class AgentPlanStepRequest(StrictModel):
     arguments: dict[str, str] = Field(default_factory=dict)
 
 
+class AgentAcceptanceConditionRequest(StrictModel):
+    """One acceptance condition: a registered kind and its arguments.
+
+    ``kind`` is typed as the closed literal, so a body naming something
+    outside the registry is a 422 from the model before the route is entered.
+    The arguments are then validated against that kind's declared parameter
+    types, which is where a file name that is not a bare name is refused.
+    """
+
+    kind: AgentAcceptanceKindName
+    arguments: dict[str, str] = Field(default_factory=dict)
+
+
 class AgentPlanRequest(StrictModel):
     """Record a plan for one task. Nothing runs until a separate request."""
 
@@ -1517,8 +1756,17 @@ class AgentPlanRequest(StrictModel):
     #: The file names the plan promises to produce. A promise that is not
     #: kept ends the run in ``artifact_missing``.
     expected_artifacts: list[str] = Field(default_factory=list, max_length=16)
-    #: How success would be established. Recorded, never run in this release.
+    #: How success would be established, as a sentence for a person to read.
+    #: Recorded, and never run.
     test_condition: str = Field(min_length=1, max_length=500)
+    #: How success is established for a **machine**, as conditions from the
+    #: closed acceptance registry. Optional, and its absence is not an
+    #: oversight: a plan may still record only the sentence, and such a plan
+    #: reports ``not_implemented`` and leaves the task short of publication -
+    #: which is exactly what an unchecked plan has earned.
+    acceptance: list[AgentAcceptanceConditionRequest] = Field(
+        default_factory=list, max_length=8
+    )
 
 
 class TaskTransitionRequest(StrictModel):
@@ -1532,6 +1780,99 @@ class TaskTransitionRequest(StrictModel):
     """
 
     target: TaskUserTransitionName
+    detail: str = Field(default="", max_length=200)
+
+
+#: The outcomes of one model turn, as they appear on the wire. Seven, and none
+#: of them means "it ran".
+#:
+#: ``truncated`` and ``inconclusive`` are the two that used to be spelled
+#: ``finished``. A turn that hit the output ceiling and a turn whose finish
+#: reason we could not read were both reported as "the model stopped
+#: proposing calls", which claimed a decision the model had not made - so
+#: they are their own values now, and only ``finished`` means the model chose
+#: to stop.
+ModelProposalOutcomeName = Literal[
+    "planned",
+    "finished",
+    "truncated",
+    "inconclusive",
+    "refused",
+    "budget_exhausted",
+    "provider_failed",
+]
+
+
+class ModelProposeRequest(StrictModel):
+    """Spend one model turn on this task.
+
+    ``instruction`` is the person's own words and the only free text that
+    reaches the provider besides the task's own recorded facts. It is swept,
+    neutralised and bounded, and it is **not stored**: what gets written down
+    is the plan the turn produced, which is the thing a later reader needs.
+
+    There is no model field, no temperature, no system-prompt override and no
+    tool list. The model comes from the stored selection, the tools are the
+    whole compile-time registry, and the system prompt is a constant - a body
+    that could set any of them would be a body that could widen what a
+    proposal is allowed to be.
+    """
+
+    instruction: str = Field(default="", max_length=2000)
+
+
+class ModelProposalResponse(StrictModel):
+    """What one turn produced, plus the task and its runs as they now stand.
+
+    ``outcome`` is never ``"ran"`` and there is no such value: the best a turn
+    can do is ``planned``, which means a plan is recorded and waiting for a
+    person to start it.
+    """
+
+    outcome: ModelProposalOutcomeName
+    #: The run this turn recorded a plan for, or "" when it recorded none.
+    run_id: str
+    detail: str
+    #: Turns spent by this task's session, against the compile-time ceiling.
+    model_calls_used: int
+    max_model_calls: int
+    #: What the provider reported it counted and charged, in its own numbers.
+    #: Recorded and shown; **never** read as a limit - the ceiling is
+    #: denominated in units Station can count for itself (ADR-0008 4, SI-250).
+    usage_detail: str
+    #: The model's closing words when it stopped proposing calls. Swept and
+    #: bounded, shown once, stored nowhere.
+    closing_text: str
+    #: The provenance of the tool-call wire format: measured, on which
+    #: endpoint, and how far the measurement reaches.
+    tool_call_provenance: str
+    #: The task and its runs after the turn, so a client needs one request
+    #: rather than two to show what changed.
+    task: TaskStatusResponse
+    runs: list[AgentRunStatus]
+    #: Structural. A proposal is a recorded plan; starting it is a separate
+    #: request a person makes, and there is no code path from the planner to
+    #: the runner's start.
+    model_can_start_a_run: Literal[False] = False
+
+
+class TaskPublishReadinessRequest(StrictModel):
+    """Ask Station to re-derive whether a task is ready to publish.
+
+    **There is no target field, and that is the whole design.** SI-222 says
+    ``ready_to_publish`` is derived from evidence and cannot be asked for, so
+    the state is absent from :data:`TaskUserTransitionName` and no request
+    body in this product can name it. What this body carries is a request to
+    *look again* at three fields that were filled by three different acts -
+    the runner's output, the run's acceptance conditions, and a person's
+    acceptance - and to move the task only if all three are verified.
+
+    The difference is not cosmetic. A caller can ask for the derivation as
+    often as they like and can never make it come out differently; the answer
+    is a function of the evidence, and a task with a missing or unverified
+    field gets a refusal that names the fields rather than a state change.
+    """
+
     detail: str = Field(default="", max_length=200)
 
 
@@ -1698,6 +2039,24 @@ class ProofShareRequest(StrictModel):
 
     share_token: str = Field(min_length=1, max_length=128)
     format: ProofBundleFormatName
+    acknowledged: Literal[True]
+
+
+class ProofArtifactRequest(StrictModel):
+    """Spend the approval and take one produced file, as the file.
+
+    ``name`` is constrained to the workspace's own allow-list at the schema
+    layer, so a separator, a drive letter and ``..`` are a 422 before any
+    handler runs. That is depth rather than the defence: the name never reaches
+    the filesystem at all - it selects an entry from a document that was built
+    from the workspace listing.
+
+    ``acknowledged`` is ``Literal[True]`` with no default, the same shape the
+    bundle download uses, so a body that omits it never reaches a handler.
+    """
+
+    share_token: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9._-]+$")
     acknowledged: Literal[True]
 
 

@@ -335,12 +335,17 @@ literal'dir, kayıt fonksiyonu veya plugin yolu yoktur, ve `git`, `commit`,
 kayıt olsa uygulama **başlamaz**. Bir araca **adres verilemez**: `path` ve
 `url` diye bir parametre tipi yoktur.
 
-**Tavan üç birimdir ve derleme zamanındadır:** en çok 32 araç çağrısı, en
-çok 120 saniye duvar saati, eşzamanlılık **1**. Token ve para birimi
-**reddedilmiştir** ve reddedildikleri adıyla yayımlanır — model yolu kapalı
-olduğu için sağlayıcıdan gelen bir kullanım değeri yoktur ve ölçülemeyen bir
-birimle ifade edilen tavan ilk ihtiyaçta "sınırsız"a yuvarlanır. Agent'ın
-tavanı okuyan veya yazan bir aracı yoktur.
+**Tavan dört birimdir ve derleme zamanındadır:** en çok 32 araç çağrısı,
+en çok 8 model çağrısı, en çok 120 saniye duvar saati, eşzamanlılık **1**.
+
+Token ve para birimi **reddedilmiştir** ve reddedildikleri adıyla yayımlanır.
+Gerekçesi değişti ve sertleşti: eskiden "model yolu kapalı olduğu için
+sağlayıcıdan gelen bir kullanım değeri yok" idi; sağlayıcı artık hem `usage`
+hem `cost` gönderiyor ve ikisi de **kaydediliyor**. Yine de tavan olmuyorlar,
+çünkü **karşı tarafın bildirdiği bir sayıyla ifade edilen tavan, karşı tarafın
+koyduğu tavandır.** Sayılan şey Station'ın kendi yaptığı istek sayısıdır.
+
+Agent'ın tavanı okuyan veya yazan bir aracı yoktur.
 
 **Çalışma alanı** `<veri dizini>/workspace/v1/<görev kimliği>/` altındadır ve
 dört katman korur: dosya adı süzülmez, **yeniden kurulur**; her okuma ve her
@@ -563,16 +568,20 @@ Ama panelin kendisi de sınırlarını söyler ve bu kılavuz onları tekrarlar:
 - **Kimlik doğrulama başlığı doğrulanmamıştır.** `Authorization: Bearer`
   varsayımı resmî belgede doğrulanmamıştır ve panelde de böyle gösterilir.
   Gerçek bir anahtarın çalışıp çalışmadığı hesap sahibinindir.
-- **Akış ve araç çağrısı bu sürümde yoktur.** İkisi de birer değer değil,
-  birer **tip** olarak `false`'tur; yani bu cümleler bayatlayamaz. Bir
-  sağlayıcının aracı çağırmak için kullanacağı tel formatı yayımlanmadığı
-  için uydurulmamıştır.
+- **Akış (streaming) bu sürümde yoktur.** Bir değer değil, bir **tip**
+  olarak `false`'tur; yani bu cümle bayatlayamaz. Akış biçimi yayımlanmadı ve
+  ölçülmedi, bu yüzden uydurulmadı.
+- **Araç çağrısı artık vardır ve nedeni ölçümdür.** Bu cümle eskiden akışla
+  aynıydı; sözleşme hesap sahibinin kendi anahtarıyla `chat/completions`
+  ucunda ölçüldükten sonra değişti (ADR-0012). Panel `tool_calls_supported`
+  değerinin yanında **neyin ölçüldüğünü** de gösterir; ölçüm yalnız o
+  protokol ailesi içindir ve diğerleri için bir şey iddia edilmez.
 - **Anahtarın bağlı olması dosya paylaşımı demek değildir.** Kaydedilmiş bir
   anahtar, bilgisayarınızdaki dosyaların modele gönderilebileceği anlamına
   gelmez.
 - **Model kataloğu bayat olabilir** ve panel bunu söyler.
 
-**Kısacası: bu sürümde OpenCode ile model çalıştıramazsınız.** Model lane'i
+**Kısacası (H4 öncesi cümle, tarihsel):** bu sürümde OpenCode ile model çalıştıramazsınız. Model lane'i
 kapalıdır; bu panel bir bağlantı kaydı ve bir katalogdur, bir çalıştırma
 yüzeyi değil.
 

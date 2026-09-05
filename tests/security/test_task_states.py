@@ -68,6 +68,7 @@ from __future__ import annotations
 import ast
 import inspect
 import itertools
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, get_args, get_type_hints
@@ -181,7 +182,15 @@ TEST_ONLY_CONTENT = b"TEST-ONLY task content, not a real work item."
 #: directories while the fourth was free to write the column would have
 #: reported "one writer" about a product with two - the same hole H2 found,
 #: one package later.
-STATE_WRITER_DIRS = ("modules", "tasks", "agent", "proof")
+#: Package H4 adds ``planner`` for the fourth time, and for the reason the
+#: paragraphs above give twice already. A model planning lane is a very
+#: natural place for somebody to write ``row.state = "running"`` after a
+#: proposal - it *feels* like the thing that starts work - and the whole of
+#: ADR-0012 2 is that it must not: a proposal produces a recorded plan and a
+#: **person** starts it. A scan that read four directories while the fifth
+#: was free to write the column would report "one writer" about a product
+#: with two, which is the hole H2 found and H3 found again.
+STATE_WRITER_DIRS = ("modules", "tasks", "agent", "proof", "planner")
 
 #: The one function permitted to write a task's state, as
 #: ``<file>:<function>``. Anything else in the two packages is an offender.
@@ -264,6 +273,10 @@ def _candidate_values(name: str, annotation: Any) -> tuple[Any, ...]:
     otherwise be silently left undriven, which is the exact failure this test
     is being repaired for.
     """
+    # A trusted read dependency is also a public method input. Drive it with
+    # both an absent revision and a changed one; do not omit the method.
+    if annotation == Callable[[str], str]:
+        return (lambda _task_id: "", lambda _task_id: "TEST-ONLY changed revision")
     union = get_args(annotation)
     if union:
         values: list[Any] = [None] if type(None) in union else []

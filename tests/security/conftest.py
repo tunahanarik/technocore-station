@@ -222,17 +222,24 @@ def evidence(engine: Engine, data_dir: Path) -> EvidenceService:
 
 @pytest.fixture
 def proof(
-    tasks: TaskService, agent: AgentService, evidence: EvidenceService
+    tasks: TaskService,
+    agent: AgentService,
+    evidence: EvidenceService,
+    data_dir: Path,
 ) -> ProofService:
-    return ProofService(tasks=tasks, agent=agent, evidence=evidence)
+    return ProofService(
+        tasks=tasks, agent=agent, data_dir=data_dir, evidence=evidence
+    )
 
 
 @pytest.fixture
-def proof_without_archive(tasks: TaskService, agent: AgentService) -> ProofService:
+def proof_without_archive(
+    tasks: TaskService, agent: AgentService, data_dir: Path
+) -> ProofService:
     """A proof workspace on a machine where the audit envelope did not open.
 
     The bundle still assembles; the one operation that needs the archive -
     marking the fourth field from an archived send - refuses instead of
     pretending.
     """
-    return ProofService(tasks=tasks, agent=agent, evidence=None)
+    return ProofService(tasks=tasks, agent=agent, data_dir=data_dir, evidence=None)

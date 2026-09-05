@@ -107,6 +107,18 @@ class ActivityAction(StrEnum):
     BUDGET_EXHAUSTED = "budget_exhausted"
     EXECUTION_UNAVAILABLE = "execution_unavailable"
     ACTIVITY_DELETED = "activity_deleted"
+    #: One turn was spent asking the selected model for a plan. Carries what
+    #: the provider reported it counted and charged, verbatim - and nothing
+    #: about how the model got there: ``reasoning_content`` is discarded in
+    #: the protocol adapter and this table has no column that could hold it
+    #: (ADR-0008 6).
+    MODEL_CALLED = "model_called"
+    #: A model turn produced a plan and the plan was recorded. ``PENDING``,
+    #: always: a recorded plan has not run, and the row that says a plan
+    #: exists must not be readable as the row that says it happened.
+    MODEL_PLAN_PROPOSED = "model_plan_proposed"
+    #: The model stopped proposing calls, so the planning session is over.
+    MODEL_SESSION_ENDED = "model_session_ended"
 
 
 class ActivityOutcome(StrEnum):

@@ -103,8 +103,20 @@ test.describe("accessibility smoke", () => {
       await expect(page.getByRole("main")).toBeVisible();
       // Something was actually rendered: an empty <main> would pass every
       // landmark assertion above while showing the user nothing.
-      const text = (await page.getByRole("main").textContent()) ?? "";
-      expect(text.trim().length, `${label} rendered an empty main`).toBeGreaterThan(50);
+      //
+      // Polled rather than sampled once, and the threshold is unchanged. A
+      // section whose panel reads on mount renders a short placeholder first
+      // ("Kimlik okunuyor..." is 23 characters), so a single instantaneous
+      // read raced the first paint and failed on timing rather than on
+      // behaviour - intermittently, and on whichever section happened to be
+      // slowest that run. Waiting for the same assertion to hold makes an
+      // empty main still fail, and only an empty main fail.
+      await expect
+        .poll(
+          async () => ((await page.getByRole("main").textContent()) ?? "").trim().length,
+          { message: `${label} rendered an empty main`, timeout: 7_000 },
+        )
+        .toBeGreaterThan(50);
     }
 
     // Belt and braces: the auto fixture asserts this too, but naming it here

@@ -416,9 +416,13 @@ describe("Kanit calisma alani: the records that were not produced", () => {
     await renderPanel();
     await openTask(user);
 
-    expect(screen.getByTestId("proof-publish-unreachable")).toHaveTextContent(
-      "tasiyan bir kullanici yolu bu surumde yoktur",
-    );
+    // The wording changed when the derivation route arrived; what this test
+    // protects did not. `ready_to_publish` is still derived rather than
+    // requested, and there is still no control on *this* surface that asks
+    // for it - the evaluation lives in "Gorevler" and carries no target.
+    const statement = screen.getByTestId("proof-publish-unreachable");
+    expect(statement).toHaveTextContent("kanittan turetilir ve istenemez");
+    expect(statement).toHaveTextContent("adiyla hedefleyemez");
     expect(
       screen.queryByRole("button", { name: /Yayima hazir/i }),
       "no control on this surface may ask for the derived state",
@@ -683,5 +687,211 @@ describe("Kanit calisma alani: failures are named", () => {
       await screen.findByText("Paketi olusturulacak bir gorev yok"),
     ).toBeInTheDocument();
     expect(screen.queryByTestId("proof-bundle-digest")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Paket H4: the bodies travel, or the reason they did not does.
+//
+// Until the proof package carried artifact bodies, what a person downloaded
+// was an inventory of their work plus the digests to check it against, and
+// not the work. Two things had to become visible here at once: that a body is
+// in the bundle, and - when it is not - which rule kept it out. A file listed
+// with a name, a size and a digest but no contents looks complete in a table,
+// which is exactly why the exclusion is rendered beside the file rather than
+// only in the gap list.
+// ---------------------------------------------------------------------------
+
+const SECRET_EXCLUSION =
+  "TEST-ONLY: Dosyanin govdesi pakete alinmadi: gizli deger taramasi bir kural eslesmesi buldu. Paket kullaniciya teslim edilen belgedir, bu yuzden govde redakte edilmez, disarida birakilir; eslesen deger hicbir yere yazilmaz.";
+
+const ARTIFACT_DIGEST = "1a".repeat(32);
+
+/** A workspace with one embedded body and one whose body was refused. */
+const MIXED: ProofWorkspace = {
+  ...WORKSPACE,
+  artifacts: [
+    { name: "rapor.md", byte_count: 812, sha256: "cd".repeat(32) },
+    { name: "gizli.txt", byte_count: 64, sha256: "9a".repeat(32) },
+  ],
+  file_count: 2,
+  total_bytes: 876,
+  missing: [
+    ...WORKSPACE.missing,
+    { key: "artifact_body.gizli.txt", state: "excluded", detail: SECRET_EXCLUSION },
+  ],
+};
+
+describe("Kanit calisma alani: a body either travels or says why not", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    resetSessionState();
+  });
+
+  it("names the rule that kept a body out, beside the file it belongs to", async () => {
+    stub({ proof: () => Promise.resolve(jsonOk(MIXED)) });
+    const user = userEvent.setup();
+    await renderPanel();
+    await openTask(user);
+
+    // The excluded file is still listed with its name, size and digest: the
+    // exclusion refuses the contents, never the record of the file.
+    const excluded = screen.getByTestId("proof-artifact-gizli.txt");
+    expect(excluded).toHaveTextContent("gizli.txt");
+    expect(excluded).toHaveTextContent("64 bayt");
+    expect(excluded).toHaveTextContent("govdesi pakete alinmadi");
+    expect(screen.getByTestId("proof-artifact-excluded-gizli.txt")).toHaveTextContent(
+      "gizli deger taramasi bir kural eslesmesi buldu",
+    );
+
+    // And the one that did travel says so, rather than being left blank.
+    expect(screen.getByTestId("proof-artifact-rapor.md")).toHaveTextContent("govdesi pakette");
+    expect(
+      screen.queryByTestId("proof-artifact-excluded-rapor.md"),
+      "a file whose body travelled has no exclusion to show",
+    ).toBeNull();
+  });
+
+  it("counts the embedded bodies and says where the two numbers came from", async () => {
+    stub({ proof: () => Promise.resolve(jsonOk(MIXED)) });
+    const user = userEvent.setup();
+    await renderPanel();
+    await openTask(user);
+
+    // One of two files, and only that file's bytes. The count is derived on
+    // this side, and the sentence beside it refuses to pass the derivation
+    // off as the document's own summary.
+    expect(screen.getByTestId("proof-embedded-count")).toHaveTextContent(
+      "Govdesi pakete alinan dosya: 1 / 2",
+    );
+    expect(screen.getByTestId("proof-embedded-count")).toHaveTextContent(
+      "govdesi pakete alinan bayt: 812",
+    );
+    expect(screen.getByTestId("proof-embedded-derivation")).toHaveTextContent(
+      "paketin kendi ozet satirindan degil",
+    );
+  });
+
+  it("offers no file control for a body that was left out", async () => {
+    stub({ proof: () => Promise.resolve(jsonOk(MIXED)) });
+    const user = userEvent.setup();
+    await renderPanel();
+    await openTask(user);
+
+    expect(screen.getByTestId("proof-take-rapor.md")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("proof-take-gizli.txt"),
+      "a body that is not in the bundle cannot be handed over",
+    ).toBeNull();
+  });
+
+  it("hands one file over under the same single-use approval and shows the server's digest", async () => {
+    const sent: Recorded[] = [];
+    const downloads = stubDownload();
+    stub({
+      sent,
+      onPost: (url) =>
+        url === `/api/proof/${TASK_ID}/artifact`
+          ? new Response("TEST-ONLY artifact bytes", {
+              status: 200,
+              headers: {
+                "Content-Type": "text/plain; charset=utf-8",
+                "X-Station-Artifact-Sha256": ARTIFACT_DIGEST,
+                "X-Station-Bundle-Sha256": WORKSPACE.bundle_sha256,
+              },
+            })
+          : null,
+    });
+    const user = userEvent.setup();
+    await renderPanel();
+    await openTask(user);
+
+    // Nothing is deliverable before an approval exists and the terms are
+    // acknowledged: both halves are asserted, because either one alone would
+    // let a delivery happen on a single act.
+    expect(screen.getByTestId("proof-take-rapor.md")).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: /Tek kullanimlik onay hazirla/ }));
+    await waitFor(() => {
+      expect(screen.getByTestId("proof-share-state")).toHaveTextContent("Onay hazir");
+    });
+    expect(screen.getByTestId("proof-take-rapor.md")).toBeDisabled();
+
+    await user.click(screen.getByRole("checkbox", { name: /Onayin tek kullanimlik/ }));
+    await user.click(screen.getByTestId("proof-take-rapor.md"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("proof-artifact-result")).toBeInTheDocument();
+    });
+
+    const request = sent.find((entry) => entry.url === `/api/proof/${TASK_ID}/artifact`);
+    expect(request, "the delivery must have been requested").toBeDefined();
+    // A name and a token, and nothing that addresses the filesystem: no path,
+    // no directory, no format and no destination of any kind.
+    expect(request?.body).toEqual({
+      share_token: SHARE_TOKEN,
+      name: "rapor.md",
+      acknowledged: true,
+    });
+
+    // The digest printed is the one the server sent in the header, shortened.
+    expect(screen.getByTestId("proof-artifact-result")).toHaveTextContent(
+      ARTIFACT_DIGEST.slice(0, 12),
+    );
+    expect(screen.getByTestId("proof-artifact-result")).toHaveTextContent(
+      "icerigin dogrulugu hakkinda hicbir sey soylemez",
+    );
+    expect(downloads.created).toHaveLength(1);
+    expect(downloads.revoked).toHaveLength(1);
+
+    // The approval is gone: taking a file and taking the bundle are two ways
+    // of spending one approval, not two deliveries.
+    await waitFor(() => {
+      expect(screen.getByTestId("proof-share-state")).toHaveTextContent("Onay harcandi");
+    });
+    expect(screen.getByTestId("proof-take-rapor.md")).toBeDisabled();
+  });
+
+  it("spends the approval even when the delivery is refused", async () => {
+    stubDownload();
+    stub({
+      onPost: (url) =>
+        url === `/api/proof/${TASK_ID}/artifact`
+          ? jsonOk({ detail: "TEST-ONLY: paket bu arada degisti." }, 409)
+          : null,
+    });
+    const user = userEvent.setup();
+    await renderPanel();
+    await openTask(user);
+
+    await user.click(screen.getByRole("button", { name: /Tek kullanimlik onay hazirla/ }));
+    await waitFor(() => {
+      expect(screen.getByTestId("proof-share-state")).toHaveTextContent("Onay hazir");
+    });
+    await user.click(screen.getByRole("checkbox", { name: /Onayin tek kullanimlik/ }));
+    await user.click(screen.getByTestId("proof-take-rapor.md"));
+
+    // The refusal is shown *and* the token is gone. A surface that only
+    // marked it spent on the happy path would leave a refused delivery
+    // looking retryable, which is the property the token exists to remove.
+    await waitFor(() => {
+      expect(screen.getByTestId("proof-share-state")).toHaveTextContent("Onay harcandi");
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("Dosya teslim edilemedi");
+    expect(screen.queryByTestId("proof-artifact-result")).toBeNull();
+  });
+
+  it("states that one approval buys one delivery, before either control", async () => {
+    stub();
+    const user = userEvent.setup();
+    await renderPanel();
+    await openTask(user);
+
+    expect(screen.getByTestId("proof-share-one-delivery")).toHaveTextContent(
+      "Bir onay bir teslim eder",
+    );
+    expect(screen.getByTestId("proof-artifact-delivery-rule")).toHaveTextContent(
+      "Sunucu dosyanin kendi SHA-256 ozetini yanit basliginda gonderir",
+    );
   });
 });

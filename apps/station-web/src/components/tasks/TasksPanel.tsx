@@ -3,12 +3,16 @@ import { useCallback, useEffect, useId, useState } from "react";
 
 import {
   type ApiError,
+  deriveTaskPublishReadiness,
   fetchAgentSurface,
   fetchEvidenceRecords,
+  fetchOpenCodeStatus,
   fetchProof,
   fetchTaskRuns,
   fetchTasks,
+  forgetModelPlanSession,
   planTaskRun,
+  proposeModelPlan,
   recordProofAcceptance,
   recordProofPublicShare,
   resumeTaskRun,
@@ -18,15 +22,20 @@ import {
   transitionTask,
 } from "../../api/client";
 import type {
+  AgentAcceptanceKindName,
   AgentRunPhaseName,
   AgentRunStatus,
   AgentStepPhaseName,
   AgentSurfaceResponse,
   AgentTaskRunsResponse,
+  AgentTestResultStateName,
   AgentToolScopeName,
   AgentToolStatus,
   EvidenceList,
   EvidenceWriteOutcome,
+  ModelProposalOutcomeName,
+  ModelProposalResponse,
+  OpenCodeStatus,
   ProofWorkspace,
   TaskCheckState,
   TaskEvidenceFieldName,
@@ -51,14 +60,20 @@ import { StatusPill } from "../StatusPill";
  *    Docker present, and `relied_upon: false` beside it. A sandbox that
  *    exists on the developer's machine is not a guarantee the product can
  *    offer, and both halves of that sentence are on screen (ADR-0008 1).
- * 2. **Code that was never run is not tested code.** `test_result_state` is
- *    `not_implemented` as a *type*, so a run that produced files still leaves
- *    the task short of `ready_to_publish`. The surface says so in words and
- *    renders no publish-ready badge (SI-222).
- * 3. **The model lane is closed.** There is no model call in production, so
- *    "model output is never executed directly" is not a promise here - there
- *    is no model output. The timeline has no `model` actor to write one with
- *    (ADR-0008 2).
+ * 2. **A produced file is not a passed test.** `test_result_state` reports
+ *    `passed`, `failed` or `not_implemented`, and the third is what a plan
+ *    that recorded no machine-checkable condition earns - a run may write
+ *    every file it promised and still leave the task short of publication.
+ *    The verdict is derived from the plan's own acceptance conditions,
+ *    re-decided over the workspace on every read; it is never a badge this
+ *    screen composes and never something a request may assert (SI-222).
+ * 3. **The model proposes; it does not run.** A model turn ends, at best, in
+ *    a *recorded plan* in the `planned` phase. It passes the same four
+ *    approvals a hand-written plan does, it cannot approve itself, it cannot
+ *    add a tool to its own registry, and there is no code path from the
+ *    planner to the runner's start. The model's reasoning is not stored and
+ *    not shown, and `usage`/`cost` are the **provider's** statement rather
+ *    than a measurement this station made (ADR-0012, ADR-0008 4).
  * 4. **A budget is only ever three units.** Tool calls, wall-clock seconds
  *    and a concurrency of one. Tokens and currency are *refused* units and
  *    the backend publishes them as such, so the absence is a claim on screen
@@ -95,7 +110,15 @@ type Step =
   // three findings, and only the first repeats safely.
   | "proof"
   | "accept"
-  | "mark";
+  | "mark"
+  // Paket H4 / ADR-0012. Four more, and they stay apart for the same reason
+  // the others do: "the model lane could not be read", "the turn failed",
+  // "the session could not be dropped" and "the gate refused" are four
+  // findings with four remedies, and only the first two repeat safely.
+  | "modelLane"
+  | "modelTurn"
+  | "modelForget"
+  | "readiness";
 
 type Busy = Step | null;
 
@@ -110,6 +133,10 @@ const ERROR_TITLE: Record<Step, string> = {
   proof: "Kanit paketi okunamadi",
   accept: "Kabul kaydedilemedi",
   mark: "Gonderim bu goreve isaretlenemedi",
+  modelLane: "Model baglantisinin durumu okunamadi",
+  modelTurn: "Model turu tamamlanamadi",
+  modelForget: "Model oturumu unutulamadi",
+  readiness: "Yayin hazirligi degerlendirilemedi",
 };
 
 /** The nine states, in the user's language. */
@@ -188,6 +215,106 @@ const RUN_PHASE_TONE: Record<AgentRunPhaseName, "ok" | "pending" | "inactive" | 
   artifact_missing: "problem",
 };
 
+/**
+ * The five acceptance conditions, in the user's language.
+ *
+ * Keyed by the registry's own name so the set the screen can render and the
+ * set the backend publishes cannot drift apart: a sixth kind appearing on the
+ * wire is a compile error here, not a blank cell.
+ */
+const ACCEPTANCE_KIND_LABEL: Record<AgentAcceptanceKindName, string> = {
+  artifact_exists: "Dosya calisma alaninda var mi",
+  artifact_is_json: "Dosya gecerli bir JSON belgesi mi",
+  artifact_has_json_keys: "JSON ust duzey anahtarlarinin hepsi var mi",
+  artifact_contains: "Dosya istenen metni iceriyor mu",
+  artifact_digest_is: "Dosyanin SHA-256 ozeti bekleneni veriyor mu",
+};
+
+/**
+ * The three verdicts, each said in full.
+ *
+ * `not_implemented` is never worded as a near-pass and never toned as one: a
+ * plan that recorded no machine-checkable condition has not been tested, and
+ * the sentence says which of the three questions was answered.
+ */
+const TEST_RESULT_LABEL: Record<AgentTestResultStateName, string> = {
+  passed: "Gecti: planin yazdigi kabul kosullarinin hepsi su anda saglaniyor",
+  failed: "Kaldi: en az bir kabul kosulu su anda saglanmiyor",
+  not_implemented:
+    "Uygulanmadi: plan, makinenin karar verebilecegi bir kabul kosulu yazmadi",
+};
+
+const TEST_RESULT_TONE: Record<AgentTestResultStateName, "ok" | "problem" | "inactive"> = {
+  passed: "ok",
+  failed: "problem",
+  not_implemented: "inactive",
+};
+
+/**
+ * The seven endings of one model turn, in the user's language.
+ *
+ * None of them is "it ran", because there is no such outcome: the best a turn
+ * can do is `planned`, and even that is a plan waiting for four approvals and
+ * a separate start.
+ *
+ * Three of the seven are turns that produced **no call**, and the wording is
+ * where the difference between them lives. Only `finished` may say the model
+ * stopped: that is `finish_reason: "stop"` and nothing else. `truncated` is an
+ * answer the provider **cut** at the output ceiling, and `inconclusive` is a
+ * turn whose ending this build could not read. Saying "it stopped" about
+ * either of those would be claiming a decision nobody measured - which is the
+ * defect these two members were split out of.
+ */
+const PROPOSAL_OUTCOME_LABEL: Record<ModelProposalOutcomeName, string> = {
+  planned: "Model bir plan onerdi ve plan kaydedildi (hicbir sey calistirilmadi)",
+  finished: "Model arac cagirmayi birakti; oturum bitti",
+  truncated: "Yanit cikti tavaninda kesildi; oturum acik kaldi",
+  inconclusive: "Arac cagrisi gelmedi; nedeni okunamadi, oturum kapatilmadi",
+  refused: "Oneri reddedildi",
+  budget_exhausted: "Model cagrisi tavanina ulasildi; istek gonderilmedi",
+  provider_failed: "Saglayici reddetti, basarisiz oldu veya hic cevap vermedi",
+};
+
+const PROPOSAL_OUTCOME_TONE: Record<
+  ModelProposalOutcomeName,
+  "ok" | "problem" | "inactive" | "pending"
+> = {
+  planned: "pending",
+  // `inactive` is the tone for a session that is over. The two below are not
+  // over, so they must not borrow it: a cut answer that looked the same as a
+  // finished one is exactly what sent people away without retrying.
+  finished: "inactive",
+  truncated: "problem",
+  inconclusive: "problem",
+  refused: "problem",
+  budget_exhausted: "problem",
+  provider_failed: "problem",
+};
+
+/**
+ * What the two non-endings mean, and what a person may do next.
+ *
+ * The backend already sends a full sentence in `detail`, and it is rendered
+ * verbatim beside this. These are not a second copy of it: `detail` says what
+ * the provider reported about *this* turn, and this says what the outcome
+ * *is* - that nothing was proposed, that the session was not closed, and that
+ * asking again is a thing the person is allowed to do. A pill and a provider
+ * sentence together still left "so can I try again?" unanswered.
+ *
+ * Partial on purpose. The other five outcomes are complete in their own
+ * label, and inventing a paragraph for each would bury these two.
+ */
+const PROPOSAL_OUTCOME_NOTE: Partial<Record<ModelProposalOutcomeName, string>> = {
+  truncated:
+    "Bu bir bitis degildir. Model arac cagirmaya gelemeden cikti tavaninda " +
+    "kesildi: hicbir plan onerilmedi ve oturum kapatilmadi. Ayni gorev icin " +
+    "turu yeniden isteyebilirsiniz; her istek bir tur harcar.",
+  inconclusive:
+    "Model hicbir arac cagrisi gondermedi ve turun neden bittigi bu yapida " +
+    "okunamadi. Sebep, saglayicinin kendi yazimiyla yukaridaki cumlede " +
+    "aktarilir; Station anlamini uydurmaz. Oturum kapatilmadi.",
+};
+
 /** What became of one planned step. Never "kod calistirildi": none was. */
 const STEP_PHASE_LABEL: Record<AgentStepPhaseName, string> = {
   planned: "planlandi",
@@ -246,17 +373,30 @@ const NO_APPROVALS: ApprovalState = {
 /**
  * The model lane, in this surface's own words.
  *
- * The backend's `honesty` sentence already says a run makes no model call;
- * this says the consequence out loud, because "model output is never executed
- * directly" reads like a safeguard and in this release it is a description of
- * an empty set (ADR-0008 2).
+ * It said the lane was closed until ADR-0012 measured the tool-call contract
+ * and opened it. The sentence changed because the **fact** changed, not
+ * because the rule softened: what used to be guaranteed by an empty set is
+ * now guaranteed by structure, and this says which structure. A screen that
+ * kept the old wording would be claiming safety from an absence that is no
+ * longer there.
  */
 const MODEL_LANE_STATEMENT =
-  "Model yolu bu surumde kapalidir: tool-call tel bicimi yayimlanmadigi icin uretimde hicbir model cagrisi yapilmaz. 'Model ciktisi dogrudan yurutulmez' burada bir onlem degil, yapisal bir gercektir - bu surumde model ciktisi diye bir sey yoktur. Zaman cizelgesinde aktor yalnizca kullanici veya Station kosucusudur; 'model' diye bir aktor tanimli degildir.";
+  "Model plan ONERIR, calistirmaz. Bir model turu en iyi ihtimalle kaydedilmis bir plan uretir; o plan da elle yazilmis bir plan gibi ayni dort onaydan gecer. Model kendi planina onay veremez, kendi arac listesine arac ekleyemez ve bir calismayi baslatamaz: baslatma ayri bir kullanici islemidir ve planlayicidan kosucunun baslatma yoluna giden bir kod yolu yoktur. Onerilen ad kayitli araclarda yoksa oneri butunuyle reddedilir. Modelin muhakemesi saklanmaz ve gosterilmez.";
 
-/** "Code that was never run is not tested code", as a sentence on screen. */
+/** Arbitrary execution stayed closed when the model lane opened. */
+const NO_ARBITRARY_EXECUTION_STATEMENT =
+  "Keyfi kod ve kabuk yurutmesi kapali kalir. Model yolunun acilmasi bunu acmaz: model yalnizca kayitli, deterministik araclari onerebilir ve bir metni komut olarak kosacak bir yol bu urunde yoktur.";
+
+/**
+ * "A produced file is not a passed test", as a sentence on screen.
+ *
+ * It used to say the test result stays `not_implemented` no matter what a run
+ * produced. That is now only true of a plan that recorded no machine-checkable
+ * condition, so the sentence says *that* instead of the older, wider claim it
+ * had outgrown.
+ */
 const UNTESTED_STATEMENT =
-  "Calistirilmamis kod test edilmis sayilmaz. Bir calisma dosya uretmis olsa bile test sonucu 'uygulanmadi' kalir, bu yuzden gorev yayima hazir duruma gecemez.";
+  "Uretilmis bir dosya gecmis bir test degildir. Test sonucu, planin kendi kabul kosullarindan turetilir ve her okumada calisma alani uzerinde yeniden karara baglanir. Hicbir kabul kosulu yazmamis bir plan, soz verdigi her dosyayi uretmis olsa bile 'uygulanmadi' alir ve gorevi yayimin esiginde birakir.";
 
 /** What the agent cannot reach. A list, because a sentence hides items. */
 const CANNOT_REACH: readonly string[] = [
@@ -282,6 +422,12 @@ const CANNOT_DO: readonly string[] = [
 /** A single draft step: a registered tool id and its typed arguments. */
 interface DraftStep {
   readonly toolId: string;
+  readonly args: Readonly<Record<string, string>>;
+}
+
+/** A single draft acceptance condition: a registered kind and its arguments. */
+interface DraftCondition {
+  readonly kind: AgentAcceptanceKindName;
   readonly args: Readonly<Record<string, string>>;
 }
 
@@ -330,6 +476,9 @@ function ExecutionBlock({ surface }: { readonly surface: AgentSurfaceResponse })
       </p>
       <p className="text-xs text-muted" data-testid="tasks-model-lane">
         {MODEL_LANE_STATEMENT}
+      </p>
+      <p className="text-xs text-muted" data-testid="tasks-no-arbitrary-execution">
+        {NO_ARBITRARY_EXECUTION_STATEMENT}
       </p>
 
       <div className="flex flex-col gap-2" data-testid="tasks-execution-inventory">
@@ -485,12 +634,18 @@ function EvidenceFields({ task }: { readonly task: TaskStatusResponse }) {
               task.blocking_fields.length === 0 ? "(yok)" : task.blocking_fields.join(", ")
             }.`}
       </p>
+      {/* The sentence changed when the route arrived, and the guarantee did
+          not. There is now a way to *reach* the derived state and still no
+          way to *ask for* it: the request carries no target field, the state
+          is absent from the user transition list, and what the caller asks
+          for is a re-reading of three fields (SI-222). */}
       <p className="text-xs text-muted" data-testid="tasks-publish-unreachable">
-        Uc alan ayri ayri dogrulanmis olsa bile gorevi &quot;Yayima hazir&quot;
-        durumuna tasiyan bir kullanici yolu bu surumde yoktur. Bu kapatilmis bir
-        karar degil, acik bir bosluktur: &quot;Yayima hazir&quot; kanittan
-        turetilir ve istenemez, bu yuzden asagidaki durum degisikligi
-        dugmelerinin arasinda da bulunmaz.
+        &quot;Yayima hazir&quot; istenemez. Asagidaki durum degisikligi
+        dugmelerinin arasinda karsiligi yoktur ve bu urunde hicbir istek onu
+        adiyla hedefleyemez: yayin hazirligi istegi bir hedef alani tasimaz.
+        Istenen sey, uc kanit alaninin yeniden okunmasidir; karari kapi verir
+        ve ayni istegi kac kez yaparsaniz yapin cevap kanitin bir fonksiyonu
+        olarak kalir.
       </p>
       <p className="text-xs text-muted" data-testid="tasks-public-share">
         {task.public_share_detail}
@@ -513,6 +668,8 @@ function RunCard({
   onStop,
   run,
   stopStatement,
+  executionPending,
+  stopPending,
 }: {
   readonly approvals: ApprovalState;
   readonly approvalRunId: string;
@@ -523,6 +680,8 @@ function RunCard({
   readonly onStop: (runId: string) => void;
   readonly run: AgentRunStatus;
   readonly stopStatement: string;
+  readonly executionPending: boolean;
+  readonly stopPending: boolean;
 }) {
   const approvedHere = approvalRunId === run.id;
   const fullyApproved = approvedHere && APPROVAL_KEYS.every((key) => approvals[key]);
@@ -554,12 +713,65 @@ function RunCard({
         <pre className="whitespace-pre-wrap break-words rounded-lg bg-surface-secondary p-2 font-mono text-xs text-foreground">
           {run.test_condition}
         </pre>
-        <p className="font-mono text-xs text-muted" data-testid="tasks-test-result-state">
-          {`Test sonucu: ${run.test_result_state}`}
-        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="font-mono text-xs text-muted" data-testid="tasks-test-result-state">
+            {`Test sonucu: ${run.test_result_state}`}
+          </p>
+          {/* The verdict is toned from a closed map, so `not_implemented` can
+              never pick up an `ok` tone by omission. */}
+          <StatusPill
+            label={TEST_RESULT_LABEL[run.test_result_state]}
+            tone={TEST_RESULT_TONE[run.test_result_state]}
+          />
+        </div>
         <p className="text-xs text-muted" data-testid="tasks-test-result-detail">
           {run.test_result_detail}
         </p>
+
+        {/* The conditions the verdict was derived from. Listed rather than
+            summarised: "which condition" and "how many" are different
+            questions, and only the first one is actionable. */}
+        <div className="flex flex-col gap-1" data-testid={`tasks-acceptance-${run.id}`}>
+          <p className="text-xs font-medium text-foreground">
+            {`Kabul kosullari (${String(run.acceptance.length)})`}
+          </p>
+          {run.acceptance.length === 0 ? (
+            <p className="text-xs text-muted" data-testid={`tasks-acceptance-none-${run.id}`}>
+              Bu plan makinenin karar verebilecegi bir kabul kosulu yazmadi.
+              Basari olcutu yalnizca bir cumle olarak kaydedildi ve bu surumde
+              hicbir cumle kosulmaz; bu yuzden sonuc &quot;uygulanmadi&quot;dir
+              ve gorev yayimin esiginde kalir.
+            </p>
+          ) : (
+            <>
+              <ul className="flex flex-col gap-1">
+                {run.acceptance.map((condition, index) => (
+                  <li
+                    className="flex flex-col gap-1 rounded-lg border border-border p-2"
+                    key={`${run.id}-acc-${String(index)}`}
+                  >
+                    <span className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-medium text-foreground">
+                        {ACCEPTANCE_KIND_LABEL[condition.kind]}
+                      </span>
+                      <StatusPill
+                        label={condition.satisfied ? "su anda saglaniyor" : "su anda saglanmiyor"}
+                        tone={condition.satisfied ? "ok" : "problem"}
+                      />
+                    </span>
+                    <span className="font-mono text-xs text-muted">{condition.label}</span>
+                    <span className="text-xs text-muted">{condition.detail}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-muted">
+                Her kosul her okumada calisma alani uzerinde yeniden karara
+                baglanir; saklanmis bir sonuc gosterilmez. Dun saglanan bir
+                kosul bugun saglanmiyorsa burada ikincisi yazar.
+              </p>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="flex flex-col gap-1">
@@ -650,11 +862,11 @@ function RunCard({
           {busy === "start" ? "Calistiriliyor..." : "Onayli plani calistir"}
         </Button>
         <Button
-          isDisabled={busy !== null || run.phase !== "running"}
+          isDisabled={stopPending || (!executionPending && run.phase !== "running")}
           onPress={() => onStop(run.id)}
           variant="secondary"
         >
-          {busy === "stop" ? "Durduruluyor..." : "Durdur"}
+          {stopPending ? "Durduruluyor..." : "Durdur"}
         </Button>
         <Button
           isDisabled={busy !== null || run.phase !== "paused" || !fullyApproved}
@@ -685,6 +897,8 @@ export function TasksPanel() {
   const [selected, setSelected] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<Busy>(null);
+  const [executionRunId, setExecutionRunId] = useState<string | null>(null);
+  const [stoppingRunId, setStoppingRunId] = useState<string | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [step, setStep] = useState<Step>("read");
 
@@ -695,6 +909,27 @@ export function TasksPanel() {
   const [draft, setDraft] = useState<readonly DraftStep[]>([]);
   const [artifacts, setArtifacts] = useState("");
   const [condition, setCondition] = useState("");
+
+  // The machine-checkable half of a plan. Optional by construction: leaving
+  // it empty records a plan whose verdict is `not_implemented`, which is the
+  // honest outcome for a plan nobody wrote a condition for.
+  const [checkKind, setCheckKind] = useState<AgentAcceptanceKindName | "">("");
+  const [checkArgs, setCheckArgs] = useState<Readonly<Record<string, string>>>({});
+  const [checkDraft, setCheckDraft] = useState<readonly DraftCondition[]>([]);
+
+  // --- Paket H4 / ADR-0012: the model planning lane ----------------------
+  //
+  // `lane` is the stored connection state - which model is selected, and
+  // whether the tool-call shape was measured for its protocol family. It is
+  // read behind a button like everything else here, and reading it contacts
+  // nobody: the route reports local state and a cached catalog.
+  const [lane, setLane] = useState<OpenCodeStatus | null>(null);
+  const [instruction, setInstruction] = useState("");
+  const [proposal, setProposal] = useState<ModelProposalResponse | null>(null);
+
+  // --- Paket H4: what the publication gate answered ----------------------
+  const [gateRefusal, setGateRefusal] = useState("");
+  const [gateMoved, setGateMoved] = useState(false);
 
   // Approvals are keyed to a run id. A re-plan produces a *different* run, so
   // it starts unapproved by construction rather than by a reset somebody has
@@ -761,8 +996,16 @@ export function TasksPanel() {
     setToolId("");
     setArtifacts("");
     setCondition("");
+    setCheckKind("");
+    setCheckArgs({});
+    setCheckDraft([]);
     setApprovalRunId("");
     setApprovals(NO_APPROVALS);
+    // A different task is a different planning session and a different gate.
+    setProposal(null);
+    setInstruction("");
+    setGateRefusal("");
+    setGateMoved(false);
     // A different task is a different bundle and a different acceptance.
     setProof(null);
     setAcceptRead(false);
@@ -810,11 +1053,15 @@ export function TasksPanel() {
           .map((name) => name.trim())
           .filter((name) => name !== ""),
         testCondition: condition,
+        acceptance: checkDraft.map((item) => ({ kind: item.kind, arguments: item.args })),
       });
       setDetail(next);
       setDraft([]);
       setArgs({});
       setToolId("");
+      setCheckDraft([]);
+      setCheckArgs({});
+      setCheckKind("");
       setList(await fetchTasks());
     } catch (caught) {
       setError(toApiError(caught));
@@ -828,12 +1075,30 @@ export function TasksPanel() {
     runId: string,
     action: "start" | "stop" | "resume",
   ): Promise<void> {
-    if (busy !== null || selected === "") return;
+    if (selected === "") return;
+    if (action === "stop") {
+      if (stoppingRunId !== null) return;
+      setStoppingRunId(runId);
+      try {
+        const stopped = await stopTaskRun(selected, runId);
+        // An older stop acknowledgement cannot replace a completed response.
+        setDetail((current) => current?.runs.some((run) => run.id === runId &&
+          !["planned", "running"].includes(run.phase)) ? current : stopped);
+      } catch (caught) {
+        setError(toApiError(caught));
+        setStep("stop");
+      } finally {
+        setStoppingRunId(null);
+      }
+      return;
+    }
+    if (busy !== null) return;
     setBusy(action);
+    setExecutionRunId(runId);
     setError(null);
     try {
       const call =
-        action === "start" ? startTaskRun : action === "stop" ? stopTaskRun : resumeTaskRun;
+        action === "start" ? startTaskRun : resumeTaskRun;
       setDetail(await call(selected, runId));
       setList(await fetchTasks());
       // The interrupted-run list is part of the surface, and a run that just
@@ -842,6 +1107,129 @@ export function TasksPanel() {
     } catch (caught) {
       setError(toApiError(caught));
       setStep(action);
+    } finally {
+      setExecutionRunId(null);
+      setBusy(null);
+    }
+  }
+
+  // --- Paket H4 / ADR-0012: the model planning lane -----------------------
+
+  /**
+   * Read which model is selected and what was measured about its protocol.
+   *
+   * Behind a button and never on mount, like every other read on this
+   * surface. It contacts nobody: the route reports the stored selection, the
+   * cached catalog and the protocol context. It is *offered* before a turn
+   * rather than required, because a person about to spend a metered call is
+   * entitled to see which model would answer it - the response of a turn does
+   * not carry a model id, and this screen will not guess one.
+   */
+  async function readModelLane(): Promise<void> {
+    if (busy !== null) return;
+    setBusy("modelLane");
+    setError(null);
+    try {
+      setLane(await fetchOpenCodeStatus());
+    } catch (caught) {
+      setLane(null);
+      setError(toApiError(caught));
+      setStep("modelLane");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /**
+   * Spend one model turn. **Starts nothing.**
+   *
+   * The response carries the task and its runs after the turn, so the detail
+   * is updated from that single document rather than re-read. The workspace
+   * listing is carried over untouched, and that is correct rather than
+   * convenient: a proposal writes no file, because a proposal runs no step.
+   *
+   * Every ending is a result, not an error - a provider failure, a proposal
+   * naming an unregistered tool and a session at its ceiling all come back
+   * `200` with an outcome that says which. They are rendered in the region
+   * rather than thrown at the error surface, because flattening them into
+   * "something went wrong" would lose the one thing they carry.
+   */
+  async function proposeFromModel(): Promise<void> {
+    if (busy !== null || selected === "") return;
+    setBusy("modelTurn");
+    setError(null);
+    try {
+      const next = await proposeModelPlan({ taskId: selected, instruction });
+      setProposal(next);
+      setDetail((current) =>
+        current === null ? current : { ...current, task: next.task, runs: [...next.runs] },
+      );
+      setList(await fetchTasks());
+    } catch (caught) {
+      setError(toApiError(caught));
+      setStep("modelTurn");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /**
+   * Drop this task's planning session so the next turn starts from nothing.
+   *
+   * Not a reset of the ceiling and not an undo: the recorded plans, the
+   * workspace and the task's evidence are untouched, and the turn counter
+   * comes back from the server in the same response.
+   */
+  async function forgetModelSession(): Promise<void> {
+    if (busy !== null || selected === "") return;
+    setBusy("modelForget");
+    setError(null);
+    try {
+      const next = await forgetModelPlanSession(selected);
+      setProposal(next);
+      setInstruction("");
+      setDetail((current) =>
+        current === null ? current : { ...current, task: next.task, runs: [...next.runs] },
+      );
+    } catch (caught) {
+      setError(toApiError(caught));
+      setStep("modelForget");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // --- Paket H4: asking the gate to look again ----------------------------
+
+  /**
+   * Ask Station to re-derive whether this task is ready to publish.
+   *
+   * **This is not a transition control and it cannot be turned into one.**
+   * The request carries no target: what is asked for is a re-reading of three
+   * fields, and the gate decides. A refusal is kept in its own state and
+   * rendered beside the button with the fields it named, because "which
+   * evidence is missing" is the entire content of the answer and the shared
+   * error region is not where a reader would look for it.
+   */
+  async function evaluatePublishReadiness(): Promise<void> {
+    if (busy !== null || selected === "") return;
+    setBusy("readiness");
+    setError(null);
+    setGateRefusal("");
+    setGateMoved(false);
+    try {
+      const moved = await deriveTaskPublishReadiness({ taskId: selected });
+      setDetail((current) => (current === null ? current : { ...current, task: moved }));
+      setList(await fetchTasks());
+      setGateMoved(true);
+    } catch (caught) {
+      const failure = toApiError(caught);
+      // The gate's own sentence names the unverified fields. It is shown
+      // here as well as in the error region: a refusal a reader has to go
+      // looking for is a refusal that gets read as a bug.
+      setGateRefusal(failure.userMessage);
+      setError(failure);
+      setStep("readiness");
     } finally {
       setBusy(null);
     }
@@ -970,6 +1358,12 @@ export function TasksPanel() {
     setArgs({});
   }
 
+  function addCondition(): void {
+    if (checkKind === "") return;
+    setCheckDraft((current) => [...current, { kind: checkKind, args: checkArgs }]);
+    setCheckArgs({});
+  }
+
   if (surface === null || list === null) {
     return (
       <Card>
@@ -994,6 +1388,8 @@ export function TasksPanel() {
   }
 
   const chosenTool = surface.tools.find((tool) => tool.id === toolId) ?? null;
+  const chosenCheck =
+    surface.acceptance_checks.find((check) => check.kind === checkKind) ?? null;
   const task = detail?.task ?? null;
 
   return (
@@ -1125,6 +1521,14 @@ export function TasksPanel() {
 
               <EvidenceFields task={task} />
 
+              <PublishReadinessRegion
+                busy={busy}
+                moved={gateMoved}
+                onEvaluate={() => void evaluatePublishReadiness()}
+                refusal={gateRefusal}
+                task={task}
+              />
+
               <AcceptanceRegion
                 busy={busy}
                 note={acceptNote}
@@ -1178,6 +1582,19 @@ export function TasksPanel() {
                 {detail.honesty}
               </p>
             </section>
+
+            <Separator />
+
+            <ModelPlanRegion
+              busy={busy}
+              instruction={instruction}
+              lane={lane}
+              onForget={() => void forgetModelSession()}
+              onInstruction={setInstruction}
+              onPropose={() => void proposeFromModel()}
+              onReadLane={() => void readModelLane()}
+              proposal={proposal}
+            />
 
             <Separator />
 
@@ -1278,6 +1695,92 @@ export function TasksPanel() {
                 <TextArea rows={3} variant="secondary" />
               </TextField>
 
+              {/* --- the machine-checkable half of the plan ------------- */}
+              <fieldset className="flex flex-col gap-2" data-testid="tasks-acceptance-composer">
+                <legend className="text-xs font-semibold text-foreground">
+                  Kabul kosullari (istege bagli, ama yazilmazsa sonuc &quot;uygulanmadi&quot; olur)
+                </legend>
+                <p className="text-xs text-muted">
+                  Yukaridaki olcut bir cumledir ve hicbir cumle kosulmaz. Test
+                  sonucunun &quot;gecti&quot; veya &quot;kaldi&quot; olabilmesi
+                  icin planin, kapali kayittan secilmis, makinenin karar
+                  verebilecegi kosullar da yazmasi gerekir. Kosullar her
+                  okumada calisma alani uzerinde yeniden karara baglanir.
+                </p>
+
+                {surface.acceptance_checks.map((check) => (
+                  <label className="flex items-start gap-2" key={check.kind}>
+                    <input
+                      checked={checkKind === check.kind}
+                      disabled={busy !== null}
+                      name={`${ids}-acceptance`}
+                      onChange={() => {
+                        setCheckKind(check.kind);
+                        setCheckArgs({});
+                      }}
+                      type="radio"
+                      value={check.kind}
+                    />
+                    <span className="text-xs text-muted">
+                      <span className="font-mono text-foreground">{check.kind}</span>
+                      {` — ${ACCEPTANCE_KIND_LABEL[check.kind]}`}
+                      <br />
+                      {check.purpose}
+                    </span>
+                  </label>
+                ))}
+
+                {chosenCheck !== null &&
+                  chosenCheck.params.map((param) => (
+                    <TextField
+                      className="w-full"
+                      key={`${chosenCheck.kind}-${param.name}`}
+                      onChange={(next: string) =>
+                        setCheckArgs((current) => ({ ...current, [param.name]: next }))
+                      }
+                      value={checkArgs[param.name] ?? ""}
+                    >
+                      <Label>
+                        {`${param.name} (${param.type}${
+                          param.required ? ", zorunlu" : ", istege bagli"
+                        }) — ${param.detail}`}
+                      </Label>
+                      <Input autoComplete="off" variant="secondary" />
+                    </TextField>
+                  ))}
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    isDisabled={busy !== null || checkKind === ""}
+                    onPress={addCondition}
+                    size="sm"
+                    variant="secondary"
+                  >
+                    Kosulu plana ekle
+                  </Button>
+                  <span className="text-xs text-muted" data-testid="tasks-acceptance-draft-count">
+                    {`Plandaki kabul kosulu sayisi: ${String(checkDraft.length)}`}
+                  </span>
+                </div>
+
+                {checkDraft.length > 0 && (
+                  <ul className="flex flex-col gap-1" data-testid="tasks-acceptance-draft">
+                    {checkDraft.map((item, index) => (
+                      <li
+                        className="font-mono text-xs text-muted"
+                        key={`${item.kind}-${String(index)}`}
+                      >
+                        {`${String(index + 1)}. ${item.kind} · argumanlar: ${
+                          Object.keys(item.args).length === 0
+                            ? "(yok)"
+                            : Object.keys(item.args).join(", ")
+                        }`}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </fieldset>
+
               <div className="flex flex-wrap items-center gap-2">
                 <Button
                   isDisabled={
@@ -1314,6 +1817,8 @@ export function TasksPanel() {
                       approvals={approvals}
                       busy={busy}
                       key={run.id}
+                      executionPending={executionRunId === run.id}
+                      stopPending={stoppingRunId === run.id}
                       onApprove={approve}
                       onResume={(runId) => void act(runId, "resume")}
                       onStart={(runId) => void act(runId, "start")}
@@ -1353,6 +1858,325 @@ export function TasksPanel() {
         )}
       </Card.Content>
     </Card>
+  );
+}
+
+// --- Paket H4: asking the gate to look again -------------------------------
+
+/**
+ * The publication gate, and the difference between reaching a state and
+ * asking for one.
+ *
+ * There is now a route that can move a task into `ready_to_publish`, and
+ * SI-222 is untouched by it. The request body has **no target field**, the
+ * state is still absent from the user transition list, and what a person asks
+ * for is a re-reading of three fields that three different acts filled: what
+ * the runner produced, what the plan's own acceptance conditions decided over
+ * those bytes, and a person's acceptance.
+ *
+ * Three rules shape this region:
+ *
+ * * **the control is never worded as publication.** It says "evaluate", not
+ *   "publish" and not "mark ready". A button that promised the state would be
+ *   promising something the caller does not control;
+ * * **a refusal names the evidence.** The gate answers with the unverified
+ *   fields, and they are shown here, beside the button, together with the
+ *   task's own `blocking_fields` - which are readable before anything is
+ *   pressed, so a person can see why an attempt would fail without making
+ *   one;
+ * * **nothing here publishes.** Reaching `ready_to_publish` is not a send.
+ *   Sharing goes through the composer's three-step chain, and no route on
+ *   this surface can reach an outbound client.
+ */
+function PublishReadinessRegion({
+  task,
+  refusal,
+  moved,
+  busy,
+  onEvaluate,
+}: {
+  readonly task: TaskStatusResponse;
+  readonly refusal: string;
+  readonly moved: boolean;
+  readonly busy: Busy;
+  readonly onEvaluate: () => void;
+}) {
+  return (
+    <section aria-label="Yayin hazirligi" className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <h4 className="text-xs font-semibold text-foreground">Yayin hazirligi</h4>
+        <StatusPill
+          label={task.ready_to_publish ? "uc alan dogrulandi" : "kanit tamam degil"}
+          tone={task.ready_to_publish ? "ok" : "inactive"}
+        />
+      </div>
+
+      <p className="text-xs text-muted" data-testid="tasks-readiness-rule">
+        Bu islem bir durum istemez. Istek bir hedef alani tasimaz; yalnizca uc
+        kanit alaninin yeniden okunmasini ister ve karari kapi verir. Ayni
+        istegi kac kez yaparsaniz yapin cevap degismez: cevap kanitin bir
+        fonksiyonudur. Bu islem hicbir sey yayimlamaz ve hicbir sey gondermez.
+      </p>
+
+      <p className="font-mono text-xs text-muted" data-testid="tasks-readiness-blocking">
+        {task.blocking_fields.length === 0
+          ? "Dogrulanmamis alan yok."
+          : `Dogrulanmamis alanlar: ${task.blocking_fields.join(", ")}`}
+      </p>
+
+      <div>
+        <Button isDisabled={busy !== null} onPress={onEvaluate} size="sm" variant="secondary">
+          {busy === "readiness"
+            ? "Degerlendiriliyor..."
+            : "Yayin hazirligini degerlendir (durumu istemez)"}
+        </Button>
+      </div>
+
+      {refusal !== "" && (
+        <p className="text-xs text-muted" data-testid="tasks-readiness-refusal">
+          {refusal}
+        </p>
+      )}
+
+      {moved && (
+        <p className="text-xs text-muted" data-testid="tasks-readiness-moved">
+          {`Kapi uc alani da dogrulanmis buldu ve durum kanittan turetildi: gorev simdi '${
+            STATE_LABEL[task.state]
+          }'. Bu bir yayim degildir; dis paylasim ayri bir islemdir.`}
+        </p>
+      )}
+    </section>
+  );
+}
+
+// --- Paket H4 / ADR-0012: the model proposes, and only proposes ------------
+
+/**
+ * The model planning lane.
+ *
+ * The lane this screen said did not exist. It exists now, and every sentence
+ * in this region is here because the comfortable version of it would be a
+ * lie:
+ *
+ * * **a turn cannot start anything.** The best outcome is a recorded plan in
+ *   `planned`, which then meets the same four approvals a hand-written plan
+ *   meets. `model_can_start_a_run` is `false` on the wire as a *type*, and it
+ *   is rendered rather than assumed;
+ * * **a model cannot widen its own scope.** A proposed name that is not in
+ *   the compile-time registry refuses the whole turn, and the refusal is
+ *   rendered as an outcome on screen rather than swallowed. Nothing is
+ *   trimmed to the calls that happened to resolve: a plan made of the
+ *   survivors is not the plan anybody wrote;
+ * * **`usage` and `cost` are the provider's statement.** They are shown
+ *   verbatim, labelled as the provider's own numbers, and they are never used
+ *   as a ceiling - the ceiling is the model-call count, which this station
+ *   can count for itself (ADR-0008 4, SI-250);
+ * * **the model's reasoning is not here.** It is not hidden, filtered or
+ *   collapsed: it is read from the response, used for nothing, stored
+ *   nowhere and displayed nowhere (ADR-0012 1);
+ * * **which model answered is read, not guessed.** A turn's response carries
+ *   no model id, so the region offers the stored selection instead and says
+ *   that is what it is.
+ */
+function ModelPlanRegion({
+  lane,
+  proposal,
+  instruction,
+  busy,
+  onReadLane,
+  onPropose,
+  onForget,
+  onInstruction,
+}: {
+  readonly lane: OpenCodeStatus | null;
+  readonly proposal: ModelProposalResponse | null;
+  readonly instruction: string;
+  readonly busy: Busy;
+  readonly onReadLane: () => void;
+  readonly onPropose: () => void;
+  readonly onForget: () => void;
+  readonly onInstruction: (next: string) => void;
+}) {
+  return (
+    <section aria-label="Modelden plan onerisi" className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="text-sm font-semibold text-foreground">Modelden plan onerisi</h3>
+        <StatusPill label="Model onerir, calistirmaz" tone="inactive" />
+      </div>
+
+      <Alert status="warning">
+        <Alert.Indicator />
+        <Alert.Content>
+          <Alert.Title>Oneri onayi atlatmaz</Alert.Title>
+          <Alert.Description>
+            <span className="flex flex-col gap-2">
+              <span data-testid="tasks-model-approval-rule">
+                Modelin onerdigi bir plan, elle yazilmis bir planla ayni yoldan
+                gecer: ayni dort onay istenir ve calistirma ayri bir kullanici
+                islemidir. Model kendi planina onay veremez ve bir calismayi
+                baslatamaz. Modelin onermis olmasi hicbir adimi atlatmaz.
+              </span>
+              <span data-testid="tasks-model-registry-rule">
+                Model yalnizca derleme zamaninda yazilmis arac listesinden
+                secebilir. Listede olmayan bir ad onerirse oneri butunuyle
+                reddedilir - cozulen adimlarla kirpilmis bir plan kaydedilmez,
+                cunku o plani kimse yazmamistir. Araclara yol veya adres
+                verilemez: boyle bir parametre tipi yoktur.
+              </span>
+            </span>
+          </Alert.Description>
+        </Alert.Content>
+      </Alert>
+
+      {/* --- which model, and what was measured about it ---------------- */}
+      <div className="flex flex-col gap-2">
+        <div>
+          <Button isDisabled={busy !== null} onPress={onReadLane} size="sm" variant="secondary">
+            {busy === "modelLane" ? "Okunuyor..." : "Hangi model secili, oku"}
+          </Button>
+        </div>
+
+        {lane === null ? (
+          <p className="text-xs text-muted" data-testid="tasks-model-lane-unread">
+            Model baglantisinin durumu okunmadi. Bir tur harcamadan once hangi
+            modelin cevap verecegini gormek icin okuyabilirsiniz; turun kendi
+            yaniti bir model kimligi tasimaz ve bu ekran bir model adi
+            uydurmaz.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-1" data-testid="tasks-model-selection">
+            <p className="font-mono text-xs text-muted">
+              {`Secili model: ${
+                lane.selected_model === "" ? "(secilmedi)" : lane.selected_model
+              } · kimlik bilgisi kayitli: ${
+                lane.configured ? "evet" : "hayir"
+              } · baglanti durumu: ${lane.check.state}`}
+            </p>
+            <p className="text-xs text-muted" data-testid="tasks-model-tool-calls">
+              {lane.protocol_context.tool_calls_supported
+                ? "Arac cagrisi bicimi bu protokol ailesi icin olculmustur."
+                : "Arac cagrisi bicimi bu yapida olculmus degildir; olculmemis bir sozlesme uydurulmaz."}
+            </p>
+            {/* Empty until something is measured. Rendered verbatim: a
+                supported format with no provenance beside it would be exactly
+                the unsourced claim this product refuses. */}
+            {lane.protocol_context.tool_call_provenance !== "" && (
+              <p className="text-xs text-muted" data-testid="tasks-model-provenance">
+                {lane.protocol_context.tool_call_provenance}
+              </p>
+            )}
+            <p className="text-xs text-muted">{lane.protocol_context.deferral}</p>
+          </div>
+        )}
+      </div>
+
+      {/* --- spending one turn ------------------------------------------ */}
+      <TextField className="w-full" onChange={onInstruction} value={instruction}>
+        <Label>Modele iletilecek yonerge (istege bagli, saklanmaz)</Label>
+        <TextArea rows={3} variant="secondary" />
+      </TextField>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button isDisabled={busy !== null} onPress={onPropose} size="sm">
+          {busy === "modelTurn" ? "Tur harcaniyor..." : "Modelden plan oner (calistirmaz)"}
+        </Button>
+        <Button isDisabled={busy !== null} onPress={onForget} size="sm" variant="secondary">
+          {busy === "modelForget" ? "Unutuluyor..." : "Oturumu unut ve bastan basla"}
+        </Button>
+      </div>
+
+      <p className="text-xs text-muted" data-testid="tasks-model-turn-rule">
+        Bir istek bir tur harcar ve tur istegin icinde biter: zamanlayici, arka
+        plan gorevi ve otomatik ikinci tur yoktur. Oturumu unutmak yalnizca
+        bellekteki konusmayi duser; kaydedilmis planlar, calisma alani ve
+        kanitlar oldugu gibi kalir ve tavan sifirlanmaz.
+      </p>
+
+      {proposal === null ? (
+        <p className="text-xs text-muted" data-testid="tasks-model-no-turn">
+          Bu gorev icin bu ekranda henuz bir model turu harcanmadi.
+        </p>
+      ) : (
+        <div className="flex flex-col gap-2" data-testid="tasks-model-outcome">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-mono text-xs text-muted">{`Sonuc: ${proposal.outcome}`}</span>
+            <StatusPill
+              label={PROPOSAL_OUTCOME_LABEL[proposal.outcome]}
+              tone={PROPOSAL_OUTCOME_TONE[proposal.outcome]}
+            />
+          </div>
+
+          {/* The refusal path lands here, on screen, with the reason the
+              backend gave. It is a 200 with an outcome, not an exception. */}
+          <p className="text-xs text-muted" data-testid="tasks-model-detail">
+            {proposal.detail}
+          </p>
+
+          {/* Rendered only for the two outcomes that are not endings, and
+              rendered *under* the provider's own sentence rather than instead
+              of it. */}
+          {PROPOSAL_OUTCOME_NOTE[proposal.outcome] !== undefined && (
+            <p className="text-xs text-muted" data-testid="tasks-model-outcome-note">
+              {PROPOSAL_OUTCOME_NOTE[proposal.outcome]}
+            </p>
+          )}
+
+          <p className="font-mono text-xs text-muted" data-testid="tasks-model-calls">
+            {`Harcanan model turu: ${String(proposal.model_calls_used)} / ${String(
+              proposal.max_model_calls,
+            )} · onerilen plan: ${
+              proposal.run_id === "" ? "(kaydedilmedi)" : shortId(proposal.run_id)
+            }`}
+          </p>
+
+          {/* Labelled as the provider's statement, every time it is shown. */}
+          <p className="font-mono text-xs text-muted" data-testid="tasks-model-usage">
+            {`Saglayicinin beyani: ${
+              proposal.usage_detail === "" ? "(bildirilmedi)" : proposal.usage_detail
+            }`}
+          </p>
+          <p className="text-xs text-muted" data-testid="tasks-model-usage-rule">
+            Bu kullanim ve maliyet degerleri saglayicinin kendi bildirimidir,
+            bizim olcumumuz degildir ve tavan olarak kullanilmaz. Tavan, bu
+            istasyonun kendi sayabildigi bir birimdedir: model cagrisi sayisi.
+          </p>
+
+          {proposal.tool_call_provenance !== "" && (
+            <p className="text-xs text-muted" data-testid="tasks-model-turn-provenance">
+              {proposal.tool_call_provenance}
+            </p>
+          )}
+
+          {proposal.closing_text !== "" && (
+            <>
+              <p className="text-xs font-medium text-foreground">
+                Modelin kapanis sozu (bir sonuc iddiasi degildir)
+              </p>
+              {/* Imported text, rendered inert and unlinked like every other
+                  imported string in this app. Shown once and stored nowhere. */}
+              <pre
+                className="whitespace-pre-wrap break-words rounded-lg bg-surface-secondary p-2 font-mono text-xs text-foreground"
+                data-testid="tasks-model-closing"
+              >
+                {proposal.closing_text}
+              </pre>
+            </>
+          )}
+
+          <p className="text-xs text-muted" data-testid="tasks-model-cannot-start">
+            {proposal.model_can_start_a_run
+              ? "Model bir calismayi baslatabilir."
+              : "Model bir calismayi baslatamaz. Onerilen plan asagida 'Calismalar' altinda, dort onayi bekleyerek durur; baslatmak sizin isleminizdir."}
+          </p>
+
+          <p className="text-xs text-muted" data-testid="tasks-model-no-reasoning">
+            Modelin muhakemesi bu ekranda yoktur. Gizlenmis degildir:
+            saglayicinin yanitindaki muhakeme alani okunur, kullanilmaz,
+            saklanmaz, loglanmaz ve gosterilmez.
+          </p>
+        </div>
+      )}
+    </section>
   );
 }
 

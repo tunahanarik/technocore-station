@@ -2,27 +2,49 @@
 
 > Ana karar kaynağı: [`Technocore-Station-Proje-Kunyesi.md`](Technocore-Station-Proje-Kunyesi.md)
 > Çalışma kuralları: [`AGENTS.md`](AGENTS.md) · [`CLAUDE.md`](CLAUDE.md)
-> Son güncelleme: **5 Eylül 2026** (Aşama 12 / Paket J — bütünleşik inceleme
-> ve temizlik: yeni yetenek yok; belgeler ürünle uzlaştırıldı, `-qq` tuzağı
-> kapatıldı, SI tablosunun test adları artık ölçülüyor, kod aşaması 11)
+> Son güncelleme: **6 Eylül 2026** (Paket H4 — model plan yolu ve makinece
+> denetlenen kabul koşulları; ADR-0012 sözleşmeyi ölçtü, `tool_calls_supported`
+> `True` oldu ve `ready_to_publish` kanıttan türeyerek erişilebilir hâle geldi.
+> Ardından bir temizlik turu: ölü sabitler kaldırıldı ve model yolu açılınca
+> yanlışa düşen cümleler düzeltildi.)
 >
-> **Proje durumu: CODE_COMPLETE_USER_ACCEPTANCE_PENDING** — dosyanın sonuna
+> **Proje durumu: REVIEW_FIXES_IN_PROGRESS_CORE_AGENT_INCOMPLETE** — dosyanın sonuna
 > bakın.
 
 ## Aşama checklist
 
-- [x] **Aşama 0 — Spesifikasyon** — tamamlandı
-- [x] **Aşama 1 — Güvenli iskelet** — tamamlandı
-- [x] **Aşama 2 — Identity & Recovery** — tamamlandı
-- [x] **Aşama 2B — Conformance** — tamamlandı
-- [x] **Aşama 3 — Salt okunur Technocore** — tamamlandı
-- [x] **Aşama 3.1 — Protokol projeksiyonu düzeltmesi** — tamamlandı
-- [x] **Aşama 4 — Composer & Participation** — tamamlandı
-- [x] **Aşama 5 — Evidence & Audit** — tamamlandı
-- [x] **Aşama 6 — Project Modules** — tamamlandı (temel; görünür yüzey H1/H2)
-- [x] **Aşama 7 — Packaging** — betik, spec ve testler tamamlandı;
-      **artefakt üretildi ve çalıştırıldı** (PyInstaller kilitli bir
-      **geliştirme** bağımlılığı; artefaktın içine girmez)
+Bu liste **aşama 7'de bitiyordu** ve son beş aşamayı hiç saymıyordu; üstelik
+"Aşama 7 — Packaging" diyordu, oysa aşama 7 OpenCode bağlantısıdır ve
+paketleme **aşama 11**'dir. Liste gövdedeki başlıklara göre düzeltildi ve
+her satır kendi doğrulama raporuna bağlandı — ayrıntı raporlarda, sayım
+burada.
+
+| Aşama | Konu | Paket | Doğrulama raporu |
+|---|---|---|---|
+| 0 | Spesifikasyon | — | — |
+| 1 | Güvenli iskelet | — | — |
+| 2 | Identity & Recovery | — | — |
+| 2B | Conformance | — | — |
+| 3 | Salt okunur Technocore | — | — |
+| 3.1 | Protokol projeksiyonu düzeltmesi | B | [`paket-b`](docs/verification/paket-b.md) |
+| — | Başlangıç, kapsam eki, tekrarlanabilir CI | A | [`paket-a`](docs/verification/paket-a.md) |
+| — | Dashboard kabuğu ve hata sözleşmesi | C | [`paket-c`](docs/verification/paket-c.md) |
+| 4 | Composer & Participation | D | [`paket-d`](docs/verification/paket-d.md) |
+| 5 | Evidence & Audit | E | [`paket-e`](docs/verification/paket-e.md) |
+| 6 | Project Modules (temel; görünür yüzey H1/H2) | F | [`paket-f`](docs/verification/paket-f.md) |
+| 7 | OpenCode Go bağlantısı | G | [`paket-g`](docs/verification/paket-g.md) |
+| 8 | Work Scan | H1 | [`paket-h1`](docs/verification/paket-h1.md) |
+| 9 | Agent çalışma ortamı ve Activity Desk | H2 | [`paket-h2`](docs/verification/paket-h2.md) |
+| 10 | Kanıt çalışma alanı | H3 | [`paket-h3`](docs/verification/paket-h3.md) |
+| 11 | Windows paketleme — artefakt **üretildi ve çalıştırıldı**; imzasız (ADR-0010 §9) | I | [`paket-i`](docs/verification/paket-i.md) |
+| 12 | Bütünleşik inceleme ve temizlik (yeni yetenek yok) | J | [`paket-j`](docs/verification/paket-j.md) |
+| — | Model plan yolu ve makinece denetlenen kabul koşulları | H4 | [`paket-h4`](docs/verification/paket-h4.md) |
+| — | Bağımsız inceleme düzeltmesi (F1–F5) | — | [`review-fixes`](docs/verification/review-fixes.md) |
+
+Hepsi tamamlandı. **Bekleyen tek şey kullanıcı kabulüdür**
+([`kullanici-kabul-listesi.md`](docs/kullanici-kabul-listesi.md)); insan
+güvenlik incelemesi ertelenmiş kalan risktir (ADR-0001 §5). PyInstaller
+kilitli bir **geliştirme** bağımlılığıdır ve artefaktın içine girmez.
 
 ---
 
@@ -2186,4 +2208,160 @@ adlandırılması, ve tablodaki her satır kimliğinin bozulması); **yedisi de
 
 ---
 
-**Proje durumu: CODE_COMPLETE_USER_ACCEPTANCE_PENDING** (5 Eylül 2026)
+**Tarihsel Paket J beyanı: CODE_COMPLETE_USER_ACCEPTANCE_PENDING** (5 Eylül 2026).
+Bağımsız incelemeyle model/teslim akışı eksikleri yeniden doğrulandığından güncel
+tamamlanma beyanı değildir.
+
+## Bağımsız inceleme düzeltmesi — devam ediyor
+
+`codex/review-regressions`, taban `58b5423`. F1–F5 bağımsız regresyonlarla
+yeniden üretildi. Geri alma/devam, çıktı sürümüne bağlı kabul ve kesilen
+çalışma uzlaştırması uygulandı; bekleyen start/resume sırasında Durdur çalışır.
+AppStatus cevap doğrulaması ve bölüm hata sınırı eklendi.
+Dosyalar ve kırmızı/yeşil kanıt: [düzeltme raporu](docs/verification/review-fixes.md).
+Yeni bağımlılık yok; mevcut kilitli sürümler korunuyor.
+İlk tam koşudaki paket/index/test-yardımcısı hataları gideriliyor.
+Sonraki iş model → plan → araç → çıktı → doğrulama → kabul → teslim akışı.
+PR'lar bu turda merge edilmeden bağımsız incelemeye bırakılacak.
+Canlı model/DID operasyonuna son mesajla yetki verildi; henüz yapılmadı.
+Manuel tarayıcı ve görsel kabul yapılmadı; kullanıcıya ait.
+
+## Paket H4 — model plan yolu ve makinece denetlenen kabul koşulları
+
+Bağlayıcı karar: [ADR-0012](docs/decisions/0012-model-yolu-sozlesme-dogrulamasi-2026-09-06.md).
+Uygulanmış hâli: [`docs/model-planning.md`](docs/model-planning.md).
+Değişmezler: `docs/security-invariants.md` §9m (SI-330 … SI-343).
+
+Bu paket **hiçbir güvenlik değişmezini gevşetmedi**; iki *olguyu* değiştirdi
+ve o olgulara dayanan cümleleri düzeltti.
+
+### Ne açıldı
+
+- [x] **Model plan önerebiliyor.** `station_api/planner` üçüncü bir paket
+      olarak eklendi: `station_api.agent` giden yüzey edinemez (kendi
+      sınır taraması bunu reddeder), `station_api.opencode` görev/çalışma
+      sahibi olamaz, birleştirme ikisini de içe alan ama hiçbirinin içe
+      almadığı bir pakette yapıldı.
+- [x] **Model kendi planını başlatamıyor.** Öneri `planned` fazında bir
+      çalışmadır; `plan_run` yolu bir kişinin yazdığı planla aynıdır.
+      `start_run`/`resume_run`/`request_stop` adları planner ağacında **hiç
+      geçmiyor** ve bu sözdizim ağacından okunuyor.
+- [x] **`reasoning_content` düşürülüyor**, redakte edilmiyor.
+- [x] **Dördüncü tavan birimi:** `model_call_count`. `usage` ve `cost`
+      olduğu gibi kaydediliyor, **tavan olarak okunmuyor**.
+- [x] **Kabul koşulları** (yedinci kapalı registry) ve gerçek bir
+      `test_result`; `ready_to_publish` artık **kanıttan türeyerek**
+      erişilebilir. SI-222 korundu: hiçbir istek gövdesi bu durumu
+      adlandıramıyor.
+- [x] Migration **`0010`**: `agent_run.acceptance_json` (tek sütun, katkısal).
+
+### Ne açılmadı
+
+- **Keyfi kod/kabuk yürütmesi kapalı kaldı** (ADR-0008 §1). Planner ağacında
+  `subprocess`/`exec`/`eval`/`os.system` yok ve tarama ekili çağrıda kırmızı.
+- **Streaming açılmadı**: biçimi ölçülmedi, `streaming_supported` `False`.
+- **Altıncı giden yüzey açılmadı**: `OUTBOUND_CLIENT_MODULES` beşte.
+- **Zamanlayıcı yok**: bir tur, onu isteyen isteğin içinde olur.
+- **Model oturumu diske yazılmıyor**; yeniden başlatmada kaybolur (SI-224).
+
+### Bu turda ölçülenler
+
+- Dört kapı yeşil (`ruff`, `ruff` ikinci kapsam, `mypy`, `pytest`).
+- Her yeni guard mutasyonla sürüldü; skorlar düzeltme raporundadır.
+- **Gerçek bir sağlayıcı isteği yapılmadı**: bütün testler
+  `httpx.MockTransport` kullanıyor ve kimlik bilgisi depodaki sentetik
+  `TEST-ONLY` sabitidir. Anahtar koda, teste, belgeye veya loga yazılmadı.
+- Manuel tarayıcı kabulü ve görsel kabul **yapılmadı**; kullanıcıya aittir.
+
+
+---
+
+## Temizlik turu — ölü sabitler ve H4 sonrası bayatlayan cümleler (6 Eylül 2026)
+
+Yeni yetenek yok. Bu tur iki şey yaptı: **ölçerek** ölü kod sildi ve model
+yolu açılınca (ADR-0012, Paket H4) **yanlışa düşen** cümleleri düzeltti.
+Hiçbir güvenlik testi silinmedi, `skip`/`xfail` edilmedi veya zayıflatılmadı;
+bir tane **eklendi**.
+
+### Ölçüm önce geldi
+
+Bütün `apps/station-api/src` ve `packages/technocore-conform/src` ağacı AST
+ile tarandı; her tanımlı ad için depo genelinde (kaynak + testler + belgeler
++ `packaging/` + `.github/` + `apps/station-web/src`) sözcük sınırlı referans
+sayıldı, ve `getattr`/`globals`/`importlib` gibi dinamik erişim noktaları ayrı
+listelendi. Sonuç: **ölü fonksiyon veya sınıf yok**. Yalnız üç modül düzeyi
+adı yalnızca kendi tanımından ibaretti.
+
+### Silinenler — üçünün ikisi
+
+| Silinen | Kanıt | Neden gerçekten ölü |
+|---|---|---|
+| `technocore/projection.py::_SIGNED_BODY_FIELDS` | depo genelinde referans **1** (kendi tanımı) | `PLANNED_BODY_FIELDS` onu **geçersizleştirmişti**: `evaluate_signed_body` alan kümesini çağırandan (`PLANNED_BODY_FIELDS[lane]`) alıyor. Üstelik eski sabit **payload alanını** (`text`/`value`) taşımıyordu, yani biri onu geri bağlasa her `anyOf` dalını **yanlış** kümeye karşı yargılardı — ADR-0004 §2'nin adlandırdığı sessiz drift |
+| `agent/service.py::MAX_PLAN_ACCEPTANCE` (+ `__all__` satırı) | referans **2** (tanımı + `__all__`) | Yorumu "route katmanı gövdeyi servisle aynı sayıya karşı sınırlasın diye yeniden dışa aktarıldı" diyordu. **Hiçbir route onu import etmiyordu**; servis doğrudan `MAX_ACCEPTANCE_CONDITIONS` kullanıyor. Yani iki sayı aslında **korumasızdı** ve üstlerinde koruduğunu söyleyen bir sabit duruyordu |
+
+`_SIGNED_BODY_FIELDS`'in taşıdığı karar (`from` alanı bilerek yok) silinmedi;
+`PLANNED_BODY_FIELDS`'in yorumuna taşındı.
+
+### Silinen sabitin yerine **gerçek** koruma
+
+`schemas.py` bilerek bir yaprak modüldür — `station_api`'den hiçbir şey
+import etmez, çünkü bu süreçten çıkabilecek her alan orada tanımlıdır. Bu
+yüzden `MAX_PLAN_ACCEPTANCE` tarif ettiği işi **yapamazdı**. Sabitin yerine
+tarif ettiği koruma yazıldı:
+
+`test_agent_acceptance.py::test_the_request_bound_is_the_same_number_the_service_enforces`
+— `AgentPlanRequest.acceptance`'ın `max_length`'i `MAX_ACCEPTANCE_CONDITIONS`
+ile **eşit** olmalı.
+
+**Mutasyonla sürüldü:** `max_length` 8 → 7 yapıldığında test kırmızıya döndü
+(`assert [7] == [8]`), geri alındığında yeşile. Yani ölü sabit, gerçekten
+öldüren bir iddiaya dönüştü.
+
+### Düzeltilen yanlış cümleler — hepsi H4/ADR-0012 sonrası bayatlamıştı
+
+| Yer | Önce | Sonra |
+|---|---|---|
+| `README.md` | "…keyfi kod ve kabuk yürütmesi kapalıdır, **model çağrısı yoktur**…" | Madde listeden çıkarıldı; model yolunun ölçülerek açıldığı, modelin plan **önerebildiği** ama kendi planını başlatamadığı/onaylayamadığı yazıldı |
+| `docs/opencode-connection.md` §"Doğrulanamayan" tablosu | "Streaming ve tool-call biçimi \| `TOOL_CALLS_SUPPORTED = False`" | Satır ikiye ayrıldı: streaming tabloda kaldı, tool-call **ölçüldüğü için** tablodan çıktı |
+| `docs/opencode-connection.md` §4 | "**Streaming ve tool-call yoktur** (ADR-0005 §2)" | "Streaming yoktur… **Tool-call vardır**" — tek cümle ikisinden biri hakkında zorunlu olarak yanlış olduğu için ayrıldı |
+| `docs/opencode-connection.md` §10 | "Tool-call \| H2 — aynı gerekçe"; "Gerçek bütçe sınırı ve eşzamanlılık \| H2" | İkisi de **kapandı** olarak işaretlendi; nereye kapandıkları yazıldı |
+| `docs/proof-workspace.md` §4 | "`test_result` \| `not_implemented` \| Aynı sebep; H2'den devralınır" | Satır tablodan **çıktı**: H4 alanı gerçekten üretiyor. Yalnız cümle taşıyan plan hâlâ `not_implemented` |
+| `docs/proof-workspace.md` §4 | "`independent_check` … **Model yolu kapalı** (ADR-0008 §2)" | Öncül düzeltildi: model yolu açık; alan yerinde kalıyor çünkü **planı öneren model o planın üçüncü tarafı değildir** |
+| `docs/proof-workspace.md` §10 | "…`ready_to_publish`'e taşıyan bir kullanıcı rotası yoktur. Bu… **açık bir boşluktur**" | Boşluk H4'te `POST /api/tasks/{id}/publish-readiness` ile kapandı; SI-222'nin gevşetilmediği dört madde hâlinde yazıldı |
+| `docs/architecture.md` paket tablosu | Aşama 6'da bitiyordu; `opencode/`, `workscan/`, `agent/`, `proof/`, `planner/` **yoktu** | Beş satır eklendi |
+| `docs/architecture.md` secret sınırı | "**Gelecekteki** bir LLM/model adaptörü bu paketi import edemez" | Adaptör artık mevcut; kural bir öngörü değil `test_planner_boundary.py`'nin **ölçtüğü** olgu |
+| `tasks/states.py` docstring | "the run never records a `test_result` reference… `ready_to_publish` stays out of reach" | İkisi de artık yanlış; SI-222'nin gerçek iddiası ("türetilir, **istenemez**") ayırt edilerek yazıldı |
+| `modules/registry.py` `_PROOF_WORKSPACE_REQUIREMENTS` yorumu | "The model lane is closed (ADR-0008 2), so there is no second opinion" | Öncül gitti, sonuç kaldı ve **keskinleşti** |
+| `PROJECT_STATUS.md` aşama checklist'i | Aşama **7'de bitiyordu** ve "Aşama 7 — Packaging" diyordu | Aşama 7 OpenCode'dur, paketleme **11**'dir. Tablo gövdedeki başlıklara göre düzeltildi ve her satır doğrulama raporuna bağlandı |
+
+### Bilerek **yapılmayan** bir düzeltme — adıyla
+
+`modules/registry.py`'deki `run_test_result_recorded` hâlâ
+`implemented=False` ve `detail`'i "hiçbir kod yolu bu kanıtı üretemez" diyor.
+Bu artık makinece denetlenebilir koşul taşıyan planlar için **doğru değil**.
+Bayrak bu turda **çevrilmedi**, çünkü `complete` bayraktan türer: onu
+çevirmek `agent_workspace` modülünün "tamamlandı" diyebilmesi demektir ve bu
+bir belge düzeltmesi değil, **ürün durumu iddiası**dır — H3'ün
+`user_accepted_the_run_output`'u kendi yüzeyini kuran commit'te çevirmesi
+gibi, onu ölçen pakete aittir. Sessizce bırakılmadı: sebebi sabitin kendi
+yorumuna yazıldı.
+
+### Bu turda ölçülmeyenler ve dokunulmayanlar — adıyla
+
+- **`apps/station-web/**` hiç açılmadı.** Ön yüz ajanı çalışıyordu.
+  `api/types.ts` `tool_calls_supported`'ı hâlâ `false` **tipiyle** taşıyor
+  (paket-h4 §5'te de kayıtlı) ve `TasksPanel.test.tsx` hâlâ "model çıktısı
+  diye bir şey yoktur" metnini bekliyor. Frontend kapıları **koşulmadı**.
+- **`workscan/**`, `routes/workscan.py` ve `schemas.py`'nin oda şemaları**
+  başka bir ajanın canlı yazımıdır; okunmadı diye değil, **dokunulmadı** diye
+  raporlanıyor. `workscan/snapshot.py::measured_caveat` referans sayısı 1
+  ölçüldü ve **silinmedi**; o ajanın işi bitince bakılmalı.
+- `docs/ui-action-map.md`'deki "model çıktısı diye bir şey yoktur" satırları
+  **düzeltilmedi**: o belge arayüzün ne gösterdiğini anlatır ve arayüz şu an
+  değişiyor. Belgeyi arayüzden önce düzeltmek onu ikinci kez yanlış yapardı.
+- `client.py::AUTH_HEADER_CAVEAT` hâlâ "bu bir varsayımdır ve
+  **doğrulanmamıştır**" diyor. ADR-0012'nin ölçümü `Authorization: Bearer`'ı
+  metered uçta 200 ile geçirdi, yani cümlenin ikinci yarısı tartışmalı hâle
+  geldi. **Değiştirilmedi**: ADR-0012 §6 güncellemeyi açıkça
+  `tool_calls_supported` ve düzyazısıyla sınırladı, ve değişiklik iki
+  `tests/security` iddiasına ve SI-235'e dokunurdu. Karar kullanıcıya bırakıldı.

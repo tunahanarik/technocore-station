@@ -156,7 +156,7 @@ edilmiyor**.
 |---|---|---|
 | G1 | Ayarlar → OpenCode paneli; model kataloğunu açın ve **yalnız Tab ile** listeyi baştan sona gezin | Odak sırası görsel sırayla aynıdır; hiçbir satır atlanmaz, hiçbir yerde odak listenin dışına kaçmaz |
 | G2 | Aynı listeyi bir ekran okuyucuyla gezin | Her satır kendi adını ve durumunu okur |
-| G3 | Panelin "Sözleşme notları" bloğunu okuyun | Üç uyarıyı da görürsünüz: kimlik doğrulama başlığı doğrulanmadı, akış/araç çağrısı yok, anahtarın bağlı olması dosya paylaşımı demek değil |
+| G3 | Panelin "Sözleşme notları" bloğunu okuyun | Üç notu da görürsünüz: kimlik doğrulama başlığı doğrulanmadı; **akış yok, araç çağrısı ölçüldü** (ve neyin ölçüldüğü yazıyor); anahtarın bağlı olması dosya paylaşımı demek değil |
 | G4 | Bir anahtar kaydedin, sonra sayfayı yenileyin | Anahtar **hiçbir yerde geri gösterilmez** — maskeli olarak bile |
 
 > **G-lint (kabul edilecek bir gerçek, düzeltilecek bir madde değil):**

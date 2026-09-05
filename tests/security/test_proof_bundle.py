@@ -31,12 +31,34 @@ import pytest
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 from station_api.agent.service import _artifact_set_digest
-from station_api.agent.workspace import list_files, task_workspace
+from station_api.agent.workspace import (
+    MAX_FILE_BYTES,
+    MAX_FILES,
+    MAX_TOTAL_BYTES,
+    ensure_workspace,
+    list_files,
+    task_workspace,
+)
 from station_api.compose.nonce import NonceReserver
 from station_api.db.models import EvidenceRecord
 from station_api.identity.write_gate import CheckState
 from station_api.modules.fields import EvidenceField, EvidenceFieldError, EvidenceRef
+from station_api.proof import artifacts as artifacts_module
 from station_api.proof.approvals import SHARE_TOKEN_TTL_SECONDS, ShareApproval
+from station_api.proof.artifacts import (
+    BODY_EMBEDDED,
+    BODY_EXCLUDED,
+    EXCLUSION_DETAIL,
+    MAX_EMBEDDED_FILE_BYTES,
+    MAX_EMBEDDED_FILES,
+    MAX_EMBEDDED_TOTAL_BYTES,
+    REASON_COUNT_EXHAUSTED,
+    REASON_DIGEST_MISMATCH,
+    REASON_FILE_TOO_LARGE,
+    REASON_NOT_TEXT,
+    REASON_SECRET_PATTERN,
+    REASON_TOTAL_EXHAUSTED,
+)
 from station_api.proof.bundle import (
     BUNDLE_FORMATS,
     BUNDLE_KIND,
@@ -45,14 +67,20 @@ from station_api.proof.bundle import (
     BUNDLE_VERSION,
     EXIT_CODE_DETAIL,
     INDEPENDENT_CHECK_DETAIL,
+    MAX_BUNDLE_TEXT_CHARS,
     NOT_IMPLEMENTED,
     BundleFormatError,
     artifact_set_sha256,
     render,
     render_json,
     render_markdown,
+    verify_body_digests,
 )
-from station_api.proof.language import HASH_SCOPE_SENTENCE
+from station_api.proof.language import (
+    BODY_SCOPE_SENTENCE,
+    HASH_SCOPE_SENTENCE,
+    PROOF_FORBIDDEN_PHRASES,
+)
 from station_api.proof.service import ProofError, ProofService
 from station_api.security.tokens import MAX_PENDING_TOKENS, SingleUseStore
 from station_api.strict_json import loads_strict
@@ -376,7 +404,7 @@ def test_an_approval_falls_when_the_artifact_set_changes(
 
 
 def test_an_approval_bound_to_another_content_version_is_refused(
-    tasks, agent, task  # type: ignore[no-untyped-def]
+    tasks, agent, task, data_dir  # type: ignore[no-untyped-def]
 ) -> None:
     """The fourth binding, driven rather than left as a dead branch.
 
@@ -395,7 +423,9 @@ def test_an_approval_bound_to_another_content_version_is_refused(
     store: SingleUseStore[ShareApproval] = SingleUseStore(
         ttl_seconds=SHARE_TOKEN_TTL_SECONDS
     )
-    service = ProofService(tasks=tasks, agent=agent, approvals=store)
+    service = ProofService(
+        tasks=tasks, agent=agent, data_dir=data_dir, approvals=store
+    )
     bundle = service.build(task.id)
     token = store.issue(
         ShareApproval(
@@ -453,14 +483,16 @@ def test_a_refused_delivery_still_spends_the_approval(
 
 
 def test_an_expired_approval_is_refused(
-    tasks, agent, task  # type: ignore[no-untyped-def]
+    tasks, agent, task, data_dir  # type: ignore[no-untyped-def]
 ) -> None:
     """The TTL, driven on a controlled clock rather than waited out."""
     clock = {"now": 0.0}
     store: SingleUseStore[ShareApproval] = SingleUseStore(
         ttl_seconds=SHARE_TOKEN_TTL_SECONDS, clock=lambda: clock["now"]
     )
-    service = ProofService(tasks=tasks, agent=agent, approvals=store)
+    service = ProofService(
+        tasks=tasks, agent=agent, data_dir=data_dir, approvals=store
+    )
     token, _ = service.prepare_share(task.id, session_id=TEST_ONLY_SESSION)
 
     clock["now"] = SHARE_TOKEN_TTL_SECONDS + 1
@@ -508,7 +540,7 @@ def test_ending_a_session_discards_its_pending_approvals(
 
 
 def test_abandoned_share_approvals_stop_occupying_memory(
-    tasks, agent, task  # type: ignore[no-untyped-def]
+    tasks, agent, task, data_dir  # type: ignore[no-untyped-def]
 ) -> None:
     """A TTL that only decides validity is not a TTL that frees anything.
 
@@ -528,7 +560,9 @@ def test_abandoned_share_approvals_stop_occupying_memory(
     store: SingleUseStore[ShareApproval] = SingleUseStore(
         ttl_seconds=SHARE_TOKEN_TTL_SECONDS, clock=lambda: clock["now"]
     )
-    service = ProofService(tasks=tasks, agent=agent, approvals=store)
+    service = ProofService(
+        tasks=tasks, agent=agent, data_dir=data_dir, approvals=store
+    )
 
     for _ in range(50):
         service.prepare_share(task.id, session_id=TEST_ONLY_SESSION)
@@ -542,7 +576,7 @@ def test_abandoned_share_approvals_stop_occupying_memory(
 
 
 def test_the_share_approval_store_has_a_ceiling_and_the_shipped_one_uses_it(
-    tasks, agent, task  # type: ignore[no-untyped-def]
+    tasks, agent, task, data_dir  # type: ignore[no-untyped-def]
 ) -> None:
     """Purging is not enough on its own; an unexpired flood is still a flood.
 
@@ -560,7 +594,9 @@ def test_the_share_approval_store_has_a_ceiling_and_the_shipped_one_uses_it(
     store: SingleUseStore[ShareApproval] = SingleUseStore(
         ttl_seconds=SHARE_TOKEN_TTL_SECONDS, capacity=4
     )
-    service = ProofService(tasks=tasks, agent=agent, approvals=store)
+    service = ProofService(
+        tasks=tasks, agent=agent, data_dir=data_dir, approvals=store
+    )
 
     tokens = [
         service.prepare_share(task.id, session_id=TEST_ONLY_SESSION)[0]
@@ -575,7 +611,7 @@ def test_the_share_approval_store_has_a_ceiling_and_the_shipped_one_uses_it(
 
     # And the store the application builds is bounded too - the default, not
     # the one this test constructed.
-    shipped = ProofService(tasks=tasks, agent=agent)
+    shipped = ProofService(tasks=tasks, agent=agent, data_dir=data_dir)
     assert shipped.approval_capacity == MAX_PENDING_TOKENS
 
 
@@ -944,3 +980,428 @@ def test_a_public_share_does_not_make_a_task_ready_to_publish(
     assert status.check_for(EvidenceField.PUBLIC_SHARE).state is CheckState.PASSED
     assert status.ready_to_publish is False
     assert "public_share" not in status.blocking_fields
+
+
+# ---------------------------------------------------------------------------
+# The bundle carries the work, not a description of it
+# ---------------------------------------------------------------------------
+#
+# An independent review measured what a person actually received:
+#
+#     {"contains_filename": true, "contains_artifact_body": false}
+#
+# The artifact entries held a name, a byte count and a SHA-256, and the file
+# the run had produced stayed on disk. Everything in this block is about that
+# measurement and about the four ways carrying a body could go wrong: a body
+# that does not match its digest, a body that is too big to carry, a body that
+# is not ours to hand out, and a body that closes its own code fence.
+
+
+#: A body a substring search can find, so "the file is in the package" is a
+#: measurement rather than an impression.
+TEST_ONLY_MARKER = "TEST-ONLY-artifact-body-marker-8f2a"
+
+#: 64 hex characters: the shape ``secret_scan`` refuses as a seed or a private
+#: key. Not a real key and never used as one - it is the canary that proves the
+#: scan is looking at artifact bodies now that artifact bodies are delivered.
+TEST_ONLY_CANARY = "a1b2c3d4" * 8
+
+
+def _run_with_body(agent, task, body: str, *, name: str = "rapor.json") -> str:  # type: ignore[no-untyped-def]
+    """One completed run whose single artifact has exactly ``body`` in it."""
+    run_id = write_plan(agent, task.id, name=name, body=body, expected=(name,))
+    agent.start_run(run_id)
+    return run_id
+
+
+def _filler(size: int) -> bytes:
+    """``size`` bytes the secret scan has no reason to look at twice.
+
+    Not ``b"T" * size``: the deny rules match a run of 43 or more base64url
+    characters, and half a megabyte of one letter is exactly that. The scan is
+    right to fire - it cannot tell padding from a padded seed, which is why it
+    matches runs of *at least* the secret length - so a ceiling test has to
+    fill with something that has boundaries in it, or it measures the scan
+    instead of the ceiling. Measured: the first version of this test filled
+    with one repeated letter and every body came back excluded as a
+    secret-pattern hit.
+    """
+    unit = b"TEST-ONLY "
+    return (unit * (size // len(unit) + 1))[:size]
+
+
+def _plant(data_dir, task_id: str, name: str, payload: bytes) -> None:  # type: ignore[no-untyped-def]
+    """Put bytes into a task workspace that the product's own writer refuses.
+
+    Every ceiling below is about a file this product could not have written -
+    too large, not UTF-8, one file too many - so the test has to write it
+    another way. Straight to the directory, from the test, with no product
+    code involved: the point is what the *reader* does with a file it did not
+    make.
+    """
+    directory = ensure_workspace(data_dir, task_id)
+    (directory / name).write_bytes(payload)
+
+
+def _entry(document, name: str):  # type: ignore[no-untyped-def]
+    return next(
+        item for item in document["artifacts"]["files"] if item["name"] == name
+    )
+
+
+def test_the_bundle_carries_the_produced_file_and_not_only_its_name(
+    proof: ProofService, agent, task  # type: ignore[no-untyped-def]
+) -> None:
+    """The measured defect, as a test.
+
+    Before the bodies were carried this read ``contains_artifact_body: false``
+    in both formats: a person who downloaded their proof received an inventory
+    of their work and the digests to check it against, and not the work. Both
+    formats are asserted because delivering the file in one of them and a
+    description in the other would be two documents wearing one name.
+    """
+    body = f'{{"TEST_ONLY": "{TEST_ONLY_MARKER}"}}'
+    _run_with_body(agent, task, body)
+
+    document = proof.build(task.id).document
+    entry = _entry(document, "rapor.json")
+
+    assert entry["content_state"] == BODY_EMBEDDED
+    assert entry["content"] == body
+    assert entry["content_encoding"] == "utf-8"
+    for bundle_format in BUNDLE_FORMATS:
+        payload = render(document, bundle_format=bundle_format).decode("utf-8")
+        assert TEST_ONLY_MARKER in payload, bundle_format
+
+
+def test_every_embedded_body_hashes_to_the_digest_beside_it(
+    proof: ProofService, agent, task  # type: ignore[no-untyped-def]
+) -> None:
+    """The hash contract, and the mutation that has to break it.
+
+    An entry is a body and a digest of that body. If the two can drift the
+    entry is worse than useless: a reader who checks their saved copy against
+    the printed number and gets a match has been told something false about
+    which bytes they hold. One character is changed in the carried text and the
+    check has to name that file.
+    """
+    _run_with_body(agent, task, f'{{"TEST_ONLY": "{TEST_ONLY_MARKER}"}}')
+    document = proof.build(task.id).document
+
+    assert verify_body_digests(document) == ()
+
+    entry = _entry(document, "rapor.json")
+    entry["content"] = str(entry["content"]).replace("TEST", "TSET", 1)
+
+    assert verify_body_digests(document) == ("rapor.json",)
+
+
+def test_a_file_that_changes_between_the_listing_and_the_read_is_excluded(
+    proof: ProofService, agent, task, monkeypatch: pytest.MonkeyPatch  # type: ignore[no-untyped-def]
+) -> None:
+    """The window between two reads, and why the digest is taken twice.
+
+    The listing hashes the bytes it read; the body is read again a moment
+    later, and a file can change in between - a run in another process, a
+    person with an editor open. Whatever caused it, the digest from the first
+    read and the text from the second describe different files, and shipping
+    them in one entry would be the exact lie the entry exists to prevent.
+
+    Driven by making the second read return something else, because a real race
+    cannot be scheduled deterministically. That is stated rather than hidden:
+    what is being asserted is the *comparison*, and the comparison cannot tell
+    why the two reads disagreed.
+    """
+    _run_with_body(agent, task, f'{{"TEST_ONLY": "{TEST_ONLY_MARKER}"}}')
+
+    monkeypatch.setattr(
+        artifacts_module,
+        "read_text",
+        lambda directory, name: '{"TEST_ONLY": "something else entirely"}',
+    )
+    document = proof.build(task.id).document
+    entry = _entry(document, "rapor.json")
+
+    assert entry["content_state"] == BODY_EXCLUDED
+    assert entry["content"] is None
+    assert entry["content_detail"] == EXCLUSION_DETAIL[REASON_DIGEST_MISMATCH]
+    assert verify_body_digests(document) == ()
+
+
+def test_a_body_is_carried_whole_or_not_at_all(
+    proof: ProofService, agent, task  # type: ignore[no-untyped-def]
+) -> None:
+    """No truncation anywhere, at any size.
+
+    ``safe_text`` cuts imported text at five hundred characters, which is right
+    for a title in a sentence and catastrophic for a file: a body cut at five
+    hundred characters under a digest describing the whole file is a document
+    that lies in exactly the way a digest is supposed to prevent.
+    """
+    body = "TEST-ONLY " * 400  # comfortably past MAX_BUNDLE_TEXT_CHARS
+    _run_with_body(agent, task, body, name="uzun.txt")
+    document = proof.build(task.id).document
+    entry = _entry(document, "uzun.txt")
+
+    assert len(body) > MAX_BUNDLE_TEXT_CHARS
+    assert entry["content"] == body
+    assert entry["byte_count"] == len(body.encode("utf-8"))
+    assert verify_body_digests(document) == ()
+
+
+def test_the_package_ceilings_are_the_workspaces_own_three(
+    proof: ProofService, task  # type: ignore[no-untyped-def]
+) -> None:
+    """Referenced, not restated.
+
+    A second set of numbers would drift, and the drift would be silent in the
+    worst direction: a package ceiling below the workspace's would start
+    excluding bodies of files this product itself wrote, and a person would be
+    told their own report was too big to hand back to them.
+    """
+    assert MAX_EMBEDDED_FILES == MAX_FILES
+    assert MAX_EMBEDDED_FILE_BYTES == MAX_FILE_BYTES
+    assert MAX_EMBEDDED_TOTAL_BYTES == MAX_TOTAL_BYTES
+    assert proof.build(task.id).document["version"] == BUNDLE_VERSION
+
+
+def test_a_file_over_the_per_file_ceiling_is_named_rather_than_cut(
+    proof: ProofService, agent, task, data_dir  # type: ignore[no-untyped-def]
+) -> None:
+    """The refusal is shown, and the rest of the proof survives it.
+
+    Two halves, and the second is the one that is easy to get wrong. The body
+    has to be absent with the ceiling named - in the entry and again in the
+    document's ``missing`` list - and the *other* file's body has to still be
+    there. A bundle that refused itself because one file somebody dropped into
+    the directory was too big would let a stray file lock a person out of the
+    proof of everything else they did.
+    """
+    _run_with_body(agent, task, f'{{"TEST_ONLY": "{TEST_ONLY_MARKER}"}}')
+    _plant(data_dir, task.id, "buyuk.txt", b"T" * (MAX_EMBEDDED_FILE_BYTES + 1))
+
+    document = proof.build(task.id).document
+    oversized = _entry(document, "buyuk.txt")
+
+    assert oversized["content_state"] == BODY_EXCLUDED
+    assert oversized["content"] is None
+    assert oversized["content_detail"] == EXCLUSION_DETAIL[REASON_FILE_TOO_LARGE]
+    assert str(MAX_EMBEDDED_FILE_BYTES) in oversized["content_detail"]
+    assert oversized["sha256"] and oversized["byte_count"] > MAX_EMBEDDED_FILE_BYTES
+
+    keys = {item["key"] for item in document["missing"]}
+    assert "artifact_body.buyuk.txt" in keys
+
+    assert _entry(document, "rapor.json")["content_state"] == BODY_EMBEDDED
+    assert TEST_ONLY_MARKER in render_json(document).decode("utf-8")
+
+
+def test_the_total_ceiling_is_reached_with_real_files_and_named_when_crossed(
+    proof: ProofService, task, data_dir  # type: ignore[no-untyped-def]
+) -> None:
+    """The package total, driven at its real value rather than a patched one.
+
+    Nine files of exactly the per-file ceiling: eight fit inside four
+    megabytes, the ninth would cross it. Written as real bytes on disk because
+    a ceiling that has only ever been tested against a monkeypatched constant
+    is a ceiling nobody has watched work.
+    """
+    per_file = MAX_EMBEDDED_FILE_BYTES
+    count = MAX_EMBEDDED_TOTAL_BYTES // per_file + 1
+    for index in range(count):
+        _plant(data_dir, task.id, f"dosya-{index:02d}.txt", _filler(per_file))
+
+    document = proof.build(task.id).document
+    states = [item["content_state"] for item in document["artifacts"]["files"]]
+    last = document["artifacts"]["files"][-1]
+
+    assert states.count(BODY_EMBEDDED) == MAX_EMBEDDED_TOTAL_BYTES // per_file
+    assert last["content_state"] == BODY_EXCLUDED
+    assert last["content_detail"] == EXCLUSION_DETAIL[REASON_TOTAL_EXHAUSTED]
+    assert document["artifacts"]["embedded_bytes"] <= MAX_EMBEDDED_TOTAL_BYTES
+    assert f"artifact_body.{last['name']}" in {
+        item["key"] for item in document["missing"]
+    }
+
+
+def test_the_file_count_ceiling_leaves_the_extra_bodies_out_by_name(
+    proof: ProofService, task, data_dir  # type: ignore[no-untyped-def]
+) -> None:
+    """One more file than the workspace's own count ceiling."""
+    for index in range(MAX_EMBEDDED_FILES + 1):
+        _plant(data_dir, task.id, f"k-{index:03d}.txt", b"TEST-ONLY")
+
+    document = proof.build(task.id).document
+    entries = document["artifacts"]["files"]
+    last = entries[-1]
+
+    assert len(entries) == MAX_EMBEDDED_FILES + 1
+    assert document["artifacts"]["embedded_file_count"] == MAX_EMBEDDED_FILES
+    assert last["content_state"] == BODY_EXCLUDED
+    assert last["content_detail"] == EXCLUSION_DETAIL[REASON_COUNT_EXHAUSTED]
+
+
+def test_a_file_that_is_not_utf8_is_named_rather_than_refusing_the_bundle(
+    proof: ProofService, agent, task, data_dir  # type: ignore[no-untyped-def]
+) -> None:
+    """The binary case, measured rather than assumed away.
+
+    This product writes no binary artifact - the only writer takes a ``str``
+    and encodes UTF-8 - so there is nothing to base64. A file that arrived some
+    other way is still a file in the person's workspace, and the answer is the
+    workspace's own: name it, say what is wrong, keep going.
+    """
+    _run_with_body(agent, task, f'{{"TEST_ONLY": "{TEST_ONLY_MARKER}"}}')
+    _plant(data_dir, task.id, "ikili.bin", b"\xff\xfe\x00\x01TEST-ONLY")
+
+    document = proof.build(task.id).document
+    entry = _entry(document, "ikili.bin")
+
+    assert entry["content_state"] == BODY_EXCLUDED
+    assert entry["content"] is None
+    assert entry["content_detail"] == EXCLUSION_DETAIL[REASON_NOT_TEXT]
+    assert _entry(document, "rapor.json")["content_state"] == BODY_EMBEDDED
+
+
+def test_a_canary_in_a_workspace_file_is_caught_before_the_body_is_delivered(
+    proof: ProofService, agent, task  # type: ignore[no-untyped-def]
+) -> None:
+    """The leak test, and the reason the scan had to be extended at all.
+
+    ``evidence/secret_scan.py`` ran on evidence rows, which stay on this
+    machine. The proof bundle is the one document in this product built to be
+    handed to somebody else, so the moment bodies started travelling inside it
+    the bundle became the most likely leak surface there is.
+
+    Refused, not redacted: the body is left out entire and the rule is named.
+    Redacting would hand over a file whose bytes no longer match the digest
+    printed beside it, which is the one thing an artifact entry may never do.
+    """
+    _run_with_body(agent, task, f'{{"TEST_ONLY_canary": "{TEST_ONLY_CANARY}"}}')
+
+    bundle = proof.build(task.id)
+    entry = _entry(bundle.document, "rapor.json")
+
+    assert entry["content_state"] == BODY_EXCLUDED
+    assert entry["content"] is None
+    assert EXCLUSION_DETAIL[REASON_SECRET_PATTERN] in entry["content_detail"]
+    assert TEST_ONLY_CANARY not in entry["content_detail"]
+
+    for bundle_format in BUNDLE_FORMATS:
+        payload = render(bundle.document, bundle_format=bundle_format).decode("utf-8")
+        assert TEST_ONLY_CANARY not in payload, bundle_format
+
+    # The file is still listed. What is refused is its contents, not its
+    # existence - a proof that silently dropped the file would be hiding the
+    # very thing the reader needs to go and look at.
+    assert entry["sha256"] and entry["byte_count"] > 0
+    assert "artifact_body.rapor.json" in {
+        item["key"] for item in bundle.document["missing"]
+    }
+
+
+def test_a_forbidden_phrase_inside_a_file_is_reported_and_left_alone(
+    proof: ProofService, agent, task  # type: ignore[no-untyped-def]
+) -> None:
+    """Package E's claim/data split, at the one place it collides with a digest.
+
+    A body is data: it may not refuse the bundle, and a person who typed a
+    banned phrase into their own report must still be able to take that report.
+    It also may not be *neutralised*, which is what every other imported string
+    here goes through - masking a phrase would change the bytes underneath a
+    digest that describes the file, and the entry would stop being checkable.
+
+    So the guard runs and **reports**. The phrase is named beside the body and
+    the body is delivered exactly as it is on disk.
+    """
+    phrase = PROOF_FORBIDDEN_PHRASES[0]
+    body = f"TEST-ONLY rapor. {phrase}."
+    _run_with_body(agent, task, body, name="rapor.txt")
+
+    document = proof.build(task.id).document
+    entry = _entry(document, "rapor.txt")
+
+    assert entry["content"] == body
+    assert entry["content_claim_phrases"] == [phrase]
+    assert verify_body_digests(document) == ()
+    assert phrase in render_markdown(document).decode("utf-8")
+
+
+def test_a_body_cannot_close_the_code_fence_that_carries_it(
+    proof: ProofService, task, data_dir  # type: ignore[no-untyped-def]
+) -> None:
+    """Markdown injection out of an artifact this product did not write.
+
+    A fenced block ends at the first line whose fence is at least as long as
+    the opening one. A body containing three backticks on a line of its own
+    would end the block, and everything after it in that file would be read as
+    Markdown in a document a person is about to forward. The fence is computed
+    from the body rather than fixed, and escaping is not an option here: an
+    escaped body is a different body and would not hash.
+
+    Planted straight into the directory rather than written through a plan:
+    the runner sweeps its tool arguments, so a multi-line body handed to it
+    arrives on disk with its newlines replaced by spaces and there would be no
+    line left to close a fence with. Measured while writing this test.
+    """
+    body = "TEST-ONLY\n```\n# baslik degil\n````\nson"
+    _plant(data_dir, task.id, "fence.md", body.encode("utf-8"))
+
+    document = proof.build(task.id).document
+    text = render_markdown(document).decode("utf-8")
+
+    assert "`````" in text
+    assert "# baslik degil" in text
+    assert _entry(document, "fence.md")["content"] == body
+    assert verify_body_digests(document) == ()
+
+
+def test_the_bundle_never_becomes_an_input_to_its_own_digest(
+    proof: ProofService, agent, task, data_dir  # type: ignore[no-untyped-def]
+) -> None:
+    """No self-reference, now that the document carries the files.
+
+    The artifact set digest covers every file in ``workspace/v1/<task_id>``, so
+    a bundle written there would be inside its own hash - and with the bodies
+    embedded it would also be inside its own *body*. Nothing writes it
+    anywhere, and the document does not carry its own digest either: an
+    approval binds to ``bundle_sha256`` from outside, and a digest printed
+    inside the thing it describes could never be right.
+    """
+    _run_with_body(agent, task, f'{{"TEST_ONLY": "{TEST_ONLY_MARKER}"}}')
+    directory = task_workspace(data_dir, task.id)
+    before = [(item.name, item.sha256) for item in list_files(directory)]
+
+    bundle = proof.build(task.id)
+    rendered = {
+        bundle_format: render(bundle.document, bundle_format=bundle_format)
+        for bundle_format in BUNDLE_FORMATS
+    }
+
+    assert bundle.sha256 not in render_json(bundle.document).decode("utf-8")
+    for payload in rendered.values():
+        assert bundle.sha256.encode("ascii") not in payload
+    assert [(item.name, item.sha256) for item in list_files(directory)] == before
+    assert before
+
+
+def test_the_document_states_what_a_carried_body_is_and_is_not(
+    proof: ProofService, agent, task  # type: ignore[no-untyped-def]
+) -> None:
+    """ADR-0009 11's sentence has a third half now.
+
+    A document that started carrying somebody else's text had to say so. The
+    reader is told the bodies are the run's output rather than this product's
+    words, that each digest describes the body beside it, and that an absent
+    body is named - all three in both formats, because a person reads one of
+    them and a checker reads the other.
+    """
+    _run_with_body(agent, task, f'{{"TEST_ONLY": "{TEST_ONLY_MARKER}"}}')
+    document = proof.build(task.id).document
+
+    assert document["notes"]["body_scope"] == BODY_SCOPE_SENTENCE
+    assert BODY_SCOPE_SENTENCE in render_json(document).decode("utf-8")
+    markdown = render_markdown(document).decode("utf-8")
+    assert "Dosya govdeleri" in markdown
+    for fragment in ("Govde kosmanin urettigi metindir", "kendi ozetidir"):
+        assert fragment in markdown

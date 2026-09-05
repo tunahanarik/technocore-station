@@ -25,6 +25,7 @@ reviewable after the fact rather than merely observable while it happens:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from sqlalchemy import Engine, select
@@ -39,7 +40,8 @@ from station_api.agent.service import (
     RunPhase,
     StepPhase,
 )
-from station_api.agent.workspace import list_files
+from station_api.agent.tools import ToolId
+from station_api.agent.workspace import list_files, read_text, task_workspace
 from station_api.db.models import AgentRun, AgentRunStep
 from station_api.modules.fields import EvidenceField
 from station_api.tasks.service import TaskError, TaskService, TaskView
@@ -504,7 +506,12 @@ def test_the_ceiling_ends_a_run_with_its_own_phase_and_audit_event(
     monkeypatch.setattr(
         budget_module,
         "CEILING",
-        RunCeiling(max_tool_calls=1, max_wall_clock_seconds=120, max_concurrency=1),
+        RunCeiling(
+            max_tool_calls=1,
+            max_model_calls=8,
+            max_wall_clock_seconds=120,
+            max_concurrency=1,
+        ),
     )
     run_id = write_plan(agent, task.id)
     view = agent.start_run(run_id)
@@ -551,31 +558,101 @@ def test_a_stop_blocks_the_next_tool_call(
     assert "run_stopped" in _actions(activity_log, run_id)
 
 
-def test_a_result_arriving_after_a_stop_leaves_nothing_behind(
-    agent: AgentService, task: TaskView, monkeypatch: pytest.MonkeyPatch
+def _stop_after(
+    agent: AgentService,
+    run_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    only: ToolId | None = None,
 ) -> None:
-    """The late-reply rule, driven rather than described.
+    """Make a tool set the stop flag *while it runs*.
 
-    A tool that sets the stop flag *while it runs* stands in for the reply
-    that arrives after cancellation. Its result is not recorded and the file
-    it wrote is removed, so a cancelled run has no side effect a user would
-    later find and mistake for output.
+    Stands in for the reply that arrives after the user pressed stop: the
+    call has already happened and already written its bytes when the runner
+    next reads the flag. ``only`` narrows it to one tool, so a two-step plan
+    can run its first step to completion and be cancelled on the second.
     """
-    run_id = write_plan(agent, task.id)
     real_call = AgentService._call
 
     def _stopping_call(self, record, arguments, task_view, directory):  # type: ignore[no-untyped-def]
         outcome = real_call(self, record, arguments, task_view, directory)
-        self.request_stop(run_id)
+        if only is None or record.id is only:
+            self.request_stop(run_id)
         return outcome
 
     monkeypatch.setattr(AgentService, "_call", _stopping_call)
+    del agent
+
+
+def test_a_result_arriving_after_a_stop_leaves_no_new_file_behind(
+    agent: AgentService, task: TaskView, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The late-reply rule for a step that **created** a file.
+
+    Half of a test that used to be one. It asserted a single sentence -
+    "the file it produced was removed from the workspace" - for both kinds of
+    write, and that made the sentence false for the other kind: an
+    ``update_workspace_file`` call that was cancelled had its target *removed*
+    rather than put back, so cancelling a step deleted a file the user's
+    earlier, completed step had produced. The undo now depends on what the
+    call actually did, so the two cases are two tests with two different
+    assertions and neither can borrow the other's wording.
+
+    This is the case where nothing existed before: the cancelled step created
+    ``rapor.json``, so afterwards the workspace holds nothing at all.
+    """
+    run_id = write_plan(agent, task.id)
+    _stop_after(agent, run_id, monkeypatch)
     view = agent.start_run(run_id)
 
     assert view.phase is RunPhase.PAUSED
     assert view.steps[0].phase is StepPhase.SKIPPED
     assert agent.workspace_files(task.id) == ()
     assert "kaldirildi" in view.steps[0].detail
+    assert "geri yuklendi" not in view.steps[0].detail
+
+
+def test_a_result_arriving_after_a_stop_restores_the_previous_bytes(
+    agent: AgentService,
+    task: TaskView,
+    data_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The late-reply rule for a step that **overwrote** an existing file.
+
+    The other half, and the half the merged test had backwards. A run writes
+    ``rapor.json`` in step one and rewrites it in step two; the stop flag is
+    set by the second call. "Nothing is left behind" cannot mean "the file is
+    gone" here - the file is step one's output, which really did happen and
+    which the user has already been shown. What must be undone is only the
+    cancelled call, so the earlier bytes come back exactly.
+
+    Asserting the bytes rather than the file's existence is deliberate: a
+    rollback that left an empty file, or step two's content, would still pass
+    a test that only counted files.
+    """
+    first = '{"TEST_ONLY": 1}'
+    second = '{"TEST_ONLY": 2}'
+    run_id = agent.plan_run(
+        task.id,
+        steps=[
+            ("write_workspace_file", {"name": "rapor.json", "body": first}),
+            ("update_workspace_file", {"name": "rapor.json", "body": second}),
+        ],
+        expected_artifacts=["rapor.json"],
+        test_condition=TEST_ONLY_CONDITION,
+    ).id
+    _stop_after(agent, run_id, monkeypatch, only=ToolId.UPDATE_WORKSPACE_FILE)
+    view = agent.start_run(run_id)
+
+    assert view.phase is RunPhase.PAUSED
+    assert view.steps[0].phase is StepPhase.RAN
+    assert view.steps[1].phase is StepPhase.SKIPPED
+
+    files = agent.workspace_files(task.id)
+    assert [item.name for item in files] == ["rapor.json"]
+    assert read_text(task_workspace(data_dir, task.id), "rapor.json") == first
+    assert "geri yuklendi" in view.steps[1].detail
 
 
 def test_a_stopped_run_continues_only_because_a_person_asked(

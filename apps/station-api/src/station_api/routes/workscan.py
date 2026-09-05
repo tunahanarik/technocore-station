@@ -1,9 +1,10 @@
 """Work-scan endpoints: read the surface, list rooms, scan a chosen set, suggest.
 
-    GET  /api/workscan/status        the whole surface, read-only, contacts nobody
-    POST /api/workscan/rooms/refresh read the room overview, once, on request
-    POST /api/workscan/scan          read the rooms in the body, once each
-    POST /api/workscan/suggest       open one candidate as a local suggested task
+    GET  /api/workscan/status            the whole surface, read-only, contacts nobody
+    POST /api/workscan/rooms/refresh     read the room overview, once, on request
+    POST /api/workscan/discovery/refresh read the new-room log, once, on request
+    POST /api/workscan/scan              read the rooms in the body, once each
+    POST /api/workscan/suggest           open one candidate as a local suggested task
 
 Every state-changing route inherits the global session, CSRF, Host, Origin
 and Sec-Fetch-Site guards - they are middleware, so nothing in this file can
@@ -12,9 +13,15 @@ opt out.
 What is deliberately absent
 ---------------------------
 * **No scan-everything route.** ``scan`` takes the rooms in the body and the
-  body is bounded. There is no endpoint that walks the room universe, and the
-  overview read exists to give a person a list to choose from rather than to
-  feed a loop (ADR-0007 4).
+  body is bounded, and the bound did not move when the rooms became pickable
+  off a list instead of typed - a list to choose from is not a licence to scan
+  the list. There is no endpoint that walks the room universe, and neither the
+  overview nor the discovery log feeds a scan on its own (ADR-0007 4).
+* **No write, and no route that could become one.** The discovery log is
+  server-written; a client write there answers 403 and this build attempts
+  none. Opening a room is a write to ``/r/{room}`` and needs the write gate's
+  six preconditions, which is a different capability on a different surface -
+  nothing in this file addresses it.
 * **No polling parameter and no timer.** ``wait`` reaches no query this
   package builds, ``status`` makes no request, and nothing here schedules a
   follow-up. A client that wants newer data presses the button again.
@@ -39,37 +46,54 @@ from station_api.identity.service import IdentityService
 from station_api.schemas import (
     WorkScanAdapter,
     WorkScanAdapterFact,
+    WorkScanAnnouncedRoom,
     WorkScanCandidate,
     WorkScanCapability,
+    WorkScanDiscovery,
+    WorkScanDiscoveryRequest,
     WorkScanEffort,
+    WorkScanMeasuredField,
     WorkScanOpenState,
     WorkScanQuote,
     WorkScanRefreshRequest,
     WorkScanRefusal,
     WorkScanResult,
+    WorkScanRingDrop,
     WorkScanRoom,
     WorkScanRoomFailure,
     WorkScanRoomIndex,
+    WorkScanRoomNote,
     WorkScanRoomResult,
     WorkScanScanRequest,
     WorkScanStaleness,
     WorkScanStatusResponse,
     WorkScanSuggestRequest,
     WorkScanSuggestResponse,
+    WorkScanUntrusted,
 )
 from station_api.security.sessions import Session
 from station_api.technocore.service import TechnocoreService
-from station_api.workscan.authority import ROOM_NAME_CAVEAT, TOPIC_CAVEAT
 from station_api.workscan.candidates import (
     CandidateCapability,
     DerivationResult,
     WorkCandidate,
 )
+from station_api.workscan.discovery import DiscoveryLog
 from station_api.workscan.errors import CandidateError, ScanTargetError, WorkScanError
 from station_api.workscan.kibble import AdapterRecord
 from station_api.workscan.language import PROHIBITION_HONESTY_SENTENCE
-from station_api.workscan.service import ScanResult, WorkScanService, WorkScanView
-from station_api.workscan.snapshot import RoomIndexSnapshot, StalenessNote
+from station_api.workscan.service import (
+    RoomNote,
+    ScanResult,
+    WorkScanService,
+    WorkScanView,
+)
+from station_api.workscan.snapshot import (
+    RingDropNotice,
+    RoomIndexSnapshot,
+    StalenessNote,
+    UntrustedDeclaration,
+)
 from station_api.workscan.targets import NEVER_SENT_PARAMS
 
 router = APIRouter(prefix="/api/workscan")
@@ -197,17 +221,119 @@ def _staleness(value: StalenessNote) -> WorkScanStaleness:
     )
 
 
+def _ring_drop(value: RingDropNotice) -> WorkScanRingDrop:
+    return WorkScanRingDrop(
+        since=value.since,
+        expected_first=value.expected_first,
+        first_seq=value.first_seq,
+        detail=value.detail,
+    )
+
+
+def _untrusted(value: UntrustedDeclaration) -> WorkScanUntrusted:
+    """The reply's own claim about its caller-written fields, carried whole.
+
+    Both lists go on the wire and so do the two disagreements. Sending only
+    the union would hide which side widened it, and sending only our own list
+    would make the response silent about a reply that tried to narrow it.
+    """
+    return WorkScanUntrusted(
+        present=value.present,
+        fields=list(value.fields),
+        note=value.note,
+        build_fields=list(value.build_fields),
+        extra_fields=list(value.extra_fields),
+        missing_fields=list(value.missing_fields),
+        detail=value.detail,
+    )
+
+
 def _room_index(value: RoomIndexSnapshot) -> WorkScanRoomIndex:
+    """One listing, with the two halves of every entry kept apart.
+
+    ``name``/``topic`` and ``measured`` are separate fields rather than one
+    object with a caveat beside it, because the service's own warning is that
+    the first two are strings a stranger chose and everything else is its own
+    measurement. The caveats are read off the snapshot rather than imported
+    here: one copy of a sentence is one thing that can be wrong.
+    """
     return WorkScanRoomIndex(
-        rooms=[WorkScanRoom(name=room.name, topic=room.topic) for room in value.rooms],
+        rooms=[
+            WorkScanRoom(
+                name=room.name,
+                topic=room.topic,
+                measured=[
+                    WorkScanMeasuredField(key=field.key, value=field.value)
+                    for field in room.measured
+                ],
+                measured_truncated=room.measured_truncated,
+            )
+            for room in value.rooms
+        ],
         total=value.total,
         kept_count=value.kept_count,
         truncated=value.truncated,
         staleness=_staleness(value.staleness),
         sha256=value.sha256,
-        room_name_caveat=ROOM_NAME_CAVEAT,
-        topic_caveat=TOPIC_CAVEAT,
+        room_name_caveat=value.room_name_caveat,
+        topic_caveat=value.topic_caveat,
+        measured_caveat=value.measured_caveat,
+        unlisted_note=value.unlisted_note,
+        untrusted=_untrusted(value.untrusted),
     )
+
+
+def _discovery(value: DiscoveryLog) -> WorkScanDiscovery:
+    """One read of the discovery log.
+
+    ``selectable`` is computed on the record, not here: whether a line may
+    become a one-click scan target is a property of how the line parsed, and a
+    route that decided it a second time would be a second thing that can
+    disagree with the parser about a room name.
+    """
+    return WorkScanDiscovery(
+        room=value.room,
+        entries=[
+            WorkScanAnnouncedRoom(
+                seq=entry.seq,
+                ts=entry.ts,
+                name=entry.name,
+                line=entry.line,
+                unusable_reason=entry.unusable_reason,
+                selectable=entry.selectable,
+            )
+            for entry in value.entries
+        ],
+        since=value.since,
+        last_seq=value.last_seq,
+        first_seq=value.first_seq,
+        lines_read=value.lines_read,
+        selectable=list(value.selectable),
+        unusable_count=value.unusable_count,
+        ring_drop=(
+            _ring_drop(value.ring_drop) if value.ring_drop is not None else None
+        ),
+        staleness=_staleness(value.staleness),
+        sha256=value.sha256,
+        room_name_caveat=value.room_name_caveat,
+        unlisted_note=value.unlisted_note,
+        write_refusal=value.write_refusal,
+    )
+
+
+def _room_note(value: RoomNote) -> WorkScanRoomNote:
+    """A fact about a scanned room's class. Narrowed to the two kinds there are.
+
+    ``kind`` is a ``Literal`` on the wire, so a record that grew a third kind
+    fails validation here rather than reaching a client as a string nothing
+    knows how to render.
+    """
+    if value.kind not in ("unlisted", "ephemeral"):  # pragma: no cover - constant
+        raise RuntimeError(f"unknown room note kind: {value.kind}")
+    kind: Literal["unlisted", "ephemeral"] = (
+        "unlisted" if value.kind == "unlisted" else "ephemeral"
+    )
+    return WorkScanRoomNote(room=value.room, kind=kind, detail=value.detail)
 
 
 def _scan(value: ScanResult) -> WorkScanResult:
@@ -222,6 +348,7 @@ def _scan(value: ScanResult) -> WorkScanResult:
             )
             for item in value.failures
         ],
+        notes=[_room_note(item) for item in value.notes],
         candidate_count=len(value.candidates),
         refusal_count=len(value.refusals),
     )
@@ -295,6 +422,9 @@ def _to_response(view: WorkScanView) -> WorkScanStatusResponse:
         room_index=(
             _room_index(view.room_index) if view.room_index is not None else None
         ),
+        discovery=(
+            _discovery(view.discovery) if view.discovery is not None else None
+        ),
         last_scan=_scan(view.last_scan) if view.last_scan is not None else None,
         never_sent_params=sorted(NEVER_SENT_PARAMS),
         polling_statement=POLLING_STATEMENT,
@@ -335,6 +465,61 @@ def refresh_rooms(
     try:
         service.refresh_room_index(limit=body.limit)
     except WorkScanError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+            headers=_NO_STORE,
+        ) from exc
+    return _json(_to_response(service.describe(write_gate_open=_write_gate_open(request))))
+
+
+@router.post("/discovery/refresh", response_model=WorkScanStatusResponse)
+def refresh_discovery(
+    request: Request, session: CurrentSession, body: WorkScanDiscoveryRequest
+) -> Response:
+    """Read the discovery log once, because the user asked.
+
+    ``GET /r/events`` is the service's own append-ordered log of new public
+    rooms. It is read through the *room* lane with a compile-time room name,
+    so this route adds no address family and no client: the registry stays at
+    two targets and ``OUTBOUND_CLIENT_MODULES`` stays at five.
+
+    Blocking, and therefore ``def``, for the same reason ``rooms/refresh`` is.
+    ``since`` comes from the body - the previous read's ``last_seq`` - because
+    a cursor the service remembered would be the first half of a loop, and
+    there is no timer, no background task and no held connection anywhere
+    under this route.
+
+    **Nothing is written here.** The log is server-written and a client write
+    answers 403; this build has no code path that could attempt one, which is
+    why the refusal travels as a sentence on the payload rather than as a
+    promise in this docstring.
+    """
+    del session
+    service = _service(request)
+    markers = _markers(request)
+    if not markers:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Oda sinifi konvansiyonu resmi manifest'ten okunamadi; kesif "
+                "gunlugu de bir odadir ve dogrulanmamis bir konvansiyonla "
+                "adlandirilmaz. Once resmi kaynak denetimini calistirin."
+            ),
+            headers=_NO_STORE,
+        )
+    try:
+        service.refresh_discovery(markers=markers, since=body.since, limit=body.limit)
+    except ScanTargetError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+            headers=_NO_STORE,
+        ) from exc
+    except WorkScanError as exc:
+        # A refusal with the reason, never a partial log. An empty discovery
+        # log means "no new rooms were announced", and a log this build could
+        # not read must never be able to say that.
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=str(exc),
@@ -395,7 +580,7 @@ def suggest_candidate(
     del session
     service = _service(request)
     try:
-        view = service.suggest(body.candidate_id)
+        result = service.suggest(body.candidate_id)
     except (CandidateError, ScanTargetError) as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -409,12 +594,19 @@ def suggest_candidate(
             headers=_NO_STORE,
         ) from exc
 
+    view = result.task
     payload = WorkScanSuggestResponse(
         task_id=view.id,
         module_id=view.module_id,
         source_id=view.source_id,
         source_version_id=view.source_version_id,
         detail=view.state_detail,
+        # Carried rather than folded into ``detail``. ``detail`` is the task's
+        # own state sentence; whether a model can read this request is a
+        # different question with a different answer, and one string holding
+        # both would be a reader's problem to take apart.
+        request_file=result.request_file,
+        request_file_detail=result.request_file_detail,
     )
     return Response(
         content=payload.model_dump_json(),
