@@ -112,8 +112,8 @@ reddeder. Mutasyon tablosunda ikisi de **ayrı ayrı** öldürüyor.
 
 **Delik 1 — `0.0.0.0` taraması.** Eski hâli `apps/station-api/src` altındaki
 `.py` dosyalarıydı. `packaging/station.spec`'e ekilen bir `0.0.0.0` **hiçbir
-testi kırmıyordu**. Tarama artık dört ağaç ve on beş uzantı okuyor,
-`.github/workflows` dâhil; ekili ihlal `.spec`, `.ps1`, `.bat`, `.iss` ve
+testi kırmıyordu**. Tarama artık **beş** ağaç ve on beş uzantı okuyor
+(`len(test_bind.SCANNED_TREES) == 5`, `.github/workflows` beşincisi); ekili ihlal `.spec`, `.ps1`, `.bat`, `.iss` ve
 `.yml` için **ayrı ayrı** sürülüyor, ve taramanın `.py` dışında gerçekten
 dosya açtığı sayılıyor.
 
@@ -307,18 +307,40 @@ tablodaki mutasyonlar sentetik dizinler üzerinde koşuyordu, bu ise
 **gerçekten gönderilen** dosyanın baytı üzerinde koştu. Yirmi satırın hiçbiri
 o zaman mümkün değildi, çünkü gönderilecek bir dosya yoktu.
 
+**Bağımsız inceleme turu.** Dışarıdan bir düşman inceleme yirmi iki mutasyon
+daha yaptı ve **beşi sıfır kırmızı** verdi. Beşi de kapatıldı ve her biri
+"önce 0 kırmızı / sonra n kırmızı" olarak yeniden ölçüldü;
+[`../security-invariants.md`](../security-invariants.md) §9l'nin üçüncü
+mutasyon tablosu satır satır taşıyor. Bu turda **bir bulgu ölçülerek
+reddedildi**: incelemenin F6 için önerdiği düzeltmenin kendisi totolojikti
+(döngü, denetlediği listeyle birlikte küçülüyor) ve önerildiği gibi
+yazıldığında mutasyon **yine 0 kırmızı** verdi; guard bunun yerine ikiye
+bölündü ve kırmızıyı **depodan türetilen** yarı veriyor.
+
 ## 12. Ölçülmeyenler — adıyla
 
 Önceki sürümün altı maddesinden **üçü ölçüldü** (§13). Geriye kalanlar:
 
-1. **`packaging.yml` hiç koşturulmadı.** YAML yerel bir ayrıştırıcıyla
-   doğrulandı (§8'de değer değer); GitHub Actions yok, adımların içindeki
-   PowerShell **çalıştırılmadı**. İlk kez CI'da koşacak. Yerelde koşan şey
-   aynı kontrollerin elle yazılmış karşılığıdır, workflow'un kendisi değil.
-2. **Temiz Windows profili doğrulanmadı.** Artefakt uv/Node/Python `PATH`'te
-   **iken** çalıştırıldı. `PATH`'ten çıkarılarak çalıştırma workflow'un
-   adımıdır ve o adım koşmadı; yani "geliştirici zincirine gizlice bağımlı
-   değil" iddiası bu turda **ölçülmedi**.
+1. **`packaging.yml` bu makinede bir iş olarak koşturulmadı.** GitHub
+   Actions yok. Bağımsız inceleme turunda yapılabilen ölçüldü ve fazlası
+   değil: YAML ayrıştırıldı, iki `pwsh` bloğu PowerShell'in **kendi
+   ayrıştırıcısıyla** (`[Parser]::ParseInput`) hatasız çözüldü, `PATH`
+   stripleme bölümü gerçek bir kabukta **birebir çalıştırıldı**, ve
+   build'den sonra eklenen pytest adımının komutu yerelde **aynen** koşuldu
+   (bundle diskteyken 77 test yeşil; gönderilen SPA'nın bir baytı
+   çevrildiğinde **kırmızı**). Adımların **sırası** ve runner davranışı hâlâ
+   ölçülmedi.
+2. **Temiz Windows profili artık ölçülüyor — ve eski hâli yanlıştı.**
+   Artefakt yine uv/Node/Python `PATH`'te **iken** çalıştırıldı, yani bundle'ın
+   kendi kendine yeterliliği bu makinede **ölçülmedi**. Ölçülen şey
+   workflow'un striplemesidir: eski regex filtresi (`uv|node|nodejs|npm|
+   hostedtoolcache|Python`) gerçek bir Windows 11 kabuğunda `uv`'yi
+   (`\.local\bin` altında) ve `python`'ı (`WindowsApps` App Execution Alias)
+   **kaldırmıyordu** ve adımda bunu söyleyecek hiçbir iddia yoktu. Stripleme
+   çözünürlük sürücülü hâle getirildi (aracı çöz, çözdüğü dizini `PATH`'ten
+   at, tekrar çöz) ve arkasına `uv`/`python`/`node`'un artık **çözülmediğini**
+   söyleyen bir iddia kondu; ikisi birlikte bu makinede çalıştırıldı ve
+   `clean profile: ...` satırını bastı.
 3. **İmzalama doğrulanamaz.** Sertifika yok, secret yok. Artefakt imzasız.
 4. **Çift örnek yarışının gerçek etkisi** ölçülmedi (§6). Kilit ölçüldü,
    yarışın kendisi değil.
@@ -330,10 +352,11 @@ o zaman mümkün değildi, çünkü gönderilecek bir dosya yoktu.
    karşılaştırıldı, **birebir aynı**. Artefakt geçici bir `STATION_DATA_DIR`
    ile çalıştırıldı ve o dizin ölçümden sonra silindi.
 6. **Tarayıcı QA (Playwright)** bu turda koşturulmadı.
-7. **Yeniden üretilebilirlik ölçülmedi.** Bundle **bir kez** üretildi; ikinci
-   bir yapının aynı SHA-256'yı verip vermeyeceği denenmedi. PyInstaller
-   çıktısının bit-bit yeniden üretilebilir olması beklenmez ve öyle olduğu
-   **iddia edilmiyor**.
+7. **Yeniden üretilebilirlik ölçüldü ve olumsuz çıktı.** Artık "denenmedi"
+   değil: aynı kaynaktan arka arkaya alınan iki yapının exe boyutu aynı,
+   **SHA-256'sı farklı** çıktı. PyInstaller çıktısı bit-bit yeniden
+   üretilebilir **değildir** ve öyle olduğu iddia edilmiyor; yayımlanan özet
+   elinizdeki dosyayla karşılaştırılmak içindir.
 8. Gerçek DID/seed/private key/recovery/`.tcrec`/API anahtarı **okunmadı,
    istenmedi, yazılmadı**. Gerçek Technocore'a hiçbir istek gitmedi.
    `git commit`/`push`/PR/tag/release **yapılmadı**.
@@ -345,7 +368,12 @@ o zaman mümkün değildi, çünkü gönderilecek bir dosya yoktu.
 Windows 11 Pro 10.0.26200, CPython 3.12, PyInstaller 6.16.0, `onedir`.
 Özetler `station_api.digests.file_digest` ile (düz SHA-256, ADR-0010 §9).
 
-İlk üretim (kusur öncesi kod):
+Üç yapı üretildi. **Aşağıdaki ilk iki tablo tarihsel kayıttır ve artık
+gönderilen artefakta ait değildir**; `Get-FileHash` ile karşılaştırılacak
+değerler bu bölümün **sonundaki** tablodadır. Kayıt silinmiyor, çünkü hangi
+değişikliğin özeti neden değiştirdiği bu üçlünün kendisinde okunuyor.
+
+İlk üretim (kusur öncesi kod) — **geçersiz**:
 
 | Ölçüm | Değer |
 |---|---|
@@ -356,8 +384,9 @@ Windows 11 Pro 10.0.26200, CPython 3.12, PyInstaller 6.16.0, `onedir`.
 | exe SHA-256 | `5121b7194494d77e45fcac2a975dec1c51ad0a22f3d694c193fef54bfc33454e` |
 | Açılmış bundle | **152 dosya**, 38 dizin, 50 778 509 bayt (48,43 MiB) |
 
-Kapanış turunda yeniden üretilen artefakt (`launcher.py` değiştiği için
-özetler zorunlu olarak farklıdır — ve **ölçülen** özetler bunlardır):
+Birinci kapanış turunda yeniden üretilen artefakt (`launcher.py` değiştiği
+için özetler zorunlu olarak farklıydı) — **bu da geçersiz**, çünkü aşağıdaki
+sızıntı düzeltmesi artefaktı bir kez daha değiştirdi:
 
 | Ölçüm | Değer |
 |---|---|
@@ -366,6 +395,57 @@ Kapanış turunda yeniden üretilen artefakt (`launcher.py` değiştiği için
 | exe boyutu | 12 264 773 bayt |
 | exe SHA-256 | `52cb519111aaf4a77ea995716992dd8a65ee3f3478790d23518deec52ab232c5` |
 | Açılmış bundle | **152 dosya**, 38 dizin, 50 780 208 bayt (48,43 MiB) |
+
+Bağımsız incelemeden sonra üçüncü kez üretildi. Bu tur artefaktın **içeriğini**
+değiştirdi: `station.spec` migration ve vektör ağaçlarını dizin olarak
+kopyalıyordu, `__pycache__` dâhil. Bir `.pyc`'nin `co_filename`'i derlendiği
+mutlak yolu taşır, dolayısıyla **gönderilen ZIP'in 152 dosyasından 11'i
+üretildiği makinenin kullanıcı adını ve ev dizini yolunu içeriyordu**
+(`db/migrations/__pycache__/env`, `versions/__pycache__/0001…0009`,
+`technocore_conform/vectors/__pycache__/__init__`). exe ve PYZ temizdi;
+dağıtılan tek şey ZIP. `launcher.py` de değişti (kilit artık tüm başlatmayı
+sarıyor), bu yüzden özetler zaten farklı olacaktı.
+
+**Gönderilen artefakt aşağıdaki tablodur. Yayımlanan tek kaynak budur.** `docs/packaging.md` ve `PROJECT_STATUS.md`
+bu tabloyu tekrarlamaz, buraya referans verir — inceleme, üç yerde
+yayımlanan özetlerin artefaktla eşleşmediğini ölçtü ve eşleşmeyen bir özet
+kullanıcının ya vazgeçmesine ya da özeti umursamamayı öğrenmesine yol açar.
+
+<a id="olculen-artefakt"></a>
+
+| Ölçüm | Değer |
+|---|---|
+| Arşiv | `TechnocoreStation-0.1.0-windows-x64.zip` |
+| Arşiv boyutu | **26 103 236 bayt** (24,89 MiB) |
+| Arşiv SHA-256 | `cdd454e5082fd926dde737b347767b7a4294a92a66baac26d91adb68a9dc457b` |
+| `TechnocoreStation.exe` boyutu | **12 264 811 bayt** |
+| `TechnocoreStation.exe` SHA-256 | `13564d018191d109f53711f39f48dda940d1da2f4d9b330a25ac0fb7d6c8f0f4` |
+| Açılmış bundle | **141 dosya**, 35 dizin, **50 727 517 bayt** (48,38 MiB) |
+| ZIP içinde `__pycache__`/`.pyc` | **0** (önce 11) |
+| ZIP içinde kullanıcı adı / ev dizini yolu geçen dosya | **0** (önce 11) |
+
+Dosya sayısı 152'den 141'e, dizin sayısı 38'den 35'e düştü: kaybolanlar
+yalnız üç `__pycache__` dizini ve içlerindeki 11 `.pyc`. Kaynak içerik
+eksilmedi — 11 migration dosyası (`env.py`, `script.py.mako`, dokuz
+`versions/*.py`) ve iki vektör dosyası (`__init__.py`,
+`conformance-v1.json`) yerinde. Bu tarama artık bir test:
+`test_the_shipped_archive_names_no_developer_and_no_home_directory`, ve
+paketleme workflow'u onu build'den **sonra** koşuyor.
+
+**Yeniden üretilebilirlik yine ölçülmedi ve yine iddia edilmiyor.** Aynı
+kaynaktan arka arkaya alınan iki yapının exe özeti farklı çıktı (boyut aynı,
+özet farklı), yani PyInstaller çıktısı bit-bit tekrarlanabilir değildir.
+Yayımlanan özet, **elinizdeki dosyanın kendisiyle** karşılaştırılmak
+içindir.
+
+**Yeniden üretilen artefakt çalıştırıldı** (geçici `STATION_DATA_DIR`;
+kullanıcının veri dizinine dokunulmadı): efemer port 59631, `/api/health`
+**200**, `/api/app/status` oturumsuz **401**, `GET /` **200** ve gövdede
+"derlenmemis" dizesi **yok**, `%TEMP%`'te `_MEI*` **yok**, yazılan her dosya
+veri dizininin içinde (`station.sqlite3` + `-wal`/`-shm`, `station.lock`,
+`audit/v1/chain-head.json`, `audit/v1/chain-material.json`). Veritabanının
+oluşması, Alembic'in `env.py`'yi bundle'dan **`.pyc` olmadan** okuyabildiğini
+gösterir — bu turun asıl riski oydu.
 
 exe'nin `onedir`'de 12 MB olması beklenen davranıştır: `exclude_binaries=True`
 ikilileri `COLLECT`'e bırakır, saf Python modülleri ise PYZ olarak exe'ye
@@ -521,6 +601,143 @@ açıyor (`build_bundle.py`, `station.spec`); toplam 149 dosya. Sentetik bir
 ağaçta hem kopyaların atlandığı hem de atlanan kopyaların gerçekten
 okunabilir uzantılar taşıdığı ayrı ayrı sürüldü, ve `build`/`dist`/`out`
 altına ekilen üç ihlalin üçü de yakalandı. Değişmez **SI-327**.
+
+## 13b. CI dördüncü kapıyı ilk kez koştu — ve bir gerçeği ölçtü
+
+`packaging.yml` bu raporun ilk sürümünde **hiç çalışmamıştı**; PR #20'de
+**ilk kez koştu ve geçti** (`windows bundle`, 2 dk 2 sn). Dört işin dördü de
+yeşil. Runner'da ölçülenler:
+
+- Ön koşul denetimi üç satırı da `[OK]` verdi (spec, frontend build,
+  PyInstaller 6.16.0).
+- ZIP üretildi ve SHA-256'sı **iki ayrı adımda** yayımlandı; build
+  script'inin bastığı özet ile doğrulama adımının `Get-FileHash`'i **aynı**:
+  `0028ac02…23dbec`.
+- **İmzasızlık cümlesi artefaktın kendi çıktısında basılıyor**, yalnız
+  belgede değil: özetin bütünlüğü tanımladığı, **imzasız bir artefaktta onu
+  kimin ürettiğini kanıtlamadığı** (özet dosyayla aynı kanaldan geldiği
+  için), ve SmartScreen uyarısının **beklenen ve normal** olduğu.
+- Artefakt `PATH`'ten uv ve Node çıkarılmış hâlde çalıştırıldı ve
+  `STATION_DATA_DIR` altına veritabanını yazdı.
+
+**Kilidin bırakıldığı CI'da bilinçle DENETLENMİYOR** ve gerekçesi
+workflow'un içinde yazılı: `Stop-Process -Force` bir **öldürmedir**, kapanış
+değil — hiçbir `finally` çalışmaz. Adım bunun yerine kilidin **hayatta
+kaldığını** doğruluyor, yani bayat-kilit yönergesinin doğru olduğunu.
+Zarif kapanış bir konsol ister ve runner'ın `Start-Process` çocuğunda o yok;
+bırakma yolu bu yüzden **süreç içinde** ayrı bir testle sabitleniyor.
+
+### Ölçülen: derlemeler tekrarlanabilir değil ve bu iddia da edilmiyor
+
+CI runner'ın ürettiği ZIP **26 696 239 B / `0028ac02…23dbec`**; yereldeki
+derlemenin ölçüleri §13.1'dedir ve **oradaki değerler esastır** (bu bölümün
+ilk hâli yerel satırda kusur **öncesi** bir boyutu kusur **sonrası** bir
+hash'le eşleştiriyordu — bağımsız inceleme ölçtü ve düzeltildi; bu yüzden
+sayı burada tekrarlanmıyor).
+
+İki artefakt **aynı değil** ve olması da beklenmiyor: farklı CPython yama
+sürümü (3.12.13 / 3.12.11), farklı makine, farklı yollar. Bu, §12'nin "bit-birebir
+tekrarlanabilirlik iddia edilmiyor" satırının **ölçülmüş** karşılığıdır.
+Pratik sonucu şudur: **bir özet yalnız onu üreten derlemeyi tanımlar**, ve
+imza olmadığı için kullanıcının indirdiği ZIP'i doğrulamasının tek yolu onu
+aldığı kanalda yayımlanan özettir — ki bu, imzanın yerini tutmaz.
+
+### Yan gözlem: CI'da tarayıcı açılıyor
+
+İş sonunda runner beş yetim süreç sonlandırdı (`msedge`, `identity_helper`).
+Sebep ürünün kendi davranışı: `launcher` açılışta `webbrowser.open` çağırıyor
+ve runner'da bunu Edge karşılıyor. Bir kusur değil — headless bir ortamda
+beklenen sonuç — fakat CI'nın temizlemesi gereken süreç bırakıyor ve
+buraya kayda geçiyor.
+
+## 13c. Bağımsız inceleme sonucu
+
+Temiz bağlamlı bir reviewer subagent koşuldu: **22 mutasyon, beşi sıfır
+kırmızı.** On iki bulgunun **hepsi kapatıldı**. Bu **insan güvenlik
+incelemesi değildir**; ADR-0001 §5'in kalan riski yerinde duruyor.
+
+### P1-1: ADR'nin adını verdiği kaza hâlâ açıktı
+
+ADR-0010 §3 `dist`/`build`/`out`'u PyInstaller'ın varsayılan çıktı adları
+diye sayıp uyarmıştı. Düzeltme `build` ve `out`'u kaldırdı ve **`dist`'i
+bıraktı** — oysa `dist` tam da varsayılan distpath. Ölçüldü:
+`packaging/dist/helper.py` ekildi, `.gitignore` yuttu, **2184 test yeşil**.
+Kardeş tarama bunu düzelttiği için iki liste sessizce ayrışmıştı.
+Muafiyetler artık **tam yola** bağlı ve PyInstaller'ın üç varsayılan adı için
+parametrize bir prob var: 0 → **3 kırmızı**.
+
+### P1-2: `ctypes` muafiyeti yürütme yasağının tamamını deliyordu
+
+İki dosya yalnız `ctypes`'tan değil, `EXECUTION_IMPORTS`'un **tamamından**
+muaftı. İncelemeci `vault/dpapi.py`'ye — DPAPI zarfını açan modüle —
+`subprocess.Popen` koydu ve **ruff, mypy ve 2184 test yeşil geçti**.
+Muafiyet artık **sembole** bağlı: 0 → **1 kırmızı**.
+`EXECUTION_ATTRIBUTES`'a `Popen`, `check_output`, `check_call`, `getoutput`,
+`getstatusoutput`, `startfile`, `spawn*`, `exec*`, `posix_spawn` eklendi.
+**`run`/`call` bilerek eklenmedi ve bu bir ölçüm:** `uvicorn.Server.run`,
+`PyInstaller.__main__.run` ve `proof/bundle.py`'de sekiz meşru `run`
+bağlaması var — `compile`'ın gerekçesinin aynısı, kodda yazılı.
+
+### P2-3: kapattığımız kilit kusurunun ikinci yüzü
+
+`finally: lock.release()` yalnız sunucu koşusunu sarıyordu, dolayısıyla
+`acquire()` ile o `try` arasındaki her hata **bayat kilit** bırakıyordu —
+migration sırasında Ctrl+C dâhil. Yani `absorbing_shutdown_signals`'ın
+"yavaş bir migration hâlâ kesilebilir" övüncü, tam o senaryoda §13.3'te
+kapattığımız kusuru geri getiriyordu. Ve `PackagedLayoutError` — bu paketin
+**var oluş sebebi** olan hata — sonrasında kullanıcıya **yanlış sebep**
+söyleniyordu ("zaten çalışıyor"). Kilit artık tüm başlatmayı sarıyor
+(**SI-328**): düzeltme öncesi 4 kırmızı, sonrası 0.
+
+### P2-5: gönderilen ZIP makineyi adlandırıyordu
+
+`.pyc` dosyalarının `co_filename`'i mutlak kaynak yolunu taşıyordu:
+**11 dosyada** geliştiricinin Windows hesabı adı ve ev dizini. exe ve PYZ
+temizdi; sızıntı yalnız `__pycache__` kopyalarındaydı — ve dağıtılan tek şey
+o ZIP. Spec artık iki ağacı dosya dosya kopyalıyor, `__pycache__`/`.pyc`
+dışarıda (**SI-329**), ve artefaktı tarayan bir test eklendi: eski artefakta
+karşı **1 kırmızı, 11 dosyayı adıyla**.
+
+### İki ölçüm incelemeciyi düzeltti
+
+**İncelemecinin önerdiği F6 düzeltmesi totolojikti ve bu ölçüldü.**
+`for tree in SCANNED_TREES: assert ...` yazıldı, liste 4'ten 2'ye
+indirildi — **yine 0 kırmızı**, çünkü döngü listeyle birlikte küçülüyor.
+Guard ikiye bölündü: biri listeyi gezer, öbürü **depoyu** gezer
+(`tests/`+`vendor/` dışındaki her `.py` taramanın içinde olmalı, istisnalar
+gerekçeli). İkisi de mutasyonla sürüldü: 0 → 1 kırmızı.
+
+**F10'da iddiayı eklemek striplemenin çalışmadığını ortaya çıkardı.**
+Gerçek bir Windows 11 kabuğunda eski regex sonrası `uv` (`\.localin`) ve
+`python` (`WindowsApps` alias) **hâlâ çözülüyordu** — yani "temiz profil"
+iddiası yanlıştı ve ancak iddia edilince ölçülebilir oldu. Stripleme
+çözünürlük sürücülü hâle getirildi ve arkasına üç aracın çözülmediği iddiası
+kondu.
+
+### Yeniden derlenen artefakt
+
+| Ölçüm | Önce | Sonra |
+|---|---|---|
+| Açılmış bundle | 152 dosya / 50 780 246 B | **141 dosya / 50 727 517 B** |
+| `__pycache__` girdisi | 11 | **0** |
+| Ev dizini/kullanıcı adı geçen üye | 11 | **0** |
+
+Arşiv **26 103 236** B, SHA-256 `cdd454e5…dc457b`; exe **12 264 811** B,
+SHA-256 `13564d01…c8f0f4`. Kaynak içerik eksilmedi (11 migration + 2 vektör
+dosyası yerinde). Çalıştırıldı: port 59631, `/api/health` 200, korumalı rota
+401, `GET /` 200 ve "derlenmemiş" dizesi yok, `%TEMP%`'te `_MEI*` yok.
+
+**Ayrıca ölçüldü:** aynı kaynaktan iki yapı **farklı exe SHA-256** verdi.
+Yeniden üretilebilirlik yok ve iddia da edilmiyor — artık bu bir ölçüm,
+bir varsayım değil.
+
+### İncelemecinin ölçmedikleri (kendi beyanı)
+
+`packaging.yml` bir Actions işi olarak **koşulmadı** (YAML ayrıştırıldı,
+`pwsh` blokları PowerShell'in kendi parser'ıyla çözüldü, PATH-strip bölümü
+gerçek kabukta çalıştırıldı — ama adım **sırası** ve runner davranışı
+ölçülmedi). Yeniden üretilebilirlik, kusur öncesi artefaktın sayıları,
+tarayıcı QA, ve Paket I dışındaki paketler incelenmedi.
 
 ## 14. Kapılar
 

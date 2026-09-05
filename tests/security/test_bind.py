@@ -191,30 +191,88 @@ def test_no_wildcard_bind_in_source(repo_root: Path) -> None:
     assert _wildcard_offenders(_scanned_files(repo_root)) == []
 
 
-def test_the_wildcard_scan_opens_the_packaging_tree(repo_root: Path) -> None:
-    """Guards the guard, in the half that was actually missing.
+def test_the_wildcard_scan_opens_every_tree_it_claims_to_open(
+    repo_root: Path,
+) -> None:
+    """Guards the guard, driven off the list rather than off a hand count.
 
     A scan that grew a suffix list but never met a file carrying one of those
     suffixes is the ADR-0009 5 failure shape: an inventory of four where
-    there were five, and the fifth stayed silent. So this counts the files
-    the scan opened, separately for the extensions ADR-0010 3 added, and
-    fails if the packaging tree contributed only ``.py``.
+    there were five, and the fifth stayed silent. This test used to be that
+    shape itself - it pinned the packaging tree and the workflow directory by
+    hand, so the Package I review could delete two entries from
+    :data:`SCANNED_TREES` and watch nothing go red. It now iterates the
+    constant, so the assertion cannot fall behind the list it is about, and
+    it still counts the non-``.py`` extensions separately because those are
+    what ADR-0010 3 added.
     """
     opened = _scanned_files(repo_root)
     assert len(opened) > 50, "the scan found almost nothing, so it is not scanning"
 
+    for tree, suffixes in SCANNED_TREES:
+        base = repo_root / tree
+        assert base.is_dir(), f"the wildcard scan names a tree that is gone: {tree}"
+        from_tree = [path for path in opened if base in path.parents]
+        assert from_tree, (
+            f"{tree} contributed no file to the wildcard scan, so SI-02 is not "
+            "actually enforced there"
+        )
+        assert {path.suffix for path in from_tree} <= suffixes
+
     packaging_root = repo_root / "packaging"
     from_packaging = [path for path in opened if packaging_root in path.parents]
-    assert from_packaging, "the packaging tree contributed no file to the scan"
-
     non_python = {path.suffix for path in from_packaging if path.suffix != ".py"}
     assert non_python, (
         "every file the packaging tree contributed is a .py, so the extensions "
         "ADR-0010 3 added have never been opened by this scan"
     )
 
-    workflows = [path for path in opened if path.suffix in {".yml", ".yaml"}]
-    assert workflows, "no workflow file was opened; the CI lane is unscanned"
+
+def test_the_wildcard_scan_covers_everything_the_execution_scan_covers(
+    repo_root: Path,
+) -> None:
+    """The anchor: an expectation that does **not** come from this file.
+
+    The loop above cannot notice a tree deleted from :data:`SCANNED_TREES` -
+    measured: dropping two entries left it green, because the loop shrank
+    with the list. So the expected set is imported instead.
+
+    ``test_packaging_boundary._python_sources`` is anchored in turn by a walk
+    of the whole repository (``test_no_python_file_in_this_repository_escapes
+    _the_execution_scan``), so nothing in this chain is a list vouching for
+    itself. Both scans read the same four Python trees by design: one asks
+    whether a file starts a program, the other whether it binds a wildcard
+    address, and a file that is worth one question is worth the other.
+
+    The fifth tree, ``.github/workflows``, has no counterpart over there, so
+    it is anchored the same way - against what is on disk.
+    """
+    from tests.security.test_packaging_boundary import (
+        _python_sources as execution_sources,
+    )
+
+    opened = set(_scanned_files(repo_root))
+    expected = execution_sources(repo_root)
+    assert expected, "the execution scan found nothing, so this anchor proves nothing"
+
+    missed = sorted(
+        str(path.relative_to(repo_root)) for path in expected if path not in opened
+    )
+    assert missed == [], (
+        "the execution ban reads these files and the wildcard scan does not, "
+        "so a 0.0.0.0 in them is invisible: " + ", ".join(missed)
+    )
+
+    workflow_dir = repo_root / ".github" / "workflows"
+    assert workflow_dir.is_dir()
+    on_disk = [
+        path for path in workflow_dir.iterdir() if path.suffix in {".yml", ".yaml"}
+    ]
+    assert on_disk, "there are no workflows, so the CI lane cannot be anchored"
+    assert [path for path in on_disk if path not in opened] == [], (
+        "a workflow file exists and the wildcard scan does not open it; "
+        "ADR-0010 10 put an artefact run in CI precisely there"
+    )
 
 
 @pytest.mark.parametrize(
@@ -338,12 +396,15 @@ def test_the_exempt_directory_is_the_one_the_build_script_writes_to(
     Same reasoning, and deliberately the same assertion, as
     ``test_tracked_sources.py::test_the_only_exempt_packaging_directory_is_where_the_build_script_writes``:
     skipping ``packaging/artifacts`` is safe only for as long as that is
-    where the build script puts its output. The two scans are held to one
-    definition rather than two that can drift apart.
+    where the build script puts its output. The three scans are held to one
+    definition rather than three that can drift apart - and drift is not
+    hypothetical: the Package I review found this scan and the execution scan
+    disagreeing about ``dist``, one having dropped it and the other not.
     """
+    from tests.security.test_packaging_boundary import ARTIFACT_DIR as EXECUTION_ARTIFACT_DIR
     from tests.security.test_tracked_sources import ARTIFACT_DIR as TRACKED_ARTIFACT_DIR
 
-    assert ARTIFACT_DIR == TRACKED_ARTIFACT_DIR
+    assert ARTIFACT_DIR == TRACKED_ARTIFACT_DIR == EXECUTION_ARTIFACT_DIR
     assert ARTIFACT_DIR.as_posix() == "packaging/artifacts"
 
     source = (repo_root / "packaging" / "build_bundle.py").read_text(encoding="utf-8")

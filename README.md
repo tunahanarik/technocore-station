@@ -77,13 +77,28 @@ Son kullanıcı için hedeflenen biçim bir **ZIP**'tir:
 istemez, yalnız loopback dinler. Ayrıntı, kaldırma talimatı ve SHA-256
 doğrulaması: [`docs/packaging.md`](docs/packaging.md).
 
-**Bugün yayımlanmış bir artefakt yoktur.** Paketleyici PyInstaller'dır ve
-PyInstaller bu deponun bağımlılığı değildir; build betiği bunu kendisi
-raporlar:
+**Bugün yayımlanmış bir artefakt yoktur.** Paketleyici **PyInstaller**'dır ve
+artık bu deponun **kilitli bir geliştirme bağımlılığıdır**
+(`apps/station-api/pyproject.toml` `dev` grubunda `pyinstaller==6.16.0`,
+`apps/station-api/uv.lock` içinde kilitli — lisans ve gerekçe aşağıdaki
+bağımlılık tablosundadır). Çalışma zamanı bağımlılık yüzeyine girmez:
+yalnız build zamanı çalışır.
+
+Yani `uv sync --project apps/station-api` yapmış bir makinede ön koşulların
+üçü de sağlanmıştır. Build betiği bunu kendisi raporlar:
 
 ```bash
 uv run --project apps/station-api python packaging/build_bundle.py --check
 ```
+
+```
+[OK  ] spec: ...\packaging\station.spec
+[OK  ] frontend-build: ...\apps\station-web\dist
+[OK  ] pyinstaller: PyInstaller 6.16.0
+```
+
+Arayüz derlenmemişse ikinci satır `[EKSIK]` olur ve betik **2** ile çıkar;
+hiçbir şey üretmez.
 
 Kaldırma **yalnız program dizinini** siler. Veri dizini
 (`%LOCALAPPDATA%\TechnocoreStation\`) **elle bile olsa dikkatle** silinir:

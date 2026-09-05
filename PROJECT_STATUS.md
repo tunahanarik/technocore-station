@@ -1741,15 +1741,10 @@ deponun bağımlılığı olmamasıydı. **O karar alındı ve uygulandı.**
   haritası eklendi.
 
 **Ölçülen artefakt** (Windows 11 Pro 10.0.26200, CPython 3.12, `onedir`):
-
-| Ölçüm | Değer |
-|---|---|
-| Arşiv | `TechnocoreStation-0.1.0-windows-x64.zip` |
-| Arşiv boyutu | 26 126 723 bayt (24,92 MiB) |
-| Arşiv SHA-256 | `7deebffda8bdf0a6f7cc82b785c461703444770237b5e16d4d5583ec6508a5f0` |
-| exe boyutu | 12 263 074 bayt |
-| exe SHA-256 | `5121b7194494d77e45fcac2a975dec1c51ad0a22f3d694c193fef54bfc33454e` |
-| Açılmış bundle | **152 dosya**, 38 dizin, 50 778 509 bayt (48,43 MiB) |
+boyutlar ve SHA-256'lar **burada tekrarlanmaz**, tek kaynak
+[`docs/verification/paket-i.md` §13.1](docs/verification/paket-i.md#131-üretim-ve-ölçüm).
+Bu dosya bir kopya taşıyordu ve artefakt yeniden üretildiğinde eskidi;
+bağımsız inceleme üç ayrı belgede aynı eskimiş özeti ölçtü.
 
 **Artefakt çalıştırıldı** (geçici `STATION_DATA_DIR` ile; kullanıcının veri
 dizinine **dokunulmadı**, dört dosyanın adı/boyutu/mtime'ı önce–sonra aynı):
@@ -1794,6 +1789,59 @@ ve [`docs/packaging.md`](docs/packaging.md) §5'te duruyor. Yeni değişmezler:
 kodla **ayrı bir `.exe` üretilip** aynı düzenekle çalıştırıldı ve eski
 çıkış kodları (`1` ve `3`) yeniden gözlendi — yani ölçüm düzeneğinin kusuru
 görebildiği kanıtlandı.
+
+### Bağımsız inceleme turu — on iki bulgu kapatıldı (5 Eylül 2026, üçüncü geçiş)
+
+Dışarıdan bir düşman inceleme **yirmi iki mutasyon** yaptı; **beşi sıfır
+kırmızı** verdi. On iki bulgunun tamamı kapatıldı, her biri mutasyonla veya
+kırmızı→yeşil geçişiyle sürüldü. Tam tablo:
+[`docs/security-invariants.md`](docs/security-invariants.md) §9l üçüncü
+mutasyon kaydı. Yeni değişmezler: **SI-328**, **SI-329**.
+
+**Sıfır kırmızı veren beş mutasyon ve kapanışları**
+
+1. **`dist` hâlâ ada göre muaftı** — PyInstaller'ın **varsayılan
+   distpath**'i. `packaging/dist/helper.py` ekildi, `.gitignore` yuttu, 2184
+   test yeşil kaldı. `dist` iki listeden de çıkarıldı; muafiyetler artık tam
+   yol. Ölçüm: **0 → 3 kırmızı**.
+2. **`ctypes` allow-list'i her şeyi muaf tutuyordu.** `vault/dpapi.py`'ye
+   `import subprocess` + `subprocess.Popen` ekildi; ruff, mypy ve 2184 test
+   yeşildi. Muafiyet **sembole** bağlandı; `EXECUTION_ATTRIBUTES`'a `Popen`
+   ve on dört süreç başlatan giriş noktası eklendi (`run`/`call`
+   eklenmedi — ürün onları meşru olarak çağırıyor, gerekçe kodda ölçümle
+   yazılı). Ölçüm: **0 → 1 kırmızı**.
+3. **İki tarama ağaçlarını sessizce kaybediyordu.** İncelemenin önerdiği
+   düzeltme **totolojikti** ve ölçülerek reddedildi: döngü, denetlediği
+   listeyle birlikte küçülüyor. Guard ikiye bölündü — listeyi gezen yarı ve
+   **depoyu** gezen yarı. Ölçüm: her iki listede **0 → 1 kırmızı**.
+4. **Başlatma sırasındaki her hata bayat kilit bırakıyordu.** `finally`
+   yalnız `Server.run`'ı sarıyordu; migration'daki Ctrl+C, soket hatası ve
+   `PackagedLayoutError` kilidi geride bırakıyordu — sonuncusu, bu paketin
+   var oluş sebebi olan hatanın ardından kullanıcıya **yanlış** sebep
+   söylüyordu. `finally` tüm gövdeyi sarıyor; elle `release()` kaldırıldı.
+   Ölçüm: yeni testler düzeltme öncesi **4 kırmızı**, sonrası **0**.
+5. **Gönderilen ZIP geliştiricinin kullanıcı adını ve ev dizini yolunu
+   taşıyordu.** `station.spec` iki Python ağacını `__pycache__` dâhil
+   kopyalıyordu; `.pyc`'lerin `co_filename`'i mutlak yol taşır. Ölçüldü: 152
+   dosyanın **11'i** sızdırıyordu (exe ve PYZ temizdi). Spec dosya dosya
+   kopyalıyor; **artefaktı tarayan bir test eklendi** — depoda böyle bir
+   tarama yoktu. Yeniden üretilen artefakt: **141 dosya, 0 sızıntı, 0
+   `.pyc`**.
+
+**Diğer yedi bulgu.** Bayt-birebir SPA denetimi CI'da hiç koşmuyordu
+(`packaging.yml`'e build **sonrası** pytest adımı eklendi ve komut yerelde
+ekili bir baytla sürüldü); yayımlanan SHA-256'lar artefaktla eşleşmiyordu
+(üç kopya kaldırıldı, **tek kaynak**
+[`docs/verification/paket-i.md` §13.1](docs/verification/paket-i.md#131-üretim-ve-ölçüm));
+`README.md` PyInstaller'ı hâlâ "bağımlılık değil" diyordu; doğrulama belgesi
+"dört ağaç" diyordu (beş); `packaging.yml`'in `PATH` stripleme adımı ne
+strip ettiğini doğrulamıyordu — **ve doğrulama eklenince striplemenin
+çalışmadığı ortaya çıktı**, bu yüzden stripleme çözünürlük sürücülü hâle
+getirildi; `Get-NetTCPConnection` belirsizliği açık bir `throw` ile kaldırıldı
+(cmdlet'in boş sonuçta `CimJobException` fırlattığı **ölçüldü**).
+
+**Kapılar:** 2201 pytest (taban 2184, +17 yeni test), 315 Vitest, ruff ×2,
+mypy 133 dosya, eslint, vite build — hepsi yeşil.
 
 ### Tamamlanan görevler
 

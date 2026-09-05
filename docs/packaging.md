@@ -58,23 +58,20 @@ bağımlılık tablosundadır; gönderilen bundle'ın lisans haritası
 ### Ölçülen artefakt
 
 Sürüm `0.1.0`, `windows-latest` değil bir **geliştirme makinesinde**
-(Windows 11 Pro 10.0.26200, CPython 3.12, PyInstaller 6.16.0) üretildi:
+(Windows 11 Pro 10.0.26200, CPython 3.12, PyInstaller 6.16.0) üretildi.
 
-| Ölçüm | Değer |
-|---|---|
-| Arşiv | `TechnocoreStation-0.1.0-windows-x64.zip` |
-| Arşiv boyutu | **26 126 723 bayt** (24,92 MiB) |
-| Arşiv SHA-256 | `7deebffda8bdf0a6f7cc82b785c461703444770237b5e16d4d5583ec6508a5f0` |
-| `TechnocoreStation.exe` boyutu | **12 263 074 bayt** |
-| `TechnocoreStation.exe` SHA-256 | `5121b7194494d77e45fcac2a975dec1c51ad0a22f3d694c193fef54bfc33454e` |
-| Açılmış bundle | **152 dosya**, 38 dizin, **50 778 509 bayt** (48,43 MiB) |
+**Boyutlar ve SHA-256'lar burada tekrarlanmaz.** Tek kaynak
+[`verification/paket-i.md` §13.1](verification/paket-i.md#131-üretim-ve-ölçüm)
+tablosudur. Sebebi ölçüldü: bu belge, §9 ve `PROJECT_STATUS.md` üç ayrı
+kopya taşıyordu ve üçü de artefakt yeniden üretildikten sonra **eskimişti**.
+Eşleşmeyen bir yayın özeti kullanıcıya iki seçenek bırakır — vazgeçmek ya da
+özeti umursamamayı öğrenmek — ve ikincisi ADR-0010 §9'un hedefinin tam
+tersidir.
 
-Bu değerler **bu makinede üretilen bu yapıya** aittir. **Yeniden
-üretilebilirlik ölçülmedi**: bundle bir kez üretildi, ikinci bir yapının aynı
-özeti verip vermeyeceği denenmedi. PyInstaller bit-bit yeniden
-üretilebilirlik **garanti etmez**, dolayısıyla başka bir makinede üretilen
-bir yapının aynı özeti vermesi beklenmemelidir ve burada iddia edilmiyor.
-Özet, elinizdeki dosyanın kendisiyle karşılaştırılmak içindir.
+Değerler **o makinede üretilen o yapıya** aittir. **Yeniden üretilebilirlik
+ölçülmedi ve iddia edilmiyor**: aynı kaynaktan arka arkaya alınan iki yapının
+exe özeti farklı çıktı. PyInstaller bit-bit yeniden üretilebilirlik garanti
+etmez. Özet, elinizdeki dosyanın kendisiyle karşılaştırılmak içindir.
 
 ## 2. Biçim: PyInstaller `onedir`, ZIP olarak (ADR-0010 §2)
 
@@ -279,11 +276,16 @@ yayın özeti değildir.
 Get-FileHash -Algorithm SHA256 .\TechnocoreStation-0.1.0-windows-x64.zip
 ```
 
-Bu depoda üretilen yapının ölçülen değerleri (§1'deki tabloyla aynı):
+Karşılaştıracağınız değer **tek bir yerde** yayımlanır:
+[`verification/paket-i.md` §13.1](verification/paket-i.md#131-üretim-ve-ölçüm).
+Buraya kopyalanmaz. Bu belge o değerleri bir kez kopyalamıştı ve artefakt
+yeniden üretildiğinde sessizce eskidiler; imzasız bir artefakt için bu tek
+doğrulama olduğundan, eskimiş bir özet doğrulamanın kendisini itibarsızlaştırır.
+
+Artefaktı doğrudan üretiyorsanız değeri build betiği zaten basar:
 
 ```
-7deebffda8bdf0a6f7cc82b785c461703444770237b5e16d4d5583ec6508a5f0  TechnocoreStation-0.1.0-windows-x64.zip
-5121b7194494d77e45fcac2a975dec1c51ad0a22f3d694c193fef54bfc33454e  TechnocoreStation.exe
+SHA-256: ...
 ```
 
 > Bu özet **yalnızca dosya bütünlüğünü** tanımlar: içeriğin doğru veya

@@ -10,12 +10,14 @@ is no installer, no registry write, no service, no scheduled task and no
 administrator prompt anywhere in this file or in what it produces.
 
 **This script reports its own preconditions and refuses rather than
-approximating.** PyInstaller is not a dependency of this repository: it is
-not in ``apps/station-api/pyproject.toml`` and not in ``uv.lock``, so on a
-machine that has not been given it this script exits with code 2 and says
-which precondition failed. It does not fetch it, and it never prints
-"built" for something it did not build - which is the failure mode this
-whole package exists to remove.
+approximating.** PyInstaller is a locked *development* dependency of this
+repository - the ``dev`` group of ``apps/station-api/pyproject.toml`` and
+``apps/station-api/uv.lock`` pin ``pyinstaller==6.16.0`` - so an environment
+synced from the lockfile satisfies that precondition and one that was not
+does not. Either way this script only ever *reports*: it never fetches
+anything, and it never prints "built" for something it did not build, which
+is the failure mode this whole package exists to remove. A missing
+precondition is exit code 2 and a sentence naming which one.
 
 Two things this file deliberately does **not** contain:
 
@@ -105,11 +107,12 @@ def _pyinstaller_precondition() -> Precondition:
             name="pyinstaller",
             satisfied=False,
             detail=(
-                "PyInstaller bu ortamda yok. Bu depoda bagimlilik degildir "
-                "(apps/station-api/pyproject.toml ve uv.lock icinde yer "
-                "almaz); eklemek bir bagimlilik karari ve kilit dosyasi "
-                "guncellemesi gerektirir. Bu betik onu kendiliginden "
-                "kurmaz."
+                "PyInstaller bu ortamda yok. Depoda kilitli bir gelistirme "
+                "bagimliligidir (apps/station-api/pyproject.toml 'dev' grubu "
+                "ve apps/station-api/uv.lock), yani ortam kilit dosyasindan "
+                "kurulmamis demektir. Calistirin: "
+                "uv sync --locked --project apps/station-api. Bu betik hicbir "
+                "sey indirmez ve kendiliginden kurmaz."
             ),
         )
     return Precondition(

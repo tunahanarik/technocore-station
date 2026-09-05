@@ -104,9 +104,15 @@ jobs:
         run: npm ci --prefix apps/station-web
 
       - name: Build the production frontend bundle
-        # The bundle ships this directory verbatim, and
-        # tests/security/test_frontend_bundle.py asserts the copy is
-        # byte-for-byte identical to it (ADR-0010 4).
+        # The bundle ships this directory verbatim. The assertion that the
+        # shipped copy is byte-for-byte identical to it (ADR-0010 4) lives in
+        # tests/security/test_frontend_bundle.py, and that test can only make
+        # the comparison where a bundle exists - which is why this workflow
+        # runs it, after the build, below. It used to say the assertion
+        # happened without saying where: quality.yml runs pytest but builds no
+        # bundle, so the byte-identity check returned early there, and this
+        # job built the bundle and ran pytest zero times. The claim was true
+        # only on a developer machine that had just built both.
         run: npm --prefix apps/station-web run build
 
       - name: Confirm the packager came from the lockfile
@@ -126,16 +132,63 @@ jobs:
           Write-Host "SHA-256 $hash  $($zip.Name)"
           Write-Host "Bu ozet yalnizca dosya butunlugunu tanimlar. Artefakt imzasizdir."
 
+      - name: Audit the artefact that was just built
+        # The two suites whose assertions are about a produced bundle rather
+        # than about the source that produces it: the SPA is byte-for-byte
+        # the audited dist, and the archive carries no compiled bytecode and
+        # no path from the machine that built it. Both return early with no
+        # bundle on disk, so this is the only place they are ever exercised
+        # in their loaded state.
+        run: >
+          uv run --directory apps/station-api pytest -q -p no:warnings
+          ../../tests/security/test_frontend_bundle.py
+          ../../tests/security/test_packaging_boundary.py
+
       - name: Run the artefact with uv and Node removed from PATH
         shell: pwsh
         run: |
           # A clean-machine profile, approximated the only way a runner can:
           # everything the developer toolchain put on PATH is taken back off,
           # so a bundle that quietly depends on uv, python or node fails here.
-          $kept = ($env:PATH -split ';') | Where-Object {
-            $_ -and ($_ -notmatch 'uv|node|nodejs|npm|hostedtoolcache|Python')
+          #
+          # Driven by resolution, not by directory names. The previous version
+          # filtered PATH with the regex 'uv|node|nodejs|npm|hostedtoolcache|
+          # Python' and then asserted nothing, and the assertion is what
+          # showed the filter does not work: measured on a Windows 11 machine
+          # with the same toolchain, `uv` survived it (installed under
+          # `\.local\bin`, which the pattern does not match) and so did the
+          # `python` App Execution Alias under `WindowsApps`. A regex written
+          # against one image is a guess about the next one; asking the shell
+          # where a tool actually resolves is not.
+          #
+          # So: resolve each tool, drop the directory it resolved from, and
+          # resolve again until it is gone. Trailing backslashes are trimmed
+          # on both sides because PATH here really does carry `C:\Python313\`
+          # and `C:\Python313` as separate entries - comparing them literally
+          # removes one and leaves the other, which is how a strip that looks
+          # like it ran does nothing.
+          foreach ($tool in 'uv', 'uvx', 'python', 'python3', 'node', 'npm') {
+            for ($attempt = 0; $attempt -lt 20; $attempt++) {
+              $resolved = Get-Command $tool -CommandType Application -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+              if (-not $resolved) { break }
+              $dir = (Split-Path -Parent $resolved.Source).TrimEnd('\')
+              $env:PATH = ((($env:PATH -split ';') |
+                Where-Object { $_ -and $_.TrimEnd('\') -ne $dir }) -join ';')
+            }
           }
-          $env:PATH = ($kept -join ';')
+
+          # And then the claim itself, asserted rather than described. Without
+          # this the "clean profile" sentence in the header is unfalsifiable:
+          # a bundle quietly using the runner's python would pass, and the
+          # only thing the step would prove is that it ran.
+          foreach ($tool in 'uv', 'python', 'node') {
+            $resolved = Get-Command $tool -CommandType Application -ErrorAction SilentlyContinue
+            if ($resolved) {
+              throw "PATH stripping missed $tool ($($resolved.Source)); this job is not running on a clean profile, so it cannot say the bundle is self-contained"
+            }
+          }
+          Write-Host "clean profile: uv, python and node no longer resolve on PATH"
 
           $dataDir = Join-Path $env:LOCALAPPDATA 'TechnocoreStationCI'
           $env:STATION_DATA_DIR = $dataDir
@@ -162,7 +215,24 @@ jobs:
             if (-not $port) { throw "the application never reported a listening port" }
             if ($port -le 1024) { throw "the port is not ephemeral: $port" }
 
-            $listening = Get-NetTCPConnection -State Listen -OwningProcess $proc.Id
+            # Measured rather than assumed, because the previous spelling had
+            # two readings and no way to tell them apart without running
+            # Actions. It is the first: with no matching row
+            # Get-NetTCPConnection raises a CimJobException whose text is
+            # "No matching MSFT_NetTCPConnection objects found ... Verify
+            # query parameters and retry" - and under pwsh's $ErrorAction-
+            # Preference = 'stop' that ends the job with a message about a
+            # CIM query rather than about a listening socket. Silenced and
+            # checked explicitly instead: an empty result is a real failure
+            # and now says so, and the array subexpression keeps a single row
+            # from being scalar. SI-01 is not left to a cmdlet's error
+            # preference either way.
+            $listening = @(
+              Get-NetTCPConnection -State Listen -OwningProcess $proc.Id -ErrorAction SilentlyContinue
+            )
+            if ($listening.Count -eq 0) {
+              throw "the process reported port $port but owns no listening socket, so the loopback assertion below would have checked nothing"
+            }
             foreach ($row in $listening) {
               if ($row.LocalAddress -ne '127.0.0.1' -and $row.LocalAddress -ne '::1') {
                 throw "listening on a non-loopback address: $($row.LocalAddress)"

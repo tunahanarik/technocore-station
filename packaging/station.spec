@@ -59,6 +59,37 @@ VECTORS_SOURCE = os.path.join(
 )
 VECTORS_TARGET = os.path.join("technocore_conform", "vectors")
 
+
+def tree_datas(source, target):
+    """Every file under `source`, as PyInstaller (file, target-dir) pairs.
+
+    Handing PyInstaller a *directory* copies whatever is in it, and what was
+    in these two was `__pycache__`. A `.pyc` stores the absolute path of the
+    source it was compiled from in `co_filename`, so the shipped ZIP carried
+    the building developer's user name and home directory in eleven files -
+    ten migration modules and the vectors package marker. The exe and the PYZ
+    were clean; the ZIP is the only thing anybody receives.
+
+    Stale bytecode is the second reason. A `.pyc` whose mtime matches can be
+    used ahead of the `.py` beside it, and the `.py` beside it is what
+    Alembic is meant to read.
+
+    So the tree is enumerated file by file and the caches are left behind.
+    `tests/security/test_packaging_boundary.py` scans the produced artefact
+    for both.
+    """
+    collected = []
+    for base, directories, files in os.walk(source):
+        directories[:] = [name for name in directories if name != "__pycache__"]
+        relative = os.path.relpath(base, source)
+        destination = target if relative == os.curdir else os.path.join(target, relative)
+        for name in sorted(files):
+            if name.endswith((".pyc", ".pyo")):
+                continue
+            collected.append((os.path.join(base, name), destination))
+    return sorted(collected)
+
+
 APP_NAME = "TechnocoreStation"
 
 analysis = Analysis(  # noqa: F821 - injected by PyInstaller
@@ -69,9 +100,11 @@ analysis = Analysis(  # noqa: F821 - injected by PyInstaller
     ],
     binaries=[],
     datas=[
+        # The SPA is a build output and has no caches in it, so it is copied
+        # as a directory. The two Python trees are not: see tree_datas.
         (WEB_DIST_SOURCE, WEB_DIST_TARGET),
-        (MIGRATIONS_SOURCE, MIGRATIONS_TARGET),
-        (VECTORS_SOURCE, VECTORS_TARGET),
+        *tree_datas(MIGRATIONS_SOURCE, MIGRATIONS_TARGET),
+        *tree_datas(VECTORS_SOURCE, VECTORS_TARGET),
     ],
     # Imported by string somewhere in the dependency graph and therefore
     # invisible to the static analysis: alembic loads env.py, and uvicorn

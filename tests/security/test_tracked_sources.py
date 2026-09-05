@@ -69,25 +69,43 @@ SOURCE_SUFFIXES = frozenset(
 #: Anything under a dot-directory counts too: no source in this repository
 #: lives in one, and Playwright drops trace artefacts into ``e2e/.artifacts``.
 #:
-#: Note what is **not** here: ``build`` and ``out``. The repository's
-#: .gitignore carries both as unanchored rules, so ``packaging/build/
-#: helper.py`` would be invisible to git - and adding ``build`` here would
-#: make it invisible to this scan as well, which is precisely the pair of
-#: blind spots that turned ``credentials.py`` into a CI-only
-#: ``ModuleNotFoundError`` in Package G. The Windows bundle is written to
-#: ``packaging/artifacts`` instead, under its own anchored ignore rule, so
-#: this list did not have to grow (ADR-0010 3).
-GENERATED_NAMES = frozenset({"__pycache__", "node_modules", "dist"})
+#: Note what is **not** here: ``build``, ``out`` and - since the Package I
+#: review - ``dist``. The repository's .gitignore carries all three as
+#: unanchored rules, so ``packaging/dist/helper.py`` is invisible to git, and
+#: keeping the name here made it invisible to this scan as well: that pair of
+#: blind spots is precisely what turned ``credentials.py`` into a CI-only
+#: ``ModuleNotFoundError`` in Package G. ``dist`` was the worse of the three
+#: to leave behind, because it is PyInstaller's **default distpath** - the
+#: one name an accepted default would actually create. Measured: with
+#: ``dist`` on this list a planted ``packaging/dist/helper.py`` broke no
+#: test; without it, two go red.
+#:
+#: The Windows bundle is written to ``packaging/artifacts`` instead, under
+#: its own anchored ignore rule and its own full-path exemption below, so
+#: nothing had to be excused by name (ADR-0010 3).
+GENERATED_NAMES = frozenset({"__pycache__", "node_modules"})
 
-#: The one directory in the packaging tree that holds build output. Written
-#: as a full relative path rather than a bare name, so it exempts exactly one
-#: place and not every directory that happens to share its name.
+#: Directories that hold produced bytes, each named by its **full relative
+#: path** rather than by a bare directory name.
+#:
+#: ``packaging/artifacts`` is where ``build_bundle.py`` writes; the SPA build
+#: under ``apps/station-web/dist`` is here so that dropping ``dist`` from
+#: :data:`GENERATED_NAMES` above excuses exactly two places and not every
+#: directory in the repository that happens to share one of those names.
 ARTIFACT_DIR = Path("packaging") / "artifacts"
+
+#: The SPA build. Not under any tree this scan reads today, and named here so
+#: that dropping ``dist`` from :data:`GENERATED_NAMES` cannot start demanding
+#: that ``apps/station-web/dist`` be committed if a tree above it is ever
+#: added to :data:`SHIPPED_TREES`.
+SPA_BUILD_DIR = Path("apps") / "station-web" / "dist"
+
+ARTIFACT_DIRS = (ARTIFACT_DIR, SPA_BUILD_DIR)
 
 
 def _is_generated(relative: Path) -> bool:
     """True for build output rather than source a fresh clone would need."""
-    if relative.is_relative_to(ARTIFACT_DIR):
+    if any(relative.is_relative_to(directory) for directory in ARTIFACT_DIRS):
         return True
     return any(
         part in GENERATED_NAMES or part.startswith(".") for part in relative.parts
@@ -185,23 +203,30 @@ def test_the_packaging_tree_contributes_files_and_not_only_python(
     )
 
 
+@pytest.mark.parametrize("directory", ["dist", "build", "out"])
 def test_a_source_file_in_a_pyinstaller_default_output_directory_is_not_exempt(
-    repo_root: Path,
+    repo_root: Path, directory: str
 ) -> None:
     """ADR-0010 3's named accident, driven rather than described.
 
     Both halves are measured. First, git really does refuse
-    ``packaging/build/helper.py``: the ``build/`` rule is unanchored and
-    matches at any depth, so a file there would exist on one machine and
-    nowhere else. Second, this scan does **not** exempt it - if ``build``
-    were added to :data:`GENERATED_NAMES` the file would become invisible to
-    the scan as well and the pair of blind spots would be complete, which is
+    ``packaging/<directory>/helper.py``: the three rules are unanchored and
+    match at any depth, so a file there would exist on one machine and
+    nowhere else. Second, this scan does **not** exempt it - if the name were
+    added to :data:`GENERATED_NAMES` the file would become invisible to the
+    scan as well and the pair of blind spots would be complete, which is
     exactly what happened to ``credentials.py``.
+
+    All three names are driven rather than only ``build``, because ADR-0010 3
+    named all three and the Package I review found that the fix had dropped
+    only two: ``dist`` stayed on the exemption list, and ``dist`` is the one
+    name PyInstaller writes to by default. One case per name, so a list that
+    loses one of them cannot pass on the strength of the other two.
 
     The probe path is never created. It does not need to be: ``git
     check-ignore`` answers about a path, and the filter is a function.
     """
-    probe = Path("packaging") / "build" / "helper.py"
+    probe = Path("packaging") / directory / "helper.py"
 
     refused = subprocess.run(  # noqa: S603 - fixed argv, no shell
         ["git", "check-ignore", "-q", str(probe)],  # noqa: S607 - resolved from PATH
@@ -210,8 +235,9 @@ def test_a_source_file_in_a_pyinstaller_default_output_directory_is_not_exempt(
         check=False,
     )
     assert refused.returncode == 0, (
-        "git no longer ignores packaging/build/helper.py, so the hazard this "
-        "test guards against has changed shape and the reasoning needs redoing"
+        f"git no longer ignores packaging/{directory}/helper.py, so the hazard "
+        "this test guards against has changed shape and the reasoning needs "
+        "redoing"
     )
 
     assert not _is_generated(probe), (
@@ -233,14 +259,16 @@ def test_the_only_exempt_packaging_directory_is_where_the_build_script_writes(
     long as it is also the directory ``build_bundle.py`` writes to; if the
     script were pointed back at PyInstaller's defaults the exemption would
     start covering a directory nothing produces and stop covering the one
-    that fills up with build output.
+    that fills up with build output - and, since the review, PyInstaller's
+    default ``dist`` is no longer excused anywhere, so that drift would show
+    up as a red scan rather than as silence.
     """
     source = (repo_root / "packaging" / "build_bundle.py").read_text(encoding="utf-8")
 
     assert 'ARTIFACT_ROOT: Final = PACKAGING_ROOT / "artifacts"' in source
     assert "BUNDLE_ROOT: Final = ARTIFACT_ROOT" in source
     assert "WORK_ROOT: Final = ARTIFACT_ROOT" in source
-    assert str(ARTIFACT_DIR.as_posix()) == "packaging/artifacts"
+    assert ARTIFACT_DIR.as_posix() == "packaging/artifacts"
 
     ignored = subprocess.run(
         # git is resolved from PATH on purpose, as everywhere else in this file.
