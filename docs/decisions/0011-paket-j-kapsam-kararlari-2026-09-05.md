@@ -26,7 +26,7 @@ hiçbiri yok.
 Keşif mekanizmayı buldu. `pytest.ini` zaten `addopts = -q` veriyor;
 `AGENTS.md` ve `CLAUDE.md`'nin kapı komutu bir `-q` daha ekliyor, yani
 efektif **`-qq`** — ve `-qq` **özet satırını bastırır**. Yerelde kapıyı koşan
-kimse "2201 passed" satırını görmüyor. CI `-q` eklemediği için sayıyı
+kimse `N passed` satırını hiç görmüyor. CI `-q` eklemediği için sayıyı
 görüyor.
 
 **Karar:** kapı komutundan `-q` düşer. Ve **test sayıları hiçbir belgede
@@ -157,8 +157,9 @@ yanlış — silinip doğrulama raporuna işaret edilir.
 
 Keşif ölçtü: **sessizce atlanan test yok** — `skipped`/`xfailed`/`xpassed`
 sıfır, toplanan ile koşan **aynı**, ve platform `skipif`'leri Windows'ta
-tetiklenmiyor. Playwright de koşuldu ve **74'ü yeşil** (Paket I onu
-"koşturulmadı" diye kaydetmişti; bu düzeltilir).
+tetiklenmiyor. Playwright de koşuldu ve **tamamı yeşil** çıktı (Paket I onu
+"koşturulmadı" diye kaydetmişti; bu düzeltilir). Sayı için §1'in kendi
+kuralı geçerlidir: tek kaynak J'nin doğrulama raporudur.
 
 J, son head'de yedi kapının tamamını koşar ve sayıları **tek yere** yazar.
 

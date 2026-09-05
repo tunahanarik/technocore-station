@@ -62,7 +62,7 @@ from station_api.technocore.projection import sweep_untrusted
 
 
 class ToolId(StrEnum):
-    """Every tool this build has, and never a seventh at runtime."""
+    """Every tool this build has - eight - and never a ninth at runtime."""
 
     #: Read the identity of the snapshot the user approved for this task.
     READ_APPROVED_SNAPSHOT = "read_approved_snapshot"

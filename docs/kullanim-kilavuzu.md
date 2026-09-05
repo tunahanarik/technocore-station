@@ -376,9 +376,23 @@ arşivinizi bu ürünün dışında bir kez siz açarsınız.
 - **Durdur ve devam et bilerek araç değildir.** Kendini devam ettirebilen
   bir çalışma sizin durdurma kararınızı geri alabilirdi.
 
-Bir çalışmanın **dört ayrı sonu** vardır ve ayrı gösterilir: tamamlandı,
-bütçe tükendi, araç hatası, söz verilen çıktı üretilmedi. "Bütçen bitti" ile
-"girdin bozuk" arasındaki farkı göremeyen biri ikisine de müdahale edemez.
+**Ama Durdur ve Devam et düğmeleri vardır ve sizindir.** Yukarıdaki madde
+*agent'ın* araç listesi hakkındadır; kendi arayüzünüzde iki düğme durur.
+Çalışan bir çalışmada **Durdur** etkindir: basıldığında hemen bir
+**"Durdurma istendi"** rozeti çıkar, çalışma sıradaki adım sınırında durur ve
+**`Kullanıcı durdurdu`** durumuna geçer — bu bitmiş bir son değil, beklemedir.
+**Devam et** yalnız durdurulmuş **ve** kapsamı hâlâ tam onaylı bir çalışmada
+etkindir; onay eksikse düğme kapalı kalır. İkisi de yalnız bu iki durumda
+tıklanabilir, başka hiçbirinde.
+
+Bir çalışmanın **beş ayrı sonu** vardır ve ayrı gösterilir: tamamlandı,
+iptal edildi, bütçe tükendi, araç hatası, söz verilen çıktı üretilmedi.
+"Bütçen bitti" ile "girdin bozuk" arasındaki farkı göremeyen biri ikisine de
+müdahale edemez. **Beşincisi hakkında dürüst olalım:** `iptal edildi` bu
+sürümde tanımlı, bitmiş sayılan ve arayüzde adı olan bir sondur, ama **hiçbir
+kod yolu onu üretmiyor** — durdurduğunuz bir çalışma `Kullanıcı durdurdu`da
+kalır. Listede olmasının sebebi, ürünün onu göstermeye hazır olması; burada
+yazmasının sebebi, göreceğiniz şeyin ne olduğunu bilmeniz.
 
 ### 5.4 Aktivite
 
@@ -535,8 +549,10 @@ servisin kendi bildirdiği durum: aşama, çalışma modu, veritabanı, oturum
 taşıma), **Güvenlik kapıları** (altı kapının canlı durumu), **OpenCode Go
 bağlantısı** ve **Yardım**.
 
-**OpenCode bağlantısı hakkında.** Bu, uygulamada **tek** maskeli alandır ve
-yalnız bir sağlayıcı API anahtarını kabul eder. Anahtar yalnız yazılır:
+**OpenCode bağlantısı hakkında.** Bu, **Ayarlar sayfasındaki tek** maskeli
+alandır ve yalnız bir sağlayıcı API anahtarını kabul eder. (Uygulamanın
+başka yerlerinde maskeli alanlar vardır — Oluştur ve Doğrula ile Kimlik ve
+Güvenlik ekranlarındaki parola alanları; sınır bu sayfa hakkındadır.) Anahtar yalnız yazılır:
 kaydedildikten sonra ne o sayfada kalır ne de herhangi bir yoldan geri
 gösterilebilir. Bu istisna yalnızca sağlayıcı anahtarı içindir — bu
 uygulamada hiçbir yerde DID seed'i, private key veya recovery secret'ı kabul
@@ -620,8 +636,10 @@ Ayrıca:
   `blocked`/`review_needed`'da durur.
 - **Model çağrısı yoktur.** OpenCode paneli bir bağlantı kaydıdır.
 - **Yayımlanmış bir artefakt yoktur** ve kaldırma akışı hiç denenmedi.
-- **İstek iptali yoktur.** Uygulama genelinde bir boşluktur; en görünür
-  hâli iş taramasıdır.
+- **HTTP isteği iptali yoktur.** Uçuştaki bir istek iptal edilemez;
+  uygulama genelinde bir boşluktur ve en görünür hâli iş taramasıdır. Bir
+  agent **çalışmasını** durdurmak ayrı bir şeydir ve **vardır** — §5.3'teki
+  Durdur/Devam et düğmeleri.
 - **Note lane yoktur.**
 - **Görev katmanında bütçe alanı yoktur** — tavan bir görevin değil, bir
   **çalışmanın** özelliğidir.

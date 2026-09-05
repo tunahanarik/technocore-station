@@ -59,15 +59,75 @@ beri boş).
 
 Bu depoda bayat referans **dört kez** bulundu, o yüzden elle düzeltmek
 yetmedi: `tests/security/test_security_invariants_doc.py` eklendi. **329
-satır / 924 referans** ayrıştırıyor, nitelikli `dosya.py::ad` referansını **o
-dosyaya** karşı, çıplak `::ad` referansını tüm suite'e karşı çözüyor, **her
-türlü jokeri reddediyor**, ve vitest dosya adlarını denetliyor. İki
-guard-the-guard testi ayrıştırıcının boşa düşmesini engelliyor.
+satır / 940 referans** ayrıştırıyor, nitelikli `dosya.py::ad` referansını **o
+dosyaya** karşı, çıplak `::ad` referansını tüm suite'e karşı çözüyor, ve
+vitest dosya adlarını denetliyor.
 
-**Mutasyon: 7/7** — her bozuk referans biçimi geri konup öldürüldüğü
-ölçüldü, ayrıca atıf yanlış dosyaya taşındığında, atıf yapılan test yeniden
-adlandırıldığında ve tüm satır kimlikleri değiştirildiğinde (ayrıştırıcı
-hiçbir şey eşleştiremediğinde) de kırmızı.
+### Testin ilk hâli üç yerde iddia ettiğinden zayıftı
+
+Bağımsız bir inceleme bunu ölçtü ve **kayıt düzeltildi, silinmedi**. Bu
+bölüm önce *"her türlü jokeri reddediyor"* ve *"Mutasyon: 7/7"* diyordu;
+ikisi de doğru değildi.
+
+**Yalnız `*` reddediliyordu.** `?`, `[abc]` ve bir regex, referans kalıbına
+uymadıkları için **sessizce atılıyordu** — ve bir span sessizce atılınca
+satır *tüm* Test sütununu kaybediyordu. Ölçüm (gerçek bir sentinel-olmayan
+satıra, mevcut atıfların yanına eklenerek):
+
+| Planted | Eski test | Yeni test |
+|---|---|---|
+| `::test_..._*` | GREEN | **RED** |
+| `::test_..._?` | GREEN | **RED** |
+| `::test_..._.*` (regex) | GREEN | **RED** |
+| `::test_launcher_binds_only_loopback[abc]` | GREEN | **RED** |
+
+**Bir satırın atıf taşıyıp taşımadığı hiç denetlenmiyordu.** Bulunanı
+çözmek, hiçbir şey sunmayan bir satır hakkında bir şey söylemez:
+
+| Planted | Eski test | Yeni test |
+|---|---|---|
+| SI-38'in Test sütunu → `Aşama 2` (kusurun orijinali) | GREEN | **RED** |
+| SI-38'in Test sütunu tamamen boşaltıldı | GREEN | **RED** |
+| 30 sentinel-olmayan satır susturuldu | GREEN | **RED** |
+| 60 sentinel-olmayan satır susturuldu | RED | **RED** |
+
+**Deny-side probu ayrıştırıcıyı yeniden uyguluyordu**, yani asıl testin
+montajını hiç sürmüyordu: nitelikli dalın iki koşulu da etkisiz hâle
+getirildiğinde (`if ... :` → `if False:`) prob **yeşil** kalıyordu. Şimdi
+asıl testin gövdesi `_assert_every_citation_resolves(document, repo_root)`
+yardımcısında ve prob **onu** ekili belgelere karşı sürüyor; aynı nötrleme
+artık **kırmızı**.
+
+Alt sınırlar da gevşekti: 329/940'a karşı eşikler 250/700'dü — 79 satır ve
+240 atıf fark edilmeden gidebilirdi. Eşikler 325/930'a çekildi.
+
+### Testin bugünkü sözleşmesi
+
+- `::` taşıyan **her** backtick span sınıflandırılır: Python testi, kaynak
+  üyesi (`dosya.py::Sınıf.üye`, SI-266'nın docstring atfı), tarayıcı vaka
+  adı (`*.spec.ts::` / `*.test.tsx::`, boşluk taşıdığı için ayırt edilir) —
+  ya da **bozuk**. Sınıflandırılamayan span sessizce atlanmaz, kırmızı verir.
+- Joker karakterleri (`* ? ( ) | + ^ $ \ { }`) doğrudan reddedilir. `[` ve
+  `]` yalnız dar pytest parametre kuyruğunda (`[\w.-]+`) kabul edilir **ve**
+  adlandırılan fonksiyonun gerçekten `parametrize` dekoratörü taşıdığı
+  denetlenir; taşımıyorsa o köşeli parantez test id'si kılığında bir jokerdir.
+- **Her satır** en az bir çözülmüş Python atfı veya bir vitest dosya adı
+  üretmek zorundadır. Üretemeyenler `_ROWS_WITHOUT_A_PYTHON_TEST` içinde
+  **tek tek, gerekçesiyle** sayılıdır (bugün üç: SI-261 Playwright, SI-266
+  ve SI-270 docstring). Liste **büyürse de bayatlarsa da** test kırmızı verir.
+- Belgede daha önce hiç denetime girmeyen sekiz satırdan beşi (SI-120…SI-124,
+  "Aşama B testleri") artık gerçek test adları taşıyor; kalan üçü sayılı
+  muafiyet listesinde.
+
+**Mutasyon: 15/15** — dört joker biçimi, dördü de hem atıfın yerine konarak
+hem mevcut atıfların yanına eklenerek (8); dört satır-susturma biçimi (4);
+prob nötrlemesi (1); ve muafiyet listesinin **iki yönü** (2): listeden bir
+satır düşürülünce o satır "gerekçesiz" diye, listeye gerçek testi olan bir
+satır eklenince "bayat muafiyet" diye kırmızı verir. Ayrıca atıf yanlış
+dosyaya taşındığında, atıf yapılan test yeniden adlandırıldığında ve tüm
+satır kimlikleri değiştirildiğinde de kırmızı; bu üçü artık kalıcı olarak
+`test_the_scan_would_catch_a_planted_reference` içinde ekili belgelere karşı
+koşuyor.
 
 ## Üç aşama numaralandırması hizalandı
 
@@ -128,6 +188,46 @@ okundu — aşamalar **2 / 2B / 3** ve `evaluate` bugün **hiç**
 parola isteminin "(Aşama 4'te) imzalama" için olduğu yazıyordu; imzalama
 Paket D'de indi.
 
+## Kılavuz üç yerde, kod bir yerde hâlâ ürünün gerisindeydi
+
+Bağımsız inceleme "Kılavuz yalan söylemiyor" başlığını dört yerde çürüttü.
+Hepsi ölçülerek kapatıldı:
+
+- **"Dört ayrı son" beşti.** `agent/service.py`'nin `TERMINAL_RUN_PHASES`'i
+  **beş** üye sayıyor ve `TasksPanel.tsx` `cancelled` için "Iptal edildi"
+  etiketini render ediyor; kılavuz `cancelled`'ı listeden düşürmüştü.
+  Beşe çıkarıldı — **ve beşincisi hakkında ölçülen şey de yazıldı**:
+  `RunPhase.CANCELLED` bu kod tabanında **hiçbir yerde atanmıyor** (`_close`
+  yalnız `COMPLETED` / `PAUSED` / `TOOL_ERROR` / `BUDGET_EXHAUSTED` /
+  `ARTIFACT_MISSING` yazar), yani durdurulan bir çalışma `paused`ta kalır.
+  Beşinci son tanımlı, terminal sayılıyor ve arayüzde adı var; **üretilmiyor**.
+  İncelemenin "durdurulan bir çalışmanın indiği durum budur" gerekçesi bu
+  yüzden doğru değildi, ama bulgunun kendisi doğruydu.
+- **Var olan "Durdur / Devam et" düğmeleri hiç anlatılmamıştı.**
+  `routes/agent.py`'de `POST …/stop` ve `POST …/resume` var,
+  `TasksPanel.tsx`'te iki düğme ve bir "Durdurma istendi" rozeti var.
+  Kılavuzun durdurmaya tek değinişi *agent'ın araç registry'si* hakkındaydı.
+  §5.3'e düğmeler, etkinlik koşulları ve rozet eklendi; §7'nin
+  *"İstek iptali yoktur"* maddesi **"HTTP isteği iptali yoktur"** diye
+  daraltıldı, çünkü düz okunduğunda §5.3 ile çelişiyordu.
+  (`ui-action-map.md` §1.5'in aynı maddesi zaten "uçuştaki bir istek"
+  diyerek doğru kapsamdaydı; ona dokunulmadı.)
+- **"Uygulamada tek maskeli alan" onda birdi.** Üretimde on `<PassphraseField`
+  var (`ComposerPanel.tsx` 1, `IdentityDialogs.tsx` 8,
+  `OpenCodeConnectionPanel.tsx` 1). Kodun kendi yorumu doğru kapsamı
+  yazıyordu (`SettingsHelpPage.tsx`: *"the **page** may now contain exactly
+  one masked field"*); kılavuz "sayfa"yı "uygulama"ya genişletmişti.
+  "Ayarlar sayfasındaki tek maskeli alan" diye daraltıldı. Sonraki cümle —
+  hiçbir yerde seed / private key / recovery secret kabul edilmez — ölçüldü
+  ve **doğru**, olduğu gibi bırakıldı.
+- **Kodda:** `agent/tools.py`'nin `ToolId` docstring'i *"never a seventh at
+  runtime"* diyordu; hemen altındaki enum **sekiz** üye sayıyor. Düzeltildi.
+
+Ve ADR-0011 kendi §1 kuralını çiğniyordu: metni iki test sayısı taşıyordu
+(`-qq` anlatımında bir pytest özeti, §10'da Playwright sayısı). İkisi de
+sayısız yeniden yazıldı; sayının tek yeri aşağıdaki kapı tablosudur.
+Yönetilen dosyalara sayı sızmamıştı — bu yalnız ADR'nin kendi metniydi.
+
 ## Ölçüm sırasında yaşananlar
 
 **Bayt-birebir testi doğru şekilde kırmızıya döndü.** Temizlik ajanının
@@ -143,7 +243,7 @@ yüklendi ve `git diff` artık sıfır uyarı veriyor.
 
 | Kapı | Sonuç |
 |---|---|
-| pytest | **2212 geçti** |
+| pytest | **2213 geçti** |
 | Vitest | **315 geçti** |
 | Playwright (e2e) | **74 geçti** |
 | ruff (iki koşu) / mypy strict | geçti / 133 dosya 0 hata |
@@ -171,7 +271,16 @@ tetiklenmiyor. Paket J altı test ekledi, **hiçbirini silmedi**.
 7. **Tarayıcı QA otomatik**; manuel/görsel kabul kullanıcının işidir ve
    `docs/kullanici-kabul-listesi.md` onu maddeleştirir.
 8. **SI-50'nin üretim yarısı testsiz** (yukarıda).
-9. **e2e ağacı lint edilmiyor** — `eslint.config.js` bir depo hook'u
+9. **`RunPhase.CANCELLED` hiçbir kod yolundan üretilemiyor.** İnceleme
+   kılavuzun "dört ayrı son" dediğini, ürünün beş gösterdiğini bulmuştu;
+   düzeltme sırasında ölçüldü ki **gerekçesi yanlıştı**: `CANCELLED`
+   tanımlı, `TERMINAL_RUN_PHASES` içinde, şema literalinde ve ekranda
+   ("Iptal edildi") — ama **hiçbir yerde atanmıyor**. Durdurulan bir çalışma
+   `paused`'a iniyor. Bu, H2'nin `execution_unavailable` için kapattığı
+   kusurun aynı şekli ve **kapatılmadı**: J bir kod paketi değil, o yüzden
+   kılavuza *ölçülmüş çekince* olarak yazıldı. Ya bir kod yoluna bağlanmalı
+   ya kaldırılmalı — bir sonraki turun işi.
+10. **e2e ağacı lint edilmiyor** — `eslint.config.js` bir depo hook'u
    tarafından yazmaya kapalı; bir ölü export'u fiilen bu üretti. Kabul
    listesine gerekçesiyle girdi.
 

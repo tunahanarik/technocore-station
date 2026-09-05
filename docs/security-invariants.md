@@ -188,11 +188,11 @@ Paket J'de ölçüldü ve kapatılmadı.
 | SI-117 | `/openapi.json` 503 iken kapı kapanır | `unavailable` | `::test_openapi_returning_503_closes_the_gate` | A3.1 |
 | SI-118 | Başarılı kontrolden sonra gelen 503 eski verdict'i geri getirmez | `unavailable`, eski zaman görünür | `::test_a_503_after_a_success_shows_the_old_time_but_not_the_old_verdict` | A3.1 |
 | SI-119 | Zorunlu belge denemesi sınırlıdır | 3 deneme | `::test_a_required_document_is_retried_a_bounded_number_of_times` | A3.1 |
-| SI-120 | Şema üyesindeki `null` geçersiz üyedir, yokluk değildir | `unavailable` | Aşama B testleri (`Stage B: schema boundaries`) | B |
-| SI-121 | `required`/`anyOf.required` tekrarlı ad içeremez | `unavailable` | Aşama B testleri | B |
-| SI-122 | Derlenemeyen veya payload'da yayımlanan pattern değerlendirilemez | `unavailable` | Aşama B testleri | B |
-| SI-123 | Nonce aralığını daraltan sınır kapıyı kapatır (SOME-exclusion) | `drifted` | Aşama B nonce sınır matrisi | B |
-| SI-124 | Payload limit değişikliği uyarıdır; etkin limit tavanla kırpılıp dışa verilir | `current`+uyarı | Aşama B payload testleri | B |
+| SI-120 | Şema üyesindeki `null` geçersiz üyedir, yokluk değildir | `unavailable` | `test_technocore_readonly.py::test_a_null_payload_node_is_unreadable_not_absent`, `::test_a_null_unconditional_sig_node_is_unreadable`, `::test_a_null_conditional_did_node_is_unreadable`, `::test_a_null_node_inside_a_triggered_dependency_is_unreadable` | B |
+| SI-121 | `required`/`anyOf.required` tekrarlı ad içeremez | `unavailable` | `test_technocore_readonly.py::test_a_duplicated_name_in_the_body_required_list_is_unreadable`, `::test_a_duplicated_name_in_an_any_of_branch_is_unreadable` | B |
+| SI-122 | Derlenemeyen veya payload'da yayımlanan pattern değerlendirilemez | `unavailable` | `test_technocore_readonly.py::test_any_pattern_on_a_payload_field_is_unevaluable`, `::test_a_pattern_that_does_not_compile_is_unreadable`, `::test_an_oversized_pattern_is_refused_before_compiling` | B |
+| SI-123 | Nonce aralığını daraltan sınır kapıyı kapatır (SOME-exclusion) | `drifted` | `test_technocore_readonly.py::test_a_nonce_ceiling_below_the_sent_range_is_drift`, `::test_a_nonce_floor_above_the_sent_range_is_drift`, `::test_a_published_nonce_bound_must_cover_the_whole_sent_range` | B |
+| SI-124 | Payload limit değişikliği uyarıdır; etkin limit tavanla kırpılıp dışa verilir | `current`+uyarı | `test_technocore_readonly.py::test_a_tighter_payload_ceiling_is_a_warning_with_an_effective_limit`, `::test_a_higher_payload_floor_is_a_warning_with_an_effective_limit`, `::test_a_ceiling_above_our_contract_is_warned_and_clamped`, `::test_contradictory_payload_bounds_are_drift_not_a_warning` | B |
 
 ## 9d. Paket C değişmezleri — hata sözleşmesi (uygulandı)
 
