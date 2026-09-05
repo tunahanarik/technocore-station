@@ -2,10 +2,12 @@
 
 > Ana karar kaynağı: [`Technocore-Station-Proje-Kunyesi.md`](Technocore-Station-Proje-Kunyesi.md)
 > Çalışma kuralları: [`AGENTS.md`](AGENTS.md) · [`CLAUDE.md`](CLAUDE.md)
-> Son güncelleme: **5 Eylül 2026** (Aşama 11 / Paket I — Windows paketleme:
-> yol çözümü, sınır taramalarının genişletilmesi, tek örnek kilidi;
-> **artefakt üretildi, çalıştırıldı ve ölçüldü**, paketleme CI'ı artık
-> dördüncü kapı)
+> Son güncelleme: **5 Eylül 2026** (Aşama 12 / Paket J — bütünleşik inceleme
+> ve temizlik: yeni yetenek yok; belgeler ürünle uzlaştırıldı, `-qq` tuzağı
+> kapatıldı, SI tablosunun test adları artık ölçülüyor, kod aşaması 11)
+>
+> **Proje durumu: CODE_COMPLETE_USER_ACCEPTANCE_PENDING** — dosyanın sonuna
+> bakın.
 
 ## Aşama checklist
 
@@ -1130,7 +1132,7 @@ Kapsam kararları:
       `write_available_from_stage` bilinçli olarak **4** kaldı.
 
 
-### Paket F — proje/görev modülü temeli (Aşama 6)
+### Paket F — proje/görev modülü temeli (Aşama 6, kod aşaması 6)
 
 Kapsam kararları:
 [`ADR-0004`](docs/decisions/0004-paket-f-kapsam-kararlari-2026-09-04.md).
@@ -1244,7 +1246,7 @@ düzeltme **mutasyonla** doğrulandı (bozulan kod, kırılan test):
 **Bu pakette bilinçli olarak yapılmayanlar:** görev HTTP route'u ve görünür
 yüzey (H1/H2), öneri üreticisi ve yürütücü, dış paylaşım (H3), bütçe (G/H2),
 kanıt silme route'u (ADR-0003 §7'nin ertelenmiş yarısı, IMP-329).
-### Paket G — OpenCode Go baglantisi (Asama 7)
+### Paket G — OpenCode Go baglantisi (Asama 7, kod asamasi 7)
 
 Kapsam kararlari:
 [`ADR-0005`](docs/decisions/0005-paket-g-kapsam-kararlari-2026-09-04.md).
@@ -1305,7 +1307,7 @@ Tarayici QA: [`ADR-0006`](docs/decisions/0006-tarayici-qa-kapsama-alindi-2026-09
       hook'u tarafindan yazmaya kapali); telafi olarak `tsc -b` kapsiyor ve
       bir suite-discipline testi disiplini zorluyor.
 
-### Paket H1 - Work Scan (Asama 8)
+### Paket H1 - Work Scan (Asama 8, kod asamasi 7)
 
 Kapsam kararlari:
 [`ADR-0007`](docs/decisions/0007-paket-h1-kapsam-kararlari-2026-09-04.md).
@@ -1397,7 +1399,7 @@ kapatildi; her duzeltme testle ve **mutasyon kontroluyle** kanitlandi
 - [x] SI-282...SI-284, IMP-403...IMP-408. SI-273, SI-278, SI-279 ve SI-281
       metinlerindeki yanlis iddialar **duzeltildi**, silinmedi.
 
-### Paket H2 - Agent calisma ortami ve Activity Desk (Asama 9)
+### Paket H2 - Agent calisma ortami ve Activity Desk (Asama 9, kod asamasi 8)
 
 Kapsam kararlari: [ADR-0008](docs/decisions/0008-paket-h2-kapsam-kararlari-2026-09-05.md).
 Dogrulama raporu: [docs/verification/paket-h2.md](docs/verification/paket-h2.md).
@@ -1534,7 +1536,7 @@ bir bulguya donustu; **on ucunun hepsi kapatildi.** Ayrintili tablo:
       olculemedi** (bu makinede `WinError 1314`), migration SQL'i okunmadi.
       Bunlar orkestrator tarafindan ayrica kosuldu.
 
-### Paket H3 - Kanit calisma alani (Asama 10)
+### Paket H3 - Kanit calisma alani (Asama 10, kod asamasi 9)
 
 Kapsam kararlari: [ADR-0009](docs/decisions/0009-paket-h3-kapsam-kararlari-2026-09-05.md).
 Dogrulama raporu: [docs/verification/paket-h3.md](docs/verification/paket-h3.md).
@@ -1700,8 +1702,6 @@ mutasyon hayatta kaldi; **sekiz bulgunun hepsi kapatildi.** Ayrintili tablo:
       yapilmadi, H3 diff'i disindaki paketler incelenmedi, DPAPI/ACL
       davranisi incelenmedi. Kapilar ve e2e orkestrator tarafindan kosuldu.
 
-## Sonraki asama: Asama 12 - J teslim ve kilavuz
-
 **Gercek servise hicbir istek gonderilmedi** ve **hicbir ucretli cagri
 yapilmadi** - her sey mock tasiyiciya karsi, iki katmanli ag kesici altinda.
 
@@ -1710,7 +1710,7 @@ On kosul: kullanici acikca "baslayalim" demeden gercek gonderim yapilmaz.
 
 ---
 
-## Aşama 11 / Paket I — Windows paketleme (5 Eylül 2026)
+## Aşama 11 / Paket I — Windows paketleme (5 Eylül 2026, kod aşaması 10)
 
 Kapsam kararları: [`docs/decisions/0010-paket-i-kapsam-kararlari-2026-09-05.md`](docs/decisions/0010-paket-i-kapsam-kararlari-2026-09-05.md) ·
 Uygulama: [`docs/packaging.md`](docs/packaging.md) ·
@@ -1982,29 +1982,187 @@ turundan sonra 50 test). Genişletilen: `test_bind.py` (kapanış turunda +5),
 
 ### Bu turda ölçülmeyenler — adıyla
 
-- **`packaging.yml` hiç koşturulmadı.** YAML yerel olarak ayrıştırıldı
-  (yukarıda değer değer); GitHub Actions koşturulmadı, içindeki PowerShell
-  çalıştırılmadı. İlk kez CI'da koşacak.
-- **Temiz Windows profili doğrulanmadı.** Artefakt uv/Node/Python `PATH`'te
-  **iken** çalıştırıldı; `PATH`'ten çıkararak çalıştırmak workflow'un adımı
-  ve o adım koşmadı.
+> **Paket J düzeltmesi (ADR-0011 §9, §10).** Bu blok yazıldıktan sonra
+> Paket I'nın kendi turu devam etti ve **dört maddesi yanlışa döndü**:
+> `packaging.yml` CI'da koştu, temiz profil ölçüldü, yeniden
+> üretilebilirlik **ölçüldü ve olumsuz çıktı** ("ölçülmedi" değil), ve
+> commit/PR **yapıldı**. Tek ve güncel liste
+> [`docs/verification/paket-i.md`](docs/verification/paket-i.md) §12'dedir;
+> burada tekrarlanmaz. Playwright de o turda **koştu**: 74/74 yeşil.
+
 - **İmzalama doğrulanamaz** (sertifika yok, secret yok). Artefakt imzasız.
-- **Yeniden üretilebilirlik ölçülmedi.** Bundle bir kez üretildi; ikinci bir
-  yapının aynı SHA-256'yı vereceği **denenmedi ve iddia edilmiyor**.
 - **Çift örnek yarışının gerçekten bozup bozmadığı** ölçülmedi; koruma
   ADR-0010 §8'in gerekçesiyle var.
 - **Kaldırma akışı elle denenmedi.** Artefakt hiçbir yere **kurulmadı**;
   program dizini oluşmadı. Kullanıcının veri dizinine **dokunulmadı** — dört
   dosyanın adı, boyutu ve mtime'ı önce–sonra karşılaştırıldı, birebir aynı.
   Ölçüm için kullanılan geçici `STATION_DATA_DIR` sonra silindi.
-- **Playwright tarayıcı QA koşturulmadı.**
 - Gerçek DID/seed/private key/recovery/`.tcrec`/API anahtarı **okunmadı,
   istenmedi, yazılmadı**. Gerçek Technocore'a hiçbir istek gitmedi.
-  `git commit`/`push`/PR/tag/release **yapılmadı**.
 
 ---
 
-## Bu turda yapılmayanlar (Aşama 3 beyanı)
+## Aşama 12 / Paket J — bütünleşik inceleme ve temizlik (5 Eylül 2026, kod aşaması 11)
+
+Kapsam kararları: [`docs/decisions/0011-paket-j-kapsam-kararlari-2026-09-05.md`](docs/decisions/0011-paket-j-kapsam-kararlari-2026-09-05.md)
+
+Bu paket **yeni yetenek getirmedi**: yeni rota, yeni bağımlılık, yeni giden
+yüzey yok. `OUTBOUND_CLIENT_MODULES` beşte kaldı. Yaptığı iş, belgelerin
+ürünle uzlaşmasıdır.
+
+### En önemli satır: **bayatlamanın mekanizması bulundu ve kapatıldı**
+
+- [x] **`-qq` tuzağı kapatıldı (ADR-0011 §1).** `pytest.ini` zaten
+      `addopts = -q` veriyor; `AGENTS.md` ve `CLAUDE.md`'nin kapı komutu bir
+      `-q` daha ekliyordu, yani **efektif `-qq`** — ve `-qq` **özet satırını
+      bastırır**. Kapıyı yerelde koşan hiç kimse "N passed" satırını
+      görmüyordu; test sayılarının fark edilmeden bayatlamasının mekanizması
+      buydu. Her iki dosyadaki fazladan `-q` düşürüldü ve **ölçüldü**:
+      `pytest ../../tests/security/test_bind.py -q` özet satırı basmıyor,
+      `-q`'suz aynı komut `18 passed, 1 warning in 2.71s` basıyor.
+- [x] **SI tablosunun her test adı artık ölçülüyor (ADR-0011 §2).** Yeni test:
+      `tests/security/test_security_invariants_doc.py` (6 test). Tablodaki
+      **924 test referansını** ayrıştırıp suite'e karşı çözer; joker bir
+      referansı **reddeder** (joker çözülemez, dolayısıyla alıntı değildir).
+      Ölçülen bayat referanslar tek tek düzeltildi:
+      - **SI-211** olmayan bir ada işaret ediyordu
+        (`test_planned_modules_name_the_package_that_opens_them`); gerçek adlar
+        `test_the_registry_satisfies_the_planned_module_contract` ve
+        `test_no_module_is_registered_as_planned_any_more`.
+      - **SI-277** hem olmayan bir ada işaret ediyordu hem **beklenen metni
+        bayattı** (`RUNNING`/`PAUSED` "üretilemez" diyordu; `UNPRODUCIBLE_STATES`
+        H2'den beri **boş**).
+      - **SI-243**'ün `test_the_credential_is_absent_from_*` jokeri "yedi yüzey"
+        diyordu ama **altısını** tutuyordu; yedincisi
+        `test_no_artefact_anywhere_in_the_data_directory_carries_the_credential`
+        adını taşıyor ve joker ona hiç ulaşmıyordu. Yedisi de tek tek yazıldı.
+      - **SI-105**'in `::test_*` jokeri gerçek parametrik testlerle değiştirildi.
+- [x] **`security-invariants.md` §9 kaldırıldı (ADR-0011 §2).** Başlığı
+      *"Aşama 2+ değişmezleri (bugün kod yolu yok)"* idi ve altındaki **sekiz**
+      satırın hepsinin bugün bir kod yolu vardı. SI-49/SI-50/SI-52 §6'ya,
+      SI-51/SI-53/SI-54/SI-56 §9c'ye, SI-55 §9e'ye **test adlarıyla** taşındı.
+      Aynı kusurdan bir tane daha bulundu ve düzeltildi: **SI-38**'in Test
+      sütunu "Aşama 2" yazıyordu; `test_seed_leakage.py` beş yüzeyi ölçüyor.
+      **Ölçülen ve kapatılmayan boşluk:** `generate_seed`'in CSPRNG kullandığını
+      doğrulayan bir test **yok**; SI-50'nin yalnız *içeri alma* yarısı test
+      edilmiş durumda ve bu belgeye yazıldı.
+- [x] **Kod aşaması `10 → 11` (ADR-0011 §3).** Altı yerde **atomik**:
+      `cli/__main__.py:91`, `launcher.py:183`, `routes/api.py:115`,
+      `tests/conftest.py:295`, `apps/station-web/e2e/harness/serve.py:111` ve
+      pinli sabit `tests/security/test_module_registry.py:101`.
+      `CURRENT_MIGRATION_HEAD` **`0009`'da kaldı**.
+      `test_every_entry_point_names_the_same_release_stage` beş giriş
+      noktasının hepsini aynı sayıda tutuyor. İki numaralandırma bu belgede
+      **"(kod aşaması N)"** ekiyle hizalandı: F=6, G=7, H1=7 (ayrışma burada
+      başladı — paket kendine "Aşama 8" dedi, kodun sayısını taşımadı), H2=8,
+      H3=9, I=10, J=11. **Tarihsel raporlar yeniden yazılmadı.**
+- [x] **Ölü yüzey silindi (ADR-0011 §7).** AST ile ölçülüp kaldırılanlar:
+      `attachJson` (`e2e/fixtures.ts`, tek export, hiç çağrılmıyordu — kullanılmayan
+      `TestInfo` importu da düştü), `ProofBundle.missing_count` (hiç okunmuyordu),
+      ve `__all__`'da olup **hiçbir yerden import edilmeyen yedi ad**:
+      `AUTHORITY_DETAIL`, `SOURCE_DETAIL`, `BudgetError`,
+      `OFFICIAL_SEED_HEX_LENGTH`, `StoredCredential`, `measured_facilities`,
+      `refs_from`. "İkizi kullanılıyor" savunması **ölçüldü ve tutmadı**:
+      `STATE_DETAIL`'in canlı bir tüketici zinciri (`views.detail_for_state`,
+      `service`, `states.refuse`) ve kapsamını denetleyen bir testi var;
+      `AUTHORITY_DETAIL` ile `SOURCE_DETAIL`'in **ikisi de yok**.
+      `OFFICIAL_SEED_HEX_LENGTH = 64` ayrıca iki regex'teki `{64}`'ün üçüncü
+      bir kopyasıydı — sürüklenme yeri, kapı değil.
+      **`WorkScanRingDrop` silinmedi**: belgelenmiş, bilinçli bir boşluktur
+      (`paket-h1.md:161`, `ui-action-map.md:657`) ve silmek "alan ve gösterim
+      birlikte gelmeli" kararını kaybettirirdi.
+- [x] **Playwright kaydı düzeltildi (ADR-0011 §10).** `PROJECT_STATUS.md` ve
+      `docs/verification/paket-i.md` §12 "koşturulmadı" diyordu. **Koşuldu:**
+      `npm --prefix apps/station-web run test:e2e` → **74 passed (48.4s)**.
+- [x] **`PROJECT_STATUS.md` düzgün kapanıyor (ADR-0011 §8).** Yanlış yerdeki
+      "Sonraki asama" başlığı kaldırıldı (gövdesi H3'ün kapanış metniydi ve
+      orada kaldı); Paket I'nın ardına bu tek bölüm kondu; Aşama 3 beyanının
+      başlığına **"(tarihsel)"** eklendi ve içeriği **yeniden yazılmadan**
+      yerinde bırakıldı.
+- [x] **"Bu turda ölçülmeyenler" bloğunun dört maddesi silindi (ADR-0011 §9):**
+      `packaging.yml` CI'da koştu, temiz profil ölçüldü, yeniden üretilebilirlik
+      **ölçüldü-olumsuz** ("ölçülmedi" değil), commit/PR **yapıldı**. Tek ve
+      güncel liste `docs/verification/paket-i.md` §12'dedir.
+
+### Diğer düzeltilen bayat yüzeyler — hepsi ölçülerek
+
+- [x] **`docs/architecture.md`:** migration aralığı `0001…0007` → **`0001…0009`**;
+      tablo listesi **14 ad sayıyordu, gerçekte 20 tablo var** — taze bir
+      veritabanı açılıp `sqlite_master` sayıldı: 19'unu migration'lar yaratıyor,
+      `schema_migrations` Alembic'in kendi tablosu. Eksik altısı
+      (`opencode_catalog_check`, `opencode_credential_metadata`,
+      `opencode_model_snapshot`, `agent_run`, `agent_run_step`, `activity_event`)
+      eklendi. §6'nın "paketleme/installer yapılmadı" maddesi `~~üstü çizili~~
+      **Kapandı:**` kalıbına çevrildi. Bütçe maddesine görev katmanı ile agent
+      koşu tavanının (`agent/budget.py`) **ayrı** olduğu netleştirmesi eklendi.
+- [x] **`SECURITY.md` Aşama 3'ten bugüne taşındı.** Son teknik bölümü §6.2 idi.
+      Yeni **§6.3** D→I arasını **dar kapsamda** anlatır ve ayrıntı için
+      `docs/security-invariants.md`'ye işaret eder — her paketin ayrıntısını
+      kopyalamak dördüncü bir sürüklenme yüzeyi olurdu. §7'ye iki kayıtlı sınır
+      eklendi: **imzasız artefakt / SmartScreen / yeniden üretilemezlik**, ve
+      **insan güvenlik incelemesinin yokluğu** (ADR-0001 §5).
+- [x] **`AGENTS.md`** belge tablosu **11 belgeyi** anmıyordu; on biri de
+      eklendi, yanına `docs/verification/` ve Paket J'nin iki kılavuz belgesi.
+- [x] **`docs/ui-action-map.md`** başlığı H3'ü (§15) atlıyordu.
+- [x] **`NOTICE`** lisans haritası `packaging/` dizinini listelemiyordu.
+- [x] **`docs/identity-lifecycle.md` §5 write-gate tablosu koda karşı
+      denetlendi.** `conformance_verified` ve `manifest_current` için
+      "Aşama 4 / `not_implemented`" diyordu; `identity/write_gate.py`'nin altı
+      `GateCheck`'i tek tek okundu: aşamalar **2 / 2B / 3**'tür ve `evaluate`
+      bugün **hiçbir kontrolü** `NOT_IMPLEMENTED` üretmiyor — altısı da
+      `PASSED` ya da `BLOCKED`. `CheckState.NOT_IMPLEMENTED` üyesi bilinçli
+      olarak **duruyor**. Aynı dosyada ikinci bir bayat satır bulundu:
+      parola "(Aşama 4'te) imzalama" için isteniyor deniyordu; imzalama
+      **Paket D'de** geldi.
+- [x] **`SettingsHelpPage.tsx`** "kullanim kilavuzu Paket J'de eklenecek"
+      diyordu; kılavuz artık var. Kopya düzeltildi ve
+      `pages.test.tsx`'teki iddia **silinmedi, çevrildi**: artık kılavuzun
+      adının geçtiğini **ve** "eklenecek" sözünün geçmediğini birlikte ölçüyor.
+- [x] **`docs/decisions/README.md`** indeksine ADR-0011 satırı eklendi.
+
+### Bu turda ölçülmeyenler — adıyla
+
+- **Gerçek DID, seed, private key, vault, `.tcrec` veya API anahtarı**
+  okunmadı, istenmedi, üretilmedi. Kullanıcının `%LOCALAPPDATA%\TechnocoreStation`
+  dizinine **dokunulmadı**.
+- **Gerçek Technocore'a hiçbir istek gitmedi**; lobby hedef olmadı.
+- **Hiçbir şey kurulmadı**, admin alınmadı, `git commit`/`push`/PR/tag
+  **yapılmadı**.
+- **İnsan güvenlik incelemesi hâlâ yok.** Bu paket onu kapatmaz —
+  `SECURITY.md` §7'de **görünür** kılar.
+- **`generate_seed`'in CSPRNG kullandığı** doğrudan test edilmiyor (yukarıda).
+- **`apps/station-web/e2e/` ağacı lint edilmiyor**; `eslint.config.js` bir depo
+  hook'u tarafından yazmaya kapalı ve bunu bir agent kaldıramaz. Kabul
+  listesine gerekçesiyle aittir (ADR-0011 §7).
+
+### Kapılar (bu turun son head'inde)
+
+| Komut | Sonuç |
+|---|---|
+| `uv run --directory apps/station-api ruff check .` | **All checks passed!** |
+| `uv run --project apps/station-api ruff check apps/station-api/src packages/technocore-conform/src tests` | **All checks passed!** |
+| `uv run --project apps/station-api mypy --config-file apps/station-api/pyproject.toml` | **Success: no issues found in 133 source files** |
+| `uv run --directory apps/station-api pytest ../../tests -p no:warnings` | **2212 passed** |
+| `npm --prefix apps/station-web run lint` | **temiz** |
+| `npm --prefix apps/station-web run test` | **315 passed** |
+| `npm --prefix apps/station-web run build` | **başarılı** |
+| `npm --prefix apps/station-web run test:e2e` | **74 passed** |
+
+Taban 2206 pytest idi; Paket J altı test ekledi
+(`test_security_invariants_doc.py`) ve hiçbirini silmedi.
+**Mutasyon skoru: 7/7** — yedi mutant tek tek ekilip suite sürüldü
+(SI-211/SI-243/SI-277/SI-105'in eski hâlleri, tam nitelikli bir referansın
+yanlış dosyaya taşınması, alıntılanan bir test fonksiyonunun yeniden
+adlandırılması, ve tablodaki her satır kimliğinin bozulması); **yedisi de
+öldü**.
+
+---
+## Bu turda yapılmayanlar (Aşama 3 beyanı — **tarihsel**)
+
+> Bu bölüm **Aşama 3'te** yazıldı ve o turun beyanıdır; bugünkü durumu
+> anlatmaz (imzalama Paket D'de, Evidence/HMAC Paket E'de, agent çalışma
+> ortamı Paket H2'de geldi). Tarihsel kayıt olarak **yeniden yazılmadan**
+> bırakıldı; güncel durum yukarıdaki Paket J bölümündedir.
 
 - **Gerçek kullanıcı kimlik durumu bu depo tarafından takip edilmez.**
   Depoya hiçbir operasyonel DID, seed, vault veya recovery dosyası
@@ -2025,3 +2183,7 @@ turundan sonra 50 test). Genişletilen: `test_bind.py` (kapanış turunda +5),
 - LLM/Agent Runtime, Evidence/HMAC zinciri, çoklu DID yazılmadı.
 - Commit, push, PR, tag, release veya deploy yapılmadı.
 - Telemetri, analytics veya bulut servisi eklenmedi.
+
+---
+
+**Proje durumu: CODE_COMPLETE_USER_ACCEPTANCE_PENDING** (5 Eylül 2026)

@@ -62,7 +62,7 @@ güncelle. Bağımlılıkları minimumda tut.
 ```bash
 uv run --directory apps/station-api ruff check .
 uv run --directory apps/station-api mypy src
-uv run --directory apps/station-api pytest ../../tests -q
+uv run --directory apps/station-api pytest ../../tests
 npm --prefix apps/station-web run lint
 npm --prefix apps/station-web run test
 npm --prefix apps/station-web run build

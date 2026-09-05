@@ -108,7 +108,7 @@ def main() -> int:
     if settings.dev_mode:
         raise SystemExit("browser tests run the production path; STATION_DEV must be off")
 
-    engine = initialise_database(settings.database_path, stage=10)
+    engine = initialise_database(settings.database_path, stage=11)
     sock, port = reserve_loopback_socket(settings)
 
     # The same resolution the launcher uses, asked for once so the handshake

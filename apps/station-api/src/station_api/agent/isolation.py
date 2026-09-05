@@ -232,15 +232,6 @@ def names_arbitrary_execution(raw: str) -> bool:
     return any(fragment in candidate for fragment in EXECUTION_REQUEST_FRAGMENTS)
 
 
-def measured_facilities() -> tuple[IsolationFinding, ...]:
-    """The findings whose facility was actually found. Never a trust list."""
-    return tuple(
-        finding
-        for finding in ISOLATION_INVENTORY
-        if finding.measured is MeasuredState.PRESENT
-    )
-
-
 __all__ = [
     "ARBITRARY_EXECUTION_SUPPORTED",
     "EXECUTION_REQUEST_FRAGMENTS",
@@ -251,6 +242,5 @@ __all__ = [
     "IsolationFinding",
     "MeasuredState",
     "execution_verdict",
-    "measured_facilities",
     "names_arbitrary_execution",
 ]

@@ -1625,16 +1625,21 @@ describe("Ayarlar ve Yardim surface", () => {
     expect(await screen.findByText("Dis yazma kapali")).toBeInTheDocument();
   });
 
-  it("is honest about what arrives in later packages", async () => {
+  it("names the guide that now exists instead of promising one", async () => {
     stubIdentity(NO_IDENTITY);
     const { container } = render(<SettingsHelpPage status={APP_STATUS} />);
     await screen.findByText("Guvenlik kapilari");
 
     const text = container.textContent ?? "";
-    // The OpenCode row moved from "arrives later" to "is here"; the guide has
-    // not, and the copy must not promote it early.
-    expect(text).toContain("OpenCode Go baglantisi bu pakette acildi");
-    expect(text).toContain("kullanim kilavuzu Paket J'de");
+    // Both rows have now moved from "arrives later" to "is here". The
+    // assertion moved with them rather than being deleted: a page that
+    // still promises a guide Package J already wrote is the same defect as
+    // a page that promises one early, and this catches either direction.
+    expect(text).toContain("OpenCode Go baglantisi Paket G'de acildi");
+    expect(text).toContain("docs/kullanim-kilavuzu.md");
+    expect(text).toContain("docs/kullanici-kabul-listesi.md");
+    expect(text).not.toContain("Paket J");
+    expect(text).not.toContain("eklenecek");
   });
 
   /**

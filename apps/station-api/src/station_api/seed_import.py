@@ -20,8 +20,9 @@ from __future__ import annotations
 
 import re
 
-#: An official seed is 32 bytes written as 64 hex characters.
-OFFICIAL_SEED_HEX_LENGTH = 64
+#: An official seed is 32 bytes written as 64 hex characters. The count is
+#: enforced by the two regexes below; a second spelling of 64 would only be
+#: a place for the two to drift apart.
 SEED_LENGTH = 32
 
 #: A seed file is tiny. Refuse anything that could be a pasted keystore.
@@ -75,7 +76,6 @@ def parse_official_seed(payload: bytes) -> bytes:
 
 __all__ = [
     "MAX_SEED_FILE_BYTES",
-    "OFFICIAL_SEED_HEX_LENGTH",
     "SEED_LENGTH",
     "SeedImportError",
     "parse_official_seed",

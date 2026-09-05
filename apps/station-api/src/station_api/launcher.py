@@ -180,7 +180,7 @@ def main() -> int:
         # from inside an upgrade. No explicit release here any more: the
         # ``finally`` below covers this return like every other exit.
         try:
-            engine = initialise_database(settings.database_path, stage=10)
+            engine = initialise_database(settings.database_path, stage=11)
         except SchemaAheadError as exc:
             print(exc, file=sys.stderr)
             return 5

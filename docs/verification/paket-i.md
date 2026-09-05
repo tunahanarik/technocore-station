@@ -351,7 +351,11 @@ bölündü ve kırmızıyı **depodan türetilen** yarı veriyor.
    dosyanın adı, boyutu ve mtime'ı çalıştırmadan önce ve sonra
    karşılaştırıldı, **birebir aynı**. Artefakt geçici bir `STATION_DATA_DIR`
    ile çalıştırıldı ve o dizin ölçümden sonra silindi.
-6. **Tarayıcı QA (Playwright)** bu turda koşturulmadı.
+6. **Tarayıcı QA (Playwright) koşuldu — ve eski hâli yanlıştı.** Bu madde
+   "koşturulmadı" diyordu; Paket J turunda
+   `npm --prefix apps/station-web run test:e2e` koşuldu ve **74/74 yeşil**
+   çıktı (48,4 sn, chromium). Kalan sınır aynı: suite **yerel harness'e karşı**
+   koşar, gerçek Technocore'a hiç çıkmaz.
 7. **Yeniden üretilebilirlik ölçüldü ve olumsuz çıktı.** Artık "denenmedi"
    değil: aynı kaynaktan arka arkaya alınan iki yapının exe boyutu aynı,
    **SHA-256'sı farklı** çıktı. PyInstaller çıktısı bit-bit yeniden

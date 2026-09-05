@@ -36,7 +36,6 @@ than leaving it to rot (ADR-0009 2).
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass
 
 from station_api.identity.write_gate import CheckState
@@ -187,16 +186,9 @@ def evaluate(state: TaskGateInput) -> TaskGateStatus:
     return TaskGateStatus(checks=tuple(checks))
 
 
-def refs_from(pairs: Iterable[EvidenceRef]) -> tuple[EvidenceRef, ...]:
-    """Latest reference per field, as a tuple the gate input accepts."""
-    latest: dict[EvidenceField, EvidenceRef] = {ref.field: ref for ref in pairs}
-    return tuple(latest[field] for field in EvidenceField if field in latest)
-
-
 __all__ = [
     "TaskCheck",
     "TaskGateInput",
     "TaskGateStatus",
     "evaluate",
-    "refs_from",
 ]

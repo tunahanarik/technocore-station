@@ -47,7 +47,6 @@ import {
   test as base,
   type APIRequestContext,
   type Page,
-  type TestInfo,
 } from "@playwright/test";
 
 import { readHandshake, sessionUrl, type Handshake } from "./harness/station";
@@ -312,8 +311,3 @@ export const SECTION_LABELS = [
   "Kanitlar",
   "Ayarlar ve Yardim",
 ] as const;
-
-/** Attach a body to the report so a failure is diagnosable without a rerun. */
-export async function attachJson(info: TestInfo, name: string, body: unknown): Promise<void> {
-  await info.attach(name, { body: JSON.stringify(body, null, 2), contentType: "application/json" });
-}

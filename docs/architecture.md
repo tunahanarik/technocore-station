@@ -100,7 +100,7 @@ station-web  ──HTTP(aynı origin)──▶  station-api  ──▶  technoco
 
 ### `apps/station-api`
 - Launcher, oturum ve CSRF yönetimi.
-- SQLite erişimi ve migration (`0001`…`0007`, tek head).
+- SQLite erişimi ve migration (`0001`…`0009`, tek head).
 - DPAPI vault, recovery, kanıt defteri ve HMAC audit zinciri.
 - Technocore HTTP istemcileri ve merkezî write gate.
 - Derleme zamanı modül registry'si ve görev katmanı.
@@ -226,15 +226,24 @@ sertleştirme başlıklarını taşır.
 - **Veritabanı yolu frontend'e dönmez.**
 - Migration: Alembic, `version_table="schema_migrations"`. Sıra
   `down_revision` zinciriyle **deterministik**, `upgrade head` **idempotent**.
-- Tablolar (`0001`…`0007`): `schema_migrations`, `app_metadata`, `identity`,
-  `secret_metadata`, `recovery_record`, `manifest_check`,
-  `official_source_snapshot`, `message_nonce_reservation`, `evidence_record`,
-  `audit_event`, `audit_chain_metadata`, `task_record`,
-  `task_evidence_outcome`, `task_state_transition`.
+- Tablolar, head `0009`'da **yirmi tanedir** — on dokuzunu migration'lar
+  yaratır, `schema_migrations` Alembic'in kendi sürüm tablosudur:
+  `schema_migrations`, `app_metadata`, `identity`, `secret_metadata`,
+  `recovery_record`, `manifest_check`, `official_source_snapshot`,
+  `message_nonce_reservation`, `evidence_record`, `audit_event`,
+  `audit_chain_metadata`, `task_record`, `task_evidence_outcome`,
+  `task_state_transition`, `opencode_catalog_check`,
+  `opencode_credential_metadata`, `opencode_model_snapshot`, `agent_run`,
+  `agent_run_step`, `activity_event`.
+  Bu liste Paket J'de **sayılarak** düzeltildi: `0001`…`0007` başlığı ile on
+  dört ad taşıyordu, `0008` ve `0009`'un altı tablosu hiç eklenmemişti.
 - **Hiçbir tabloda seed veya secret alanı yoktur.** Görev tablolarında bu
   denetim `key` parçasını da kapsar.
-- Migration `0007` yalnız ekleme yapar: hiçbir mevcut tablo adı, sütun veya
-  kayıt kimliği değişmedi.
+- `0007`, `0008` ve `0009` yalnız ekleme yapar: hiçbir mevcut tablo adı,
+  sütun veya kayıt kimliği değişmedi
+  (`test_module_registry.py::test_migration_0007_changed_no_existing_table`,
+  `::test_migration_0008_changed_no_existing_table`,
+  `test_agent_boundary.py::test_migration_0009_changed_no_existing_table`).
 
 ### Başlangıçta ne olur, ne olmaz
 
@@ -260,10 +269,19 @@ Bunların hiçbiri dışarıya istek göndermez: açılışta giden istek sayıs
   satırın varlığını denetler ve `verified` o gönderimin kendi sonucundan
   gelir. Alan `PUBLICATION_FIELDS`'e **girmedi** — yayımlamadan da bir görev
   tamamlanabilir (ADR-0004 §4, ADR-0009 §1).
-- **Bütçe.** Bütçe alanı açılmadı ve bütçe varmış gibi davranılmıyor;
-  erteleme [`task-modules.md`](task-modules.md) §6'da kayıtlıdır
-  (ADR-0004 §7).
+- **Bütçe — yalnız görev katmanında.** Görev kaydında bütçe alanı açılmadı
+  ve bütçe varmış gibi davranılmıyor; erteleme
+  [`task-modules.md`](task-modules.md) §6'da kayıtlıdır (ADR-0004 §7).
+  Bu, **agent koşusunun tavanıyla karıştırılmamalıdır**: onun ayrı ve
+  uygulanmış bir katmanı vardır (`agent/budget.py`, `RunCeiling` /
+  `check`), ve agent kendi tavanını yükseltemez (ADR-0008).
+
 - **Kanıt kaydı silme route'u.** ADR-0003 §7'nin bu yarısı ertelendi
   (IMP-329).
-- **Note lane, room explorer, çoklu DID, paketleme/installer.** Bkz.
+- ~~**Paketleme/installer.**~~ **Kapandı:** Paket I Windows paketlemesini
+  yaptı; ayrıntı [`packaging.md`](packaging.md) ve
+  [`verification/paket-i.md`](verification/paket-i.md) §12'dedir.
+  Artefakt **imzasızdır** ve SmartScreen uyarısı verir; bu kapanmış
+  değil, **kayıtlı bir sınırdır** (ADR-0010 §9).
+- **Note lane, room explorer, çoklu DID.** Bkz.
   [`../PROJECT_STATUS.md`](../PROJECT_STATUS.md).

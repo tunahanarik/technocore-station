@@ -204,8 +204,11 @@ export function SettingsHelpPage({ status }: SettingsHelpPageProps) {
         </Card.Header>
         <Card.Content>
           <p className="text-sm text-muted">
-            OpenCode Go baglantisi bu pakette acildi; kullanim kilavuzu Paket
-            J&apos;de eklenecek. Su an icin her bolum kendi aciklamasini tasir;
+            OpenCode Go baglantisi Paket G&apos;de acildi. Kullanim kilavuzu
+            artik yazildi ve depoda duruyor:{" "}
+            <code>docs/kullanim-kilavuzu.md</code>; kabul listesi{" "}
+            <code>docs/kullanici-kabul-listesi.md</code> dosyasindadir. Her
+            bolum ayrica kendi aciklamasini tasir;
             sorun bildirirken hata kutusundaki &quot;Tani bilgisini
             kopyala&quot; ciktisini kullanin. O cikti bilerek redaktedir:
             yalnizca hata kodu, HTTP durumu, hata sinifi, istek kimligi, bolum

@@ -9,16 +9,29 @@ geçici kayıtlarını yerelde yeniden doğrulanabilir biçimde saklayan
 > Technocore imzayı doğrular; Station canonical metni, alınan kaydı ve
 > kaynağı doğrular.
 
-**Durum: Aşama 3 — Salt okunur Technocore tamamlandı.** Kimlik, recovery ve
-protokol uygunluk motoru çalışıyor; Station artık resmî kaynakları **yalnız
-okuyarak** protokol sürüklenmesini tespit ediyor. Mesaj yazma, imzalama ve
-Evidence özellikleri **henüz yoktur** — gönderim yolu Aşama 4'te açılır.
+**Durum: `CODE_COMPLETE_USER_ACCEPTANCE_PENDING`.** Kod tamamdır ve
+arayüzün dokuz bölümünün dokuzu da açıktır: kimlik ve recovery, salt okunur
+kaynak denetimi, besteci (canonical biçim, imza ve tek kullanımlık gönderim
+onayı), kanıt defteri ve audit zinciri, iş taraması, görev yüzeyi ve agent
+çalışma ortamı, aktivite kaydı, kanıt çalışma alanı ve OpenCode bağlantısı.
+**Bekleyen şey kullanıcı kabulüdür** ve o kabul kullanıcının kendi işidir:
+[`docs/kullanici-kabul-listesi.md`](docs/kullanici-kabul-listesi.md).
+
+Aynı ölçüde önemli olan, ürünün **yapmadıklarıdır**: bu depoda hiçbir gerçek
+Technocore write **hiç** yapılmadı, keyfi kod ve kabuk yürütmesi **kapalıdır**,
+model çağrısı **yoktur**, yayımlanmış bir artefakt **yoktur** ve insan
+güvenlik incelemesi **ertelenmiş bir kalan risktir** (ADR-0001 §5). Her
+bölümün kendi sınırı [`docs/kullanim-kilavuzu.md`](docs/kullanim-kilavuzu.md)
+içinde yazılıdır.
+
+Bu paragrafta bilerek aşama numarası yoktur: sayı taşımayan bir metin
+bayatlamaz. Aşama sayımı ve ayrıntılı durum tek kaynaktadır —
+[`PROJECT_STATUS.md`](PROJECT_STATUS.md).
 
 Uygunluk ile güncellik ayrı şeylerdir: uygunluk self-test'i bu yapının
 **pinlenmiş referans commit** ile aynı davrandığını gösterir; salt okunur
 denetim ise **canlı sunucunun** hâlâ o protokolü yayımladığını gösterir. İkisi
-de geçmeden dış yazma kapısı açılmaz. Güncel durum:
-[`PROJECT_STATUS.md`](PROJECT_STATUS.md).
+de geçmeden dış yazma kapısı açılmaz.
 
 Ürün bir wallet, token claim uygulaması, airdrop puanlayıcısı, otomatik mesaj
 botu veya kimlik sağlayıcısı **değildir**.
@@ -37,12 +50,23 @@ botu veya kimlik sağlayıcısı **değildir**.
 | [`docs/protocol-contract.md`](docs/protocol-contract.md) | Canonical/sweep/imza sözleşmesi |
 | [`docs/conformance.md`](docs/conformance.md) | Uygunluk motoru, self-test, CLI (Aşama 2B) |
 | [`docs/read-only-technocore.md`](docs/read-only-technocore.md) | Salt okunur istemci, kaynak registry'si ve drift modeli (Aşama 3) |
-| [`docs/security-invariants.md`](docs/security-invariants.md) | Test edilebilir değişmezler (SI-01…SI-56) |
+| [`docs/security-invariants.md`](docs/security-invariants.md) | Test edilebilir değişmezler — numaralandırılmış SI satırları; sayı burada tekrarlanmaz, tek kaynak belgenin kendisidir |
 | [`docs/evidence-model.md`](docs/evidence-model.md) | Dört seviyeli kanıt modeli |
 | [`docs/identity-lifecycle.md`](docs/identity-lifecycle.md) | Kimlik durum makinesi ve akışlar |
 | [`docs/recovery-format-v1.md`](docs/recovery-format-v1.md) | `.tcrec` biçimi ve AAD sözleşmesi |
 | [`docs/threat-model.md`](docs/threat-model.md) | Savunulan ve **savunulmayan** tehditler |
+| [`docs/task-modules.md`](docs/task-modules.md) | Görev/proje modülü temeli, durum makinesi ve dört ayrık alan |
+| [`docs/work-scan.md`](docs/work-scan.md) | İş taraması: salt okunur okuma yüzeyi ve sekiz öğeli aday |
+| [`docs/agent-runtime.md`](docs/agent-runtime.md) | Agent çalışma ortamı, araç registry'si, bütçe ve Activity Desk |
+| [`docs/proof-workspace.md`](docs/proof-workspace.md) | Kanıt çalışma alanı, tek kullanımlık paylaşım onayı |
+| [`docs/opencode-connection.md`](docs/opencode-connection.md) | OpenCode Go bağlantısı, sağlayıcı anahtarı ve model kataloğu |
+| [`docs/execution-plan.md`](docs/execution-plan.md) | Paket paket yürütme planı |
+| [`docs/ui-action-map.md`](docs/ui-action-map.md) | Her UI eyleminin çağırdığı rota ve hata davranışı |
+| [`docs/browser-qa.md`](docs/browser-qa.md) | Tarayıcı testleri: ne test edilir, ne **edilmez** |
 | [`docs/packaging.md`](docs/packaging.md) | Windows paketleme, kurulum/kaldırma, SHA-256 ve **imzasızlık** |
+| [`docs/kullanim-kilavuzu.md`](docs/kullanim-kilavuzu.md) | **Kullanım kılavuzu** — dokuz bölüm, kurulum, recovery zorunluluğu, kaldırma |
+| [`docs/kullanici-kabul-listesi.md`](docs/kullanici-kabul-listesi.md) | **Kullanıcı kabul listesi** — otomatik testlerin ölçemediği maddeler |
+| [`docs/verification/`](docs/verification/) | Paket paket doğrulama raporları; **sayıların tek kaynağı** |
 | [`docs/decisions/README.md`](docs/decisions/README.md) | ADR indeksi |
 
 ---
@@ -127,6 +151,9 @@ yolunu söyler), sonra `127.0.0.1:0` adresine bind eder, işletim sisteminden
 token'ı üretir ve tarayıcıyı açar. Token loglanmaz. Tarayıcı `/session/<token>` adresini bir
 kez kullanır, `HttpOnly` + `SameSite=Strict` cookie alır ve temiz `/` adresine
 yönlenir.
+
+İlk açılış, kimlik ve recovery zorunluluğu, dokuz bölümün her biri ve
+kaldırma: [`docs/kullanim-kilavuzu.md`](docs/kullanim-kilavuzu.md).
 
 ### Development
 
