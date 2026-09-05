@@ -292,7 +292,7 @@ def engine(settings: Settings) -> Engine:
     # The same stage the launcher stamps. A test database that describes
     # itself as an older build than the one under test is a small lie, and
     # the kind that goes unnoticed precisely because nothing reads it back.
-    return initialise_database(settings.database_path, stage=9)
+    return initialise_database(settings.database_path, stage=10)
 
 
 @pytest.fixture

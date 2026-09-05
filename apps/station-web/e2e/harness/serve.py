@@ -37,11 +37,12 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI
 
-from station_api.app import DEFAULT_WEB_DIST, create_app
+from station_api.app import create_app
 from station_api.config import LOOPBACK_HOST, load_settings
 from station_api.db.migrations_runner import initialise_database
 from station_api.launcher import reserve_loopback_socket
 from station_api.logging_setup import configure_logging
+from station_api.resources import shipped_web_dist
 
 #: How often the token watcher looks for a request. Small enough that a test
 #: never notices, large enough not to spin a core.
@@ -107,10 +108,17 @@ def main() -> int:
     if settings.dev_mode:
         raise SystemExit("browser tests run the production path; STATION_DEV must be off")
 
-    engine = initialise_database(settings.database_path, stage=9)
+    engine = initialise_database(settings.database_path, stage=10)
     sock, port = reserve_loopback_socket(settings)
 
-    app = create_app(settings=settings, port=port, engine=engine, web_dist=DEFAULT_WEB_DIST)
+    # The same resolution the launcher uses, asked for once so the handshake
+    # can report the directory the browser suite is actually being served
+    # (ADR-0010 1: the SPA location is derived, never an environment value).
+    web_dist = shipped_web_dist()
+    if web_dist is None:  # pragma: no cover - the harness always runs in a checkout
+        raise SystemExit("this build ships no SPA; run: npm --prefix apps/station-web run build")
+
+    app = create_app(settings=settings, port=port, engine=engine, web_dist=web_dist)
 
     token_dir = Path(os.environ["STATION_E2E_TOKEN_DIR"])
     stop = threading.Event()
@@ -126,7 +134,7 @@ def main() -> int:
         "port": port,
         "data_dir": str(settings.data_dir.resolve()),
         "database_path": str(settings.database_path.resolve()),
-        "web_dist": str(DEFAULT_WEB_DIST.resolve()),
+        "web_dist": str(web_dist.resolve()),
         "pid": os.getpid(),
     }
     # Same write-then-rename discipline: the Node side polls for this file and

@@ -42,6 +42,7 @@ botu veya kimlik sağlayıcısı **değildir**.
 | [`docs/identity-lifecycle.md`](docs/identity-lifecycle.md) | Kimlik durum makinesi ve akışlar |
 | [`docs/recovery-format-v1.md`](docs/recovery-format-v1.md) | `.tcrec` biçimi ve AAD sözleşmesi |
 | [`docs/threat-model.md`](docs/threat-model.md) | Savunulan ve **savunulmayan** tehditler |
+| [`docs/packaging.md`](docs/packaging.md) | Windows paketleme, kurulum/kaldırma, SHA-256 ve **imzasızlık** |
 | [`docs/decisions/README.md`](docs/decisions/README.md) | ADR indeksi |
 
 ---
@@ -69,7 +70,47 @@ uv sync --project apps/station-api
 npm --prefix apps/station-web install
 ```
 
-## Çalıştırma
+## Paketlenmiş kurulum (Windows)
+
+Son kullanıcı için hedeflenen biçim bir **ZIP**'tir:
+`%LOCALAPPDATA%\Programs\TechnocoreStation\` altına açılır, yönetici hakkı
+istemez, yalnız loopback dinler. Ayrıntı, kaldırma talimatı ve SHA-256
+doğrulaması: [`docs/packaging.md`](docs/packaging.md).
+
+**Bugün yayımlanmış bir artefakt yoktur.** Paketleyici **PyInstaller**'dır ve
+artık bu deponun **kilitli bir geliştirme bağımlılığıdır**
+(`apps/station-api/pyproject.toml` `dev` grubunda `pyinstaller==6.16.0`,
+`apps/station-api/uv.lock` içinde kilitli — lisans ve gerekçe aşağıdaki
+bağımlılık tablosundadır). Çalışma zamanı bağımlılık yüzeyine girmez:
+yalnız build zamanı çalışır.
+
+Yani `uv sync --project apps/station-api` yapmış bir makinede ön koşulların
+üçü de sağlanmıştır. Build betiği bunu kendisi raporlar:
+
+```bash
+uv run --project apps/station-api python packaging/build_bundle.py --check
+```
+
+```
+[OK  ] spec: ...\packaging\station.spec
+[OK  ] frontend-build: ...\apps\station-web\dist
+[OK  ] pyinstaller: PyInstaller 6.16.0
+```
+
+Arayüz derlenmemişse ikinci satır `[EKSIK]` olur ve betik **2** ile çıkar;
+hiçbir şey üretmez.
+
+Kaldırma **yalnız program dizinini** siler. Veri dizini
+(`%LOCALAPPDATA%\TechnocoreStation\`) **elle bile olsa dikkatle** silinir:
+içinde seed'in DPAPI zarfı, denetim zincirinin anahtarı ve kanıt kayıtları
+vardır ve `.tcrec` recovery dosyanız yoksa geri dönüş yoktur.
+
+Artefakt **imzasızdır**. Windows SmartScreen imzasız bir indirmeyi uyarır; bu
+beklenen davranıştır. Yayımlanan SHA-256 yalnız dosya bütünlüğünü tanımlar —
+içeriğin doğru olduğunu, ve imzasız olduğu için **kimin ürettiğini** de
+kanıtlamaz.
+
+## Çalıştırma (kaynaktan)
 
 ```bash
 npm --prefix apps/station-web run build
@@ -79,9 +120,11 @@ npm --prefix apps/station-web run build
 uv run --project apps/station-api python -m station_api
 ```
 
-Launcher `127.0.0.1:0` adresine bind eder, işletim sisteminden **efemer** bir
-port alır, bellekte **tek kullanımlık 30 saniyelik** bir açılış token'ı üretir
-ve tarayıcıyı açar. Token loglanmaz. Tarayıcı `/session/<token>` adresini bir
+Launcher önce veri dizini için **tek örnek kilidini** alır (ikinci bir kopya
+aynı veritabanını ve aynı denetim zincirini açmaz; ret, silinecek dosyanın
+yolunu söyler), sonra `127.0.0.1:0` adresine bind eder, işletim sisteminden
+**efemer** bir port alır, bellekte **tek kullanımlık 30 saniyelik** bir açılış
+token'ı üretir ve tarayıcıyı açar. Token loglanmaz. Tarayıcı `/session/<token>` adresini bir
 kez kullanır, `HttpOnly` + `SameSite=Strict` cookie alır ve temiz `/` adresine
 yönlenir.
 
@@ -176,7 +219,7 @@ Bağımlılıklar minimumda tutulur. Her doğrudan bağımlılığın gerekçesi
 | `httpx` | BSD-3 | **Aşama 3.** Salt okunur Technocore istemcisi; faz bazlı timeout, redirect kapatma ve streaming (decompress edilmiş bayt üzerinde boyut sınırı) doğrudan desteklenir. Tek giden istek yolunda bunları elle yazmak yerine kütüphaneden almak tercih edildi. |
 
 **Test ve geliştirme:** `pytest`, `hypothesis` (sweep property testleri),
-`httpx` (gerçek loopback istemcisi), `pynacl`, `ruff`, `mypy`.
+`httpx` (gerçek loopback istemcisi), `pynacl`, `ruff`, `mypy`, `pyinstaller`.
 
 | Paket | Lisans | Gerekçe |
 |---|---|---|
@@ -185,6 +228,16 @@ Bağımlılıklar minimumda tutulur. Her doğrudan bağımlılığın gerekçesi
 | `pynacl` | Apache-2.0 | **Yalnız test.** AC-05 için bağımsız bir Ed25519 uygulaması (libsodium): imzayı üreten kütüphanenin kendi çıktısını doğrulaması kanıt sayılmaz. Production import grafiğine girmediği testle doğrulanır. |
 
 Künye §11.2 gereği başka kripto kütüphanesi gerekçesiz eklenmez.
+
+### Paketleme (yalnız build zamanı)
+
+| Paket | Lisans | Gerekçe |
+|---|---|---|
+| `pyinstaller` **6.16.0** | **GPL-2.0-or-later WITH Bootloader-exception** (kurulu paketten okundu: `pyinstaller-6.16.0.dist-info/licenses/COPYING.txt` ve `METADATA`) | **Yalnız build zamanı.** Windows paketini üretir (ADR-0010 §2). Alternatifler ölçülerek elendi: **MSIX** imza zorunlu ve bu makinede kod imzalama sertifikası yok; **`onefile`** her çalıştırmada `%TEMP%\_MEIxxxx`'e açar ve ürünün bugün `%TEMP%`'e hiç yazmama özelliğini bozar; **uv + `.bat`** son kullanıcıya uv ve ağ dayatır; **Tauri** Rust toolchain + WebView2 ister ve ADR-019 ertelemiştir. **Artefaktın çalışma zamanı bağımlılık yüzeyini değiştirmez:** paketleyicinin kendisi bundle'a girmez. Gönderilen exe'de PyInstaller'ın **yalnız** derlenmiş bootloader'ı, `PyInstaller/loader` modülleri (`pyiboot01_bootstrap`, `pyimod01_archive`, `pyimod02_importers`) ve dört run-time hook'u bulunur (bir tane daha `pyinstaller-hooks-contrib`'den gelir); her üç kategori de exe'nin baytlarında ölçüldü. Okunan lisans metni bunu açıkça karşılar: *Bootloader Exception*, derlenmiş bootloader'ı ve ilgili dosyaları başka programlarla birleştirip **o dosyaların kullanımından doğan hiçbir kısıt olmadan** dağıtma izni verir (GPL kısıtları yalnız bu dosyaların **değiştirilmesi** ve birleşik çalıştırılabilire **bağlanmadan** dağıtılması için sürer); run-time hook'lar ise `COPYING.txt`'de ayrıca **Apache-2.0** olarak lisanslanmıştır. Dolayısıyla paketlenen çıktının lisansı etkilenmez ve **kendi kodumuz MIT kalır**. Sürüm `uv.lock` disiplinine uygun olarak **tam pinlidir** (`==`, aralık değil): bir paketleyicinin ürettiği baytlar artefaktın parçasıdır. |
+
+Geçişli olarak `altgraph` (MIT), `pefile` (MIT), `pywin32-ctypes` (BSD-3),
+`setuptools` (MIT) ve `pyinstaller-hooks-contrib` (Apache-2.0 / GPL-2.0)
+gelir; hepsi aynı şekilde yalnız build zamanı çalışır.
 
 ### Frontend (MIT)
 

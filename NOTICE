@@ -8,7 +8,9 @@ LICENSE MAP
 ================================================================================
 
 The following table states, per directory, which license applies. There is no
-other third-party source vendored into this repository.
+other third-party source vendored into this repository. The DISTRIBUTED
+WINDOWS BUNDLE is a different question and is answered further down, under
+"packaging/artifacts/".
 
   PATH                          LICENSE       COPYRIGHT
   ----------------------------  ------------  --------------------------------
@@ -50,3 +52,35 @@ Boundary rules:
   * They are NOT included in any distributable installation package.
   * Apache-2.0 implementation lines are NOT copied into our MIT-licensed code;
     packages/technocore-conform/ implements the specification independently.
+
+================================================================================
+packaging/artifacts/ -- the distributed Windows bundle
+================================================================================
+
+Nothing under packaging/artifacts/ is tracked in this repository; it is
+produced by packaging/build_bundle.py and ignored by .gitignore. It is
+recorded here because it is the only thing users receive, and it carries code
+this repository does not contain.
+
+Besides this project's MIT code, the bundle embeds:
+
+  * CPython and its standard library      -- PSF License
+  * this project's runtime dependencies   -- see README.md dependency table
+  * PyInstaller's compiled bootloader and
+    its PyInstaller/loader modules        -- GPL-2.0-or-later
+                                             WITH Bootloader-exception
+  * PyInstaller run-time hooks
+    (PyInstaller/hooks/rthooks, and one
+    from pyinstaller-hooks-contrib)       -- Apache-2.0
+
+PyInstaller's COPYING.txt grants, under the heading "Bootloader Exception",
+unlimited permission to link or embed the compiled bootloader and related
+files into combinations with other programs and to distribute those
+combinations "without any restriction coming from the use of those files";
+its GPL terms continue to cover modification of those files and their
+distribution when not linked into a combined executable. The run-time hooks
+are separately licensed Apache-2.0 by the same file. Neither places this
+project's own code under the GPL: Technocore Station remains MIT.
+
+vendor/technocore-reference/ is NOT in the bundle. It is a test oracle only.
+

@@ -747,6 +747,186 @@ sırası, `SHARE_TOKEN_TTL_SECONDS`) o inceleme sırasında **sıfır** kırmız
 veriyordu, ve o üç satır bu tablonun neden mutasyonla yazıldığının kendi
 kanıtıdır: bir guard'ın var olması, onun ölçülmüş olması demek değildir.
 
+
+---
+
+## 9l. Paket I değişmezleri — Windows paketleme (uygulandı)
+
+Kapsam kararları [`decisions/0010-paket-i-kapsam-kararlari-2026-09-05.md`](decisions/0010-paket-i-kapsam-kararlari-2026-09-05.md);
+uygulama ayrıntısı [`packaging.md`](packaging.md).
+
+### SI-02 ve SI-232 neden **güncellendi**, silinmedi
+
+**SI-02** ("bind adresi asla `0.0.0.0` değildir") doğruydu ama **kapsamı**
+dardı: taraması yalnız `apps/station-api/src` altındaki `.py` dosyalarını
+okuyordu. Paket I bu depoya `.spec` uzantılı ilk dosyayı getirdi, yani
+kuralın kapsaması gereken dosya türü tam olarak bu pakette ortaya çıktı.
+Tarama `packaging/` ağacına, on beş uzantıya ve `.github/workflows` altına
+genişletildi; iddia zayıflatılmadı, **büyütüldü**.
+
+**SI-232** (bir sürüm, bir aşama numarası) beş giriş noktasını
+`CURRENT_SCHEMA_STAGE` ile denetlemeye devam ediyor; değer `9 → 10` olarak
+atomik biçimde taşındı. `CURRENT_MIGRATION_HEAD` **`0009`'da kaldı**: Paket
+I şemaya dokunmadı.
+
+| ID | Değişmez | Beklenen | Test | Durum |
+|---|---|---|---|---|
+| SI-314 | Paketlenmiş bir çalıştırma **"Arayuz derlenmemis" 503'ünü üretemez**; ret iki bağımsız katmandadır | donmuş süreçte SPA'sı olmayan bir paket için `shipped_web_dist()` **`PackagedLayoutError`** yükseltir, ve `_mount_spa` açıkça verilen boş bir dizini de reddeder; aynı boş dizin **donmamış** bir çalışmada hâlâ 503 sayfasını ve `npm ... run build` komutunu verir | `test_packaging_boundary.py::test_a_frozen_run_with_no_spa_refuses_instead_of_serving_the_no_build_page`, `::test_a_frozen_run_serves_the_spa_the_bundle_carries`, `::test_a_development_checkout_still_gets_the_no_build_page` | I |
+| SI-315 | Ürün yolları **`__file__` dizin sayımıyla** değil, `importlib.resources` ve donmuş dalda `sys._MEIPASS` ile çözülür | `app.py` ve `db/migrations_runner.py` içinde `Path(__file__)` **geçmez**; donmuş bir çalışmada migration ağacı `sys._MEIPASS/station_api/db/migrations`'tır ve Alembic `script_location`'ı odur; ağaç yoksa `PackagedLayoutError` | `test_packaging_boundary.py::test_the_resolver_no_longer_counts_directories_from_dunder_file`, `::test_a_frozen_run_finds_the_migration_tree_in_the_bundle`, `::test_a_frozen_run_with_no_migration_tree_refuses_in_words` | I |
+| SI-316 | Arayüzün yeri **ortam değişkeninden okunmaz** (`LOOPBACK_HOST` ile aynı gerekçe: CSP `'self'` altında keyfi JS servis etmenin yolu) | `resources.py` içinde `os.environ`, `getenv` ve `import os` **yok**; `STATION_WEB_DIST`/`STATION_DIST`/`STATION_SPA_DIR` ayarlandığında çözülen yol **değişmez** | `test_packaging_boundary.py::test_no_path_in_the_resolver_is_read_from_the_environment` | I |
+| SI-317 | `0.0.0.0` taraması **paketleme ağacını ve CI workflow'larını** kapsar | tarama `SCANNED_TREES`'in **beş** ağacının her birinden dosya açar ve bu **listeden okunarak** denetlenir; ayrıca yürütme taramasının açtığı her `.py`'yi ve diskteki her workflow dosyasını açtığı, **listeden değil depodan türetilen** bir beklentiyle ölçülür (bağımsız inceleme: elle sayılmış iki ağaç sabitleniyordu ve diğer ikisi listeden düşürüldüğünde **sıfır kırmızı** çıkıyordu); ekili bir ihlal `.spec`, `.ps1`, `.bat`, `.iss` ve `.yml` uzantılarının **her birinde** ayrı ayrı raporlanır | `test_bind.py::test_no_wildcard_bind_in_source`, `::test_the_wildcard_scan_opens_every_tree_it_claims_to_open`, `::test_the_wildcard_scan_covers_everything_the_execution_scan_covers`, `::test_the_wildcard_scan_reports_a_planted_violation` | I |
+| SI-318 | `subprocess`/`exec`/`eval`/`os.system` yasağı **ürün geneline** uygulanır; iki modül yalnız **`ctypes` sembolünden** muaftır, dosyadan değil | taramanın kapsamı **depodan türetilerek** denetlenir: `tests/` ve `vendor/` dışındaki **her** `.py` taramanın içindedir ve bu iki istisnanın gerekçesi yazılıdır; ayrıca listedeki dört ağacın her birinin fiilen katkı verdiği ölçülür. Muafiyet **sembol bazlıdır**: `dpapi.py` ve `windows_acl.py` yalnızca `ctypes`'ı kaybeder, `EXECUTION_IMPORTS`'un geri kalanı onlarda da uygulanır. Ekili `subprocess`/`multiprocessing`/`ctypes`/`runpy` import'u ve ekili `exec`/`eval`/`os.system`/`os.popen`/**`subprocess.Popen`**/**`check_output`**/**`os.startfile`**/**`os.execv`** çağrısı raporlanır; `dpapi.py` ve `windows_acl.py` gerçekten `ctypes` kullanır ve `CreateProcess`/`ShellExecute`/`WinExec` adlarını **taşımaz**; `importlib.resources` rahat bırakılır | `test_packaging_boundary.py::test_no_product_source_runs_a_program`, `::test_no_python_file_in_this_repository_escapes_the_execution_scan`, `::test_every_named_tree_actually_contributes_to_the_execution_scan`, `::test_the_ctypes_exemption_subtracts_one_symbol_and_not_the_whole_ban`, `::test_the_attribute_ban_names_the_process_starting_entry_points`, `::test_the_two_ctypes_modules_exist_and_start_no_process`, `::test_the_execution_import_scan_reports_a_planted_import`, `::test_the_execution_name_scan_reports_a_planted_call`, `::test_the_execution_scan_leaves_the_products_real_imports_alone` | I |
+| SI-319 | Gönderilen SPA, denetlenen `dist` ile **bayt-birebir** aynıdır | spec'in kopyaladığı kaynak `apps/station-web/dist`, hedefi `BUNDLED_WEB_DIR`'dir; paket üretilmişse ağaçların dosya-başına SHA-256 haritaları **eşittir**; paket varken SPA'sı beklenen yerde değilse test **kırmızıdır**; karşılaştırma tek baytlık farkta **hangi dosya** olduğunu adıyla raporlar | `test_frontend_bundle.py::test_the_packaging_spec_ships_the_audited_dist_and_nothing_else`, `::test_the_shipped_spa_is_byte_for_byte_the_audited_dist`, `::test_the_byte_identity_comparison_reports_a_single_changed_byte` | I |
+| SI-320 | Paket **`onedir`**'dir ve `%TEMP%`'e açılmaz; **konsol görünür kalır** | spec `COLLECT` ile biter ve `exclude_binaries=True` taşır; yorum satırları çıkarıldığında spec kodunda `onefile` ve `TEMP` **geçmez**; `console=True`'dur, `console=False`/`noconsole`/`--windowed` yoktur; `codesign_identity=None`'dır | `test_packaging_boundary.py::test_the_spec_is_onedir_and_not_onefile`, `::test_the_spec_keeps_the_console`, `::test_the_spec_names_no_signing_identity`, `::test_the_spec_carries_the_migration_tree_and_the_pinned_vectors`, `::test_the_spec_excludes_the_test_only_signature_library` | I |
+| SI-321 | Bir veri dizinini aynı anda **tek** Station açar; ret bir cümledir ve **silinecek dosyayı adıyla** söyler | ilk kilit tutulurken ikinci `acquire` `AlreadyRunningError`; mesaj kilit dosyasının tam yolunu ve "sil" fiilini taşır; kilit **veri dizinindedir**, `%TEMP%`'te değil; iki farklı veri dizini birbirini engellemez; bırakma **idempotenttir**; kilit dosyası pid ve zaman damgası dışında hiçbir şey taşımaz; launcher kilidi **veritabanını açmadan önce** alır ve `finally` ile bırakır | `test_packaging_boundary.py::test_a_second_instance_is_refused_while_the_first_holds_the_lock`, `::test_the_refusal_names_the_file_to_delete`, `::test_releasing_the_lock_lets_the_next_start_succeed`, `::test_two_data_directories_do_not_block_each_other`, `::test_the_lock_file_carries_no_secret`, `::test_the_lock_lives_in_the_data_directory_and_not_in_temp`, `::test_releasing_twice_is_not_an_error`, `::test_the_launcher_claims_the_lock_before_it_opens_the_database`, `::test_the_launcher_releases_the_lock_when_the_server_stops` | I |
+| SI-322 | **Satır taşıyan** eski bir şema yükselir ve satırlarını korur; **daha yeni** bir şemayı açan eski kod **anlaşılır biçimde** reddeder | `0007` şemasına yazılan kimlik, görev ve metadata satırları `0009`'a yükseltildikten sonra **değer değer** aynıdır ve revizyon `0009`'dur; tanınmayan bir revizyonla işaretli veritabanı `SchemaAheadError` alır, mesaj revizyonu adıyla ve verinin **değiştirilmediğini** söyler, damga **el değmemiş** kalır; boş ve bilinen revizyonlar yanlışlıkla "ileride" sayılmaz | `test_database.py::test_an_upgrade_from_an_older_release_keeps_the_rows_it_found`, `::test_a_database_from_a_newer_build_is_refused_in_words`, `::test_a_database_at_a_known_revision_is_not_mistaken_for_a_newer_one` | I |
+| SI-323 | Yayımlanan artefakt özeti **düz SHA-256**'dır (kullanıcı `Get-FileHash` ile doğrulayabilir) ve yanında **imzasızlık cümlesi** vardır | `file_digest` değeri `hashlib.sha256(bayt)` ile birebir eşittir ve alan-ayrılmış digest'e **eşit değildir**; build betiği "yalnızca dosya bütünlüğünü tanımlar", "IMZASIZDIR" ve "kimin urettigini de kanitlamaz" cümlelerini taşır; SmartScreen **beklenen** olarak anılır ve **"kapatın" demez**; ikinci bir hash yardımcısı yoktur (`hashlib` build betiğinde geçmez) | `test_packaging_boundary.py::test_the_artefact_digest_is_the_plain_sha256_a_user_can_reproduce`, `::test_the_build_script_publishes_the_unsigned_sentence`, `::test_the_build_script_reuses_the_products_own_digest_module` | I |
+| SI-324 | Build betiği **ön koşulunu dürüstçe raporlar** ve üretmediği bir artefaktı **üretti demez** | `--check` üç ön koşulu tek tek yazar ve çıkış kodu raporla **tutarlıdır** (hepsi OK → 0, biri EKSIK → 2); ön koşul eksikken build yolu çıkış kodu 2 ve `URETILMEDI` verir ve `packaging/artifacts` **oluşmaz** | `test_packaging_boundary.py::test_the_build_script_reports_every_precondition_and_agrees_with_its_exit_code`, `::test_the_build_script_never_claims_an_artefact_it_did_not_produce` | I |
+| SI-325 | Paketleme ağacındaki kaynak dosyalar **git'in içindedir**; PyInstaller'ın varsayılan çıktı adları bir **muafiyet** üretmez | `SHIPPED_TREES` `packaging/`'i kapsar, `SOURCE_SUFFIXES` `.spec`/`.ps1`/`.bat`/`.cmd`/`.iss`/`.nsi`/`.wxs`/`.psm1` taşır ve ağacın `.py` dışında da katkı verdiği ölçülür; `packaging/dist/helper.py`, `packaging/build/helper.py` ve `packaging/out/helper.py` git tarafından **gerçekten yok sayılır** fakat tarama tarafından **muaf tutulmaz** — üçü de ayrı ayrı sürülür. Bağımsız inceleme `dist`'in bu listede kaldığını ölçtü: PyInstaller'ın **varsayılan distpath**'i tam olarak odur, yani muafiyetin en olası hâle geldiği ad. Muaf dizinler tam yolla yazılır — `packaging/artifacts` (build çıktısı) ve `apps/station-web/dist` (SPA yapısı) — ve build betiğinin yazdığı yerin `packaging/artifacts` olduğu ayrıca denetlenir; depo kökündeki `packaging/` dizini kurulu `packaging` dağıtımını **gölgelemez** | `test_tracked_sources.py::test_every_shipped_source_file_is_tracked_by_git`, `::test_the_packaging_tree_contributes_files_and_not_only_python`, `::test_a_source_file_in_a_pyinstaller_default_output_directory_is_not_exempt`, `::test_the_only_exempt_packaging_directory_is_where_the_build_script_writes`, `test_packaging_boundary.py::test_the_repository_packaging_directory_does_not_shadow_the_distribution` | I |
+| SI-326 | Konsoldan yapılan **normal kapanış** — Ctrl+C **ve** Ctrl+Break — **çıkış kodu 0** verir, konsola çöküş metni basmaz ve tek örnek kilidini **bırakır** | `SHUTDOWN_SIGNALS` `SIGINT`, `SIGTERM` ve (Windows'ta) `SIGBREAK` taşır; `absorbing_shutdown_signals()` yalnız `uvicorn.Server.run` çevresinde kuruludur ve çıkışta bulduğu handler'ları **geri koyar**; uvicorn'un `capture_signals` davranışı birebir taklit edilerek sürülür — pencere içinde yeniden yükseltilen sinyal sürece ulaşmaz, pencere dışında **aynı** taklit `KeyboardInterrupt` üretir; gerçek bir çökme **hâlâ** yayılır ve kilit yine bırakılır; ana iş parçacığı dışında pencere sessizce no-op'tur | `test_packaging_boundary.py::test_the_absorbed_signal_set_covers_both_console_stop_keys`, `::test_a_re_raised_interrupt_inside_the_window_does_not_reach_the_process`, `::test_a_re_raised_break_inside_the_window_does_not_reach_the_process`, `::test_without_the_window_the_same_re_raise_is_a_keyboard_interrupt`, `::test_the_window_puts_back_the_handlers_it_found`, `::test_the_window_is_a_no_op_off_the_main_thread`, `::test_a_clean_stop_exits_zero_and_leaves_no_lock_behind`, `::test_a_break_stop_also_exits_zero_and_releases_the_lock`, `::test_a_real_crash_is_still_a_crash`, `::test_the_launcher_wraps_the_server_run_in_the_absorbing_window` | I |
+| SI-327 | `0.0.0.0` taramasının açtığı dosya kümesi **build durumundan bağımsızdır**: tarama **kaynağı** okur, üretilmiş kopyayı değil | tek muafiyet `packaging/artifacts` **tam yoludur**, dizin adı değil, ve `build_bundle.py`'nin yazdığı yerle aynı olduğu denetlenir (`test_tracked_sources.py`'nin muafiyetiyle **tek tanım**); `build`, `dist` ve `out` artık **ada göre atlanmaz**, üçünde de ekili bir `0.0.0.0` raporlanır; sentetik bir ağaçta bundle kopyaları atlanır ve kaynak okunur, ve atlanan kopyaların gerçekten okunabilir uzantılar taşıdığı ayrıca ölçülür; gerçek depoda taramanın açtığı **hiçbir** dosya çıktı dizininin içinde değildir | `test_bind.py::test_the_scan_reads_the_packaging_sources_and_not_the_bundle_beside_them`, `::test_the_bundle_the_scan_skips_really_did_contain_readable_files`, `::test_a_wildcard_in_a_pyinstaller_default_output_directory_is_still_reported`, `::test_no_file_the_real_scan_opens_lives_in_the_build_output_directory`, `::test_the_exempt_directory_is_the_one_the_build_script_writes_to` | I |
+| SI-328 | Tek örnek kilidi **başlatmanın tamamını** sarar: kilit alındıktan sonraki **hiçbir** hata onu geride bırakamaz | `lock = single_instance.acquire(...)`'dan hemen sonra açılan `try`, `initialise_database`, soket rezervi ve `create_app` çağrılarının **hepsini** içine alır ve `finally: lock.release()` ile kapanır; migration sırasındaki `KeyboardInterrupt`, soketin rezerve edilememesi ve `PackagedLayoutError` üçü de hatayı **kendisi olarak** yayar ve kilidi geride **bırakmaz**; `SchemaAheadError` dalı çıkış kodu 5 verir ve kilidi yine bırakır (elle `release()` çağrısı kaldırıldı, kaynakta `lock.release()` **bir kez** geçer) | `test_packaging_boundary.py::test_a_failure_during_start_up_does_not_strand_the_lock`, `::test_a_database_from_a_newer_build_still_releases_the_lock`, `::test_the_lock_release_covers_the_whole_start_up_and_not_only_the_server`, `::test_the_launcher_releases_the_lock_when_the_server_stops` | I |
+| SI-329 | Gönderilen arşiv **üretildiği makineyi adlandırmaz** ve derlenmiş bytecode taşımaz; **hangi iğnenin hangi üyelere uygulandığı testin koştuğu makineye bağlı değildir** | ZIP'te hiçbir `__pycache__` girdisi ve hiçbir `.pyc` yoktur (**arşivin tamamı**); **depo yolu** iğnesi — bu çalışma kopyasının mutlak yolu, iki ayraç yazımında — **arşivin tamamına** uygulanır, çünkü başka bir makinede derlenmiş bir ikili onu taşıyamaz; **hesap adı ve ev dizini** iğneleri yalnız `station.spec`'in **bizim ağaçlarımızdan kopyaladığı** üyelere uygulanır ve bu kapsam spec'in `*_TARGET` atamalarından **AST ile türetilir**, ada göre yazılmış bir muafiyet listesinden değil; kapsamın ne boş ne hayalî olduğu ayrıca denetlenir (üç önek, her biri arşivde en az bir gerçek üyeyle eşleşir); `station.spec` iki Python ağacını dizin olarak değil **dosya dosya** kopyalar ve önbellekleri dışarıda bırakır; üçüncü taraf ikililerin **kendi** derleme makinelerinin yolunu taşıdığı sessizce muaf tutulmaz, **iddia edilir**: başka bir makinenin yolunu taşıyan her üye derlenmiş bir ikilidir ve **asla** spec'in kopyaladığı bir dosya değildir. Tarama üç yönde de ekili sızıntıda kırmızıdır — bizim ağacımızdaki bir üyede, arşivin herhangi bir yerindeki depo yolunda, ve `runneradmin` **düz metin** olduğu için her makinede aynı sonucu veren üçüncü taraf sürüşünde. Paketleme workflow'u bu testi **build'den sonra** koşar, çünkü bundle yokken karşılaştıracak bir şey yoktur | `test_packaging_boundary.py::test_the_shipped_archive_names_no_developer_and_no_home_directory`, `::test_the_leak_scan_reports_a_planted_path`, `::test_the_copied_scope_is_read_off_the_spec_and_finds_real_members`, `::test_a_leak_in_a_copied_member_is_reported`, `::test_a_third_party_binarys_upstream_build_path_is_not_our_leak`, `::test_the_repository_path_is_refused_anywhere_in_the_archive`, `::test_the_third_party_binaries_carry_their_own_build_machine` | I |
+
+### Mutasyon kaydı (SI-314 … SI-325)
+
+Her satır **kaynak fiilen düzenlenerek**, hedef test dosyaları koşularak ve
+dosya geri yüklenerek ölçüldü. Taban: **0 kırmızı**; geri yükleme sonrası
+yine **0 kırmızı**.
+
+| Mutasyon | Ölçülen sonuç |
+|---|---|
+| `shipped_web_dist`'in donmuş dalındaki `raise` silindi | **1 kırmızı**: `test_a_frozen_run_with_no_spa_refuses_instead_of_serving_the_no_build_page` |
+| `_mount_spa`'nın donmuş reddi silindi | **1 kırmızı**: aynı test — iki katman **ayrı ayrı** öldürüyor |
+| `migrations_dir`'in donmuş dalındaki `raise` silindi | **1 kırmızı**: `test_a_frozen_run_with_no_migration_tree_refuses_in_words` |
+| Yol çözümü `Path(__file__).resolve().parents[4]`'e geri alındı | **1 kırmızı**: `test_the_resolver_no_longer_counts_directories_from_dunder_file` |
+| `run_migrations`'tan `guard_against_a_newer_schema` çağrısı silindi | **1 kırmızı**: `test_a_database_from_a_newer_build_is_refused_in_words` |
+| Kilit oluşturmadan `O_EXCL` çıkarıldı | **2 kırmızı**: `test_a_second_instance_is_refused_while_the_first_holds_the_lock`, `test_the_refusal_names_the_file_to_delete` |
+| Launcher kilidi **veritabanından sonra** aldı | **1 kırmızı**: `test_the_launcher_claims_the_lock_before_it_opens_the_database` |
+| Launcher'ın `finally: lock.release()` bloğu silindi | **1 kırmızı**: `test_the_launcher_releases_the_lock_when_the_server_stops` |
+| Spec'te `console=True` → `console=False` | **1 kırmızı**: `test_the_spec_keeps_the_console` |
+| Spec'in SPA kaynağı `dist` dışına yöneltildi | **1 kırmızı**: `test_the_packaging_spec_ships_the_audited_dist_and_nothing_else` |
+| Spec'ten `COLLECT` kaldırıldı (onefile) | **1 kırmızı**: `test_the_spec_is_onedir_and_not_onefile` |
+| Spec'e `0.0.0.0` literali ekildi | **1 kırmızı**: `test_no_wildcard_bind_in_source` — eski tarama **görmezdi** |
+| `packaging/build_bundle.py`'ye `import subprocess` ekildi | **1 kırmızı**: `test_no_product_source_runs_a_program` — eski tarama **görmezdi** |
+| `station_api/resources.py`'ye `import subprocess` ekildi | **2 kırmızı**: `test_no_product_source_runs_a_program`, `test_the_execution_scan_leaves_the_products_real_imports_alone` |
+| Üçüncü bir modül `ctypes` import etti | **1 kırmızı**: `test_no_product_source_runs_a_program` — allow-list gerçekten iki dosya |
+| `file_digest` alan-ayrılmış hâle getirildi | **1 kırmızı**: `test_the_artefact_digest_is_the_plain_sha256_a_user_can_reproduce` |
+| Bir giriş noktası `stage=9`'da bırakıldı | **1 kırmızı**: `test_every_entry_point_names_the_same_release_stage` |
+| `packaging/build/helper.py` ekildi (git yok sayıyor) | **2 kırmızı**: `test_every_shipped_source_file_is_tracked_by_git`, `test_the_tracking_scan_would_notice_a_missing_file` |
+| `packaging/extra.spec` ekildi (takip edilmeyen) | **2 kırmızı**: aynı iki test — yeni uzantı gerçekten taranıyor |
+| Build betiği ön koşul eksikken **çıkış kodu 0** verdi | **1 kırmızı**: `test_the_build_script_never_claims_an_artefact_it_did_not_produce` |
+
+**Yirmi mutasyonun yirmisi en az bir testi öldürdü.** Sıfır öldüren guard
+yok. İkisi (`.spec`'e ekilen `0.0.0.0`, `build_bundle.py`'ye ekilen
+`subprocess`) Paket I'dan **önce sıfır kırmızı** verirdi; ADR-0010 §3'ün
+ölçtüğü iki delik bunlardır.
+
+### Mutasyon kaydı (SI-326, SI-327) — kusur kapanış turu
+
+Aynı yöntem: kaynak fiilen düzenlendi, hedef test dosyası koşuldu, dosya geri
+yüklendi. Taban **0 kırmızı**, geri yükleme sonrası yine **0 kırmızı**.
+
+| Mutasyon | Ölçülen sonuç |
+|---|---|
+| `with absorbing_shutdown_signals():` ve `except KeyboardInterrupt` tümüyle kaldırıldı (kusur öncesi hâl) | **2 kırmızı**: `test_a_clean_stop_exits_zero_and_leaves_no_lock_behind`, `test_the_launcher_wraps_the_server_run_in_the_absorbing_window` — ayrıca **gerçek artefakt** üzerinde çıkış kodu `1`/`3`'e geri döndü |
+
+### Mutasyon kaydı (SI-317, SI-318, SI-325, SI-328, SI-329) — bağımsız inceleme turu
+
+Bağımsız bir düşman inceleme yirmi iki mutasyon yaptı ve **beşi sıfır kırmızı**
+verdi. Aşağıdaki satırların "önce" sütunu o ölçümün **yeniden üretilmiş**
+hâlidir: mutasyon uygulandı, ilgili test dosyaları **düzeltme öncesi** sürümle
+(`git show HEAD:...`) koşuldu, sonra düzeltilmiş sürümle koşuldu, sonra her
+şey geri yüklendi.
+
+| Mutasyon | Önce | Sonra |
+|---|---|---|
+| `packaging/dist/helper.py` ekildi (`import subprocess` + `subprocess.Popen`; git yok sayıyor) | **0 kırmızı** | **3 kırmızı**: `test_no_product_source_runs_a_program`, `test_every_shipped_source_file_is_tracked_by_git`, `test_the_tracking_scan_would_notice_a_missing_file` |
+| `vault/dpapi.py`'ye `import subprocess` + `subprocess.Popen` ekildi | **0 kırmızı** (ruff ve mypy de yeşildi) | **1 kırmızı**: `test_no_product_source_runs_a_program` |
+| `EXECUTION_SCANNED_TREES` dörtten ikiye indirildi | **0 kırmızı** | **1 kırmızı**: `test_no_python_file_in_this_repository_escapes_the_execution_scan` |
+| `test_bind.SCANNED_TREES`'ten `technocore-conform/src` ve `e2e/harness` düşürüldü | **0 kırmızı** | **1 kırmızı**: `test_the_wildcard_scan_covers_everything_the_execution_scan_covers` |
+| Kilit `finally`'si yalnız `Server.run`'ı sarıyordu (düzeltme öncesi `launcher.py`) | **4 kırmızı** (yeni testler) | **0 kırmızı** |
+| Gönderilen ZIP'te `__pycache__` (düzeltme öncesi `station.spec` ile üretilmiş artefakt) | **0 kırmızı** — böyle bir tarama yoktu | **1 kırmızı**: `test_the_shipped_archive_names_no_developer_and_no_home_directory`, 11 dosyayı **adıyla** raporladı |
+| Gönderilen SPA kopyasının son baytı çevrildi, paketleme workflow'unun **yeni** pytest adımı koşuldu | — | **1 kırmızı**: `test_the_shipped_spa_is_byte_for_byte_the_audited_dist`; bayt geri yüklendi, yeşil |
+| `subprocess.Popen` / `check_output` / `os.startfile` / `os.execv` ekildi (sentetik dosya) | **0 kırmızı** — `EXECUTION_ATTRIBUTES` yalnız küçük harf `popen` taşıyordu | dördü de raporlandı |
+| Workflow'un eski regex `PATH` filtresi, yeni iddianın altında | — | iddia **ateşlerdi**: gerçek bir Windows 11 kabuğunda filtre sonrası `uv` (`\.local\bin`) ve `python` (`WindowsApps`) hâlâ çözülüyordu |
+
+**Bir bulgu ölçülerek reddedildi.** İncelemenin F6 için önerdiği düzeltme —
+"guard'ı listeye bağla, `for tree in SCANNED_TREES: assert ...`" — **kendisi
+totolojiktir**: bu hâliyle yazıldı ve `EXECUTION_SCANNED_TREES` dörtten ikiye
+indirildiğinde **yine 0 kırmızı** verdi, çünkü döngü listeyle birlikte
+küçülüyor. Bir listeyi kendisiyle doğrulamak doğrulama değildir. Bu yüzden
+guard iki yarıya bölündü: listeyi gezen yarı (ölü girdiyi yakalar) ve
+**depoyu** gezen yarı (listeden düşürülmüş ağacı yakalar). Kırmızıyı veren
+ikincisidir.
+| `SHUTDOWN_SIGNALS`'tan `SIGBREAK` düşürüldü | **1 kırmızı**: `test_the_absorbed_signal_set_covers_both_console_stop_keys` |
+| `SHUTDOWN_SIGNALS`'tan `SIGINT` düşürüldü | **kırmızı** (çıkış kodu 2): aynı test, ve yeniden yükseltilen `KeyboardInterrupt` oturumu düşürüyor |
+| `absorb_shutdown_signal` `return None` yerine `raise KeyboardInterrupt` yaptı | **kırmızı** (çıkış kodu 2) |
+| `except KeyboardInterrupt` → `except Exception` | **1 kırmızı**: `test_a_real_crash_is_still_a_crash` — pencere bir çökmeyi sessiz başarıya çeviremez |
+| Pencere çıkışta handler'ları geri koymadı | **1 kırmızı**: `test_the_window_puts_back_the_handlers_it_found` |
+| `ARTIFACT_DIR` yanlış yazıldı (`artefacts`) | **3 kırmızı**: sentetik tarama, kopya sayacı ve muafiyet-yeri testi |
+| `_is_produced_copy` her zaman `False` | **2 kırmızı** |
+| `_is_produced_copy` her zaman `True` | **3 kırmızı**, aralarında `test_the_wildcard_scan_opens_the_packaging_tree` — boş tarama yakalanıyor |
+| `build`/`dist`/`out` yeniden **ada göre** atlandı | **1 kırmızı**: `test_a_wildcard_in_a_pyinstaller_default_output_directory_is_still_reported` |
+
+**On mutasyonun onu** en az bir testi öldürdü. İkisi (SIGINT düşürme,
+handler'ın kendisi yükseltme) oturumu `KeyboardInterrupt` ile düşürüyor;
+biri — `SIGBREAK` pencereden çıkarılıp Ctrl+Break testi koşturulursa —
+**test sürecini** CRT `abort()`'uyla sonlandırır. Üçü de tespittir ve ilgili
+testin docstring'inde bu açıkça yazılıdır, çünkü sessizce geçmekten farkı
+görülmelidir.
+
+### Mutasyon kaydı (SI-329) — makineye bağlılık turu
+
+Bu taramanın ilk sürümü **yerelde yeşil, CI'da kırmızıydı — aynı arşiv
+baytları için**. Sebep ölçüldü: iğnelerin hepsi `Path.home()`'dan geliyordu.
+Geliştirici makinesinde bu kendi hesabı, GitHub Actions runner'ında
+`runneradmin`, ve `cryptography` ile `pydantic-core`'un Windows
+wheel'lerini **upstream de** GitHub Actions'ta derliyor. Yerelde bulunan
+artefakt tarandı: tam **iki** üye `C:\Users\runneradmin` taşıyor —
+`_internal/cryptography/hazmat/bindings/_rust.pyd` ve
+`_internal/pydantic_core/_pydantic_core.cp312-win_amd64.pyd` — ve taşıdıkları
+şey `.cargo\registry\src\index.crates.io-<hash>\<crate>` biçiminde Rust panic
+konumları (openssl, pyo3, asn1, jiter, regex-automata ve yirmiden fazla
+crate). Arşivin **başka hiçbir** üyesi ne o dizeyi ne bu deponun mutlak
+yolunu taşıyor.
+
+CI koşulu yerelde birebir yeniden üretildi (`Path.home()` geçici olarak
+`C:\Users\runneradmin` yapıldı, gerçek arşiv tarandı): eski tarama **tam o
+iki dosyayı, tam o iki etiketle** (`account-name, home-directory`) raporladı;
+yeni tarama aynı koşulda **hesap iğneleri için 0**, **depo yolu iğnesi için
+0** verdi.
+
+| Mutasyon | Ölçülen sonuç |
+|---|---|
+| `_repository_needles` `{}` döndürdü | **1 kırmızı**: `test_the_repository_path_is_refused_anywhere_in_the_archive` |
+| `_leaking_entries`'in `within` süzgeci yok sayıldı (her zaman tüm arşiv) | **1 kırmızı**: `test_a_third_party_binarys_upstream_build_path_is_not_our_leak` |
+| `_spec_copied_prefixes` `()` döndürdü (kapsam boş) | **3 kırmızı**, aralarında `test_the_copied_scope_is_read_off_the_spec_and_finds_real_members` — kör geçiş yakalanıyor |
+| `BUNDLE_INTERNAL_DIR` `_internals` yazıldı (kapsam hayalî) | **1 kırmızı**: aynı test — önekler hiçbir gerçek üyeyle eşleşmiyor |
+| Kapsam yeniden bundle köküne genişletildi (**CI regresyonunun kendisi**) | **2 kırmızı**: `::test_a_third_party_binarys_upstream_build_path_is_not_our_leak`, `::test_the_third_party_binaries_carry_their_own_build_machine` — ikisi de `runneradmin`'i **düz metin** kullandığı için bu **her makinede** kırmızı |
+| `_build_account_needles` `{}` döndürdü | **2 kırmızı**: `::test_the_leak_scan_reports_a_planted_path`, `::test_a_leak_in_a_copied_member_is_reported` |
+| `_string_literals` `[]` döndürdü (spec okunamaz hâle geldi) | **4 kırmızı** |
+
+**Yedi mutasyonun yedisi** en az bir testi öldürdü. Ayrıca **gerçek
+artefaktın geçici bir kopyasına** üç ekim yapıldı ve üçü de kırmızı verdi:
+bizim ağacımızdaki bir `__pycache__/*.pyc` (bytecode yasağı), üçüncü taraf
+gibi adlandırılmış bir `.pyd` içinde **depo yolu** (arşiv geneli iğne), ve
+`station_web` altında ev dizini taşıyan bir dosya (kapsanmış hesap iğnesi).
+Kopya sonrasında silindi; gönderilen arşive dokunulmadı.
+
+### Kapsanmayan, ve iddia edilmeyen
+
+- ~~**Artefakt üretilmedi.**~~ **Artık üretildi ve çalıştırıldı.** Bu satır
+  PyInstaller depoya `dev` bağımlılığı olarak eklenmeden önce yazılmıştı ve
+  o zaman doğruydu; kayıt olarak duruyor, iddia olarak değil. SI-319'un
+  bayt-birebir karşılaştırması bugün **gerçek bir pakete karşı koşuyor**
+  ([`verification/paket-i.md`](verification/paket-i.md) §13).
+- **CI paketleme işi hiç çalıştırılmadı.** `packaging.yml` yazıldı ve YAML'i
+  ayrıştırıldı; GitHub Actions bu turda koşturulmadı.
+- **İmzalama doğrulanamaz.** Sertifika ve secret yok (ADR-0010 §9).
+- **`%LOCALAPPDATA%` dışına yazılmadığı** yalnız CI işinde denetlenir ve o
+  iş koşmadı; süreç içinde denetlenen şey kilidin veri dizininde olduğudur.
+
 ---
 
 ## 9b. Aşama 2B değişmezleri (uygulandı)

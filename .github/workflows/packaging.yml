@@ -1,0 +1,285 @@
+# Windows bundle verification (ADR-0010 10) - the fourth merge gate.
+#
+# THIS IS A GATE. It was not one when it was written, and the reason it has
+# become one is a single dependency decision, recorded rather than assumed:
+#
+#   PyInstaller is now a locked *development* dependency. It is in the `dev`
+#   group of apps/station-api/pyproject.toml and in apps/station-api/uv.lock
+#   (pyinstaller==6.16.0), so `uv sync --locked` installs it exactly the way
+#   the other three jobs install everything they use - from the lockfile
+#   only, with no cache. The step that used to `uv pip install` an unlocked
+#   package is gone, and with it the reason this workflow could not gate.
+#
+#   PyInstaller does NOT enter the artefact it produces. It runs at build
+#   time; what the bundle carries is CPython, this project's runtime
+#   dependencies, and PyInstaller's compiled bootloader and loader modules,
+#   which its COPYING.txt "Bootloader Exception" licenses for embedding and
+#   unrestricted distribution. The product's runtime dependency surface is
+#   unchanged. README.md's dependency table carries the row and the reason.
+#
+# It is a separate workflow rather than a fourth job inside quality.yml
+# because it is a different kind of check with a different cost: it builds
+# and then *runs* a frozen binary for up to 40 minutes, and a failure here
+# should read as "the bundle is broken", not as "the backend gates failed".
+# Its trigger, permissions, pinning and cache policy are quality.yml's.
+
+# What it verifies, and what it cannot
+# ------------------------------------
+# Verifies: the bundle builds on a clean windows-latest; its SHA-256; that it
+# runs with uv and Node removed from PATH (so nothing in it depends on a
+# developer toolchain); that it listens on 127.0.0.1 and on an ephemeral
+# port; that /api/health answers; that the protected status route refuses an
+# unauthenticated caller; that nothing was unpacked into %TEMP%; and that
+# every byte it wrote landed under the data directory it was given.
+#
+# Cannot verify, and does not claim to:
+#   * **A graceful stop.** This job kills the process, because a console
+#     control event needs a console a Start-Process child does not have. So
+#     it asserts the *stale* lock a kill leaves behind - the case
+#     docs/packaging.md 5 tells the user how to clear - and the release-on-
+#     exit path is asserted in-process by
+#     tests/security/test_packaging_boundary.py. A real graceful stop was
+#     measured by hand instead; docs/verification/paket-i.md 13 has the
+#     numbers, including the one that came out wrong.
+#   * **The stage number on /api/app/status.** That route requires a session,
+#     and a session requires the one-time bootstrap link the launcher opens
+#     in a browser and deliberately never logs (SI-07). Printing it for CI
+#     would put a live token in a public log. The stage is asserted in-process
+#     instead, by tests/security/test_module_registry.py.
+#   * **Code signing.** There is no certificate and no secret in this
+#     repository. ADR-0010 9 says the artefact is unsigned; this says the same
+#     thing about what CI can check.
+#
+# Same discipline as quality.yml: full-SHA action pins, no cache, no secrets.
+
+name: packaging
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One live run per ref; a newer push cancels the superseded run.
+  group: packaging-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bundle:
+    name: windows bundle
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout (runner-default git config, like a user machine)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.11.26"
+          enable-cache: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22" # README: Node.js 22+
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Sync backend environment from the lockfile only
+        # --locked fails the job if uv.lock is out of date with pyproject.toml.
+        # This is also what installs PyInstaller: it is in the locked `dev`
+        # group, so there is no unlocked install anywhere in this workflow.
+        run: uv sync --locked --project apps/station-api
+
+      - name: Install frontend dependencies from the lockfile only
+        run: npm ci --prefix apps/station-web
+
+      - name: Build the production frontend bundle
+        # The bundle ships this directory verbatim. The assertion that the
+        # shipped copy is byte-for-byte identical to it (ADR-0010 4) lives in
+        # tests/security/test_frontend_bundle.py, and that test can only make
+        # the comparison where a bundle exists - which is why this workflow
+        # runs it, after the build, below. It used to say the assertion
+        # happened without saying where: quality.yml runs pytest but builds no
+        # bundle, so the byte-identity check returned early there, and this
+        # job built the bundle and ran pytest zero times. The claim was true
+        # only on a developer machine that had just built both.
+        run: npm --prefix apps/station-web run build
+
+      - name: Confirm the packager came from the lockfile
+        # If this ever prints a version the lockfile does not name, the
+        # artefact was built by something nobody pinned.
+        run: uv run --project apps/station-api python -c "import PyInstaller; print(PyInstaller.__version__)"
+
+      - name: Build the bundle and publish its SHA-256
+        run: uv run --project apps/station-api python packaging/build_bundle.py
+
+      - name: Verify the artefact and record its digest
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem packaging/artifacts/*.zip | Select-Object -First 1
+          if (-not $zip) { throw "no archive was produced" }
+          $hash = (Get-FileHash -Algorithm SHA256 $zip.FullName).Hash
+          Write-Host "SHA-256 $hash  $($zip.Name)"
+          Write-Host "Bu ozet yalnizca dosya butunlugunu tanimlar. Artefakt imzasizdir."
+
+      - name: Audit the artefact that was just built
+        # The two suites whose assertions are about a produced bundle rather
+        # than about the source that produces it: the SPA is byte-for-byte
+        # the audited dist, and the archive carries no compiled bytecode and
+        # no path from the machine that built it. Both return early with no
+        # bundle on disk, so this is the only place they are ever exercised
+        # in their loaded state.
+        run: >
+          uv run --directory apps/station-api pytest -q -p no:warnings
+          ../../tests/security/test_frontend_bundle.py
+          ../../tests/security/test_packaging_boundary.py
+
+      - name: Run the artefact with uv and Node removed from PATH
+        shell: pwsh
+        run: |
+          # A clean-machine profile, approximated the only way a runner can:
+          # everything the developer toolchain put on PATH is taken back off,
+          # so a bundle that quietly depends on uv, python or node fails here.
+          #
+          # Driven by resolution, not by directory names. The previous version
+          # filtered PATH with the regex 'uv|node|nodejs|npm|hostedtoolcache|
+          # Python' and then asserted nothing, and the assertion is what
+          # showed the filter does not work: measured on a Windows 11 machine
+          # with the same toolchain, `uv` survived it (installed under
+          # `\.local\bin`, which the pattern does not match) and so did the
+          # `python` App Execution Alias under `WindowsApps`. A regex written
+          # against one image is a guess about the next one; asking the shell
+          # where a tool actually resolves is not.
+          #
+          # So: resolve each tool, drop the directory it resolved from, and
+          # resolve again until it is gone. Trailing backslashes are trimmed
+          # on both sides because PATH here really does carry `C:\Python313\`
+          # and `C:\Python313` as separate entries - comparing them literally
+          # removes one and leaves the other, which is how a strip that looks
+          # like it ran does nothing.
+          foreach ($tool in 'uv', 'uvx', 'python', 'python3', 'node', 'npm') {
+            for ($attempt = 0; $attempt -lt 20; $attempt++) {
+              $resolved = Get-Command $tool -CommandType Application -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+              if (-not $resolved) { break }
+              $dir = (Split-Path -Parent $resolved.Source).TrimEnd('\')
+              $env:PATH = ((($env:PATH -split ';') |
+                Where-Object { $_ -and $_.TrimEnd('\') -ne $dir }) -join ';')
+            }
+          }
+
+          # And then the claim itself, asserted rather than described. Without
+          # this the "clean profile" sentence in the header is unfalsifiable:
+          # a bundle quietly using the runner's python would pass, and the
+          # only thing the step would prove is that it ran.
+          foreach ($tool in 'uv', 'python', 'node') {
+            $resolved = Get-Command $tool -CommandType Application -ErrorAction SilentlyContinue
+            if ($resolved) {
+              throw "PATH stripping missed $tool ($($resolved.Source)); this job is not running on a clean profile, so it cannot say the bundle is self-contained"
+            }
+          }
+          Write-Host "clean profile: uv, python and node no longer resolve on PATH"
+
+          $dataDir = Join-Path $env:LOCALAPPDATA 'TechnocoreStationCI'
+          $env:STATION_DATA_DIR = $dataDir
+          $env:STATION_DEV = ''
+
+          $tempBefore = (Get-ChildItem $env:TEMP -Directory -ErrorAction SilentlyContinue).Name
+
+          $exe = 'packaging/artifacts/bundle/TechnocoreStation/TechnocoreStation.exe'
+          $out = Join-Path $env:RUNNER_TEMP 'station-stdout.txt'
+          $err = Join-Path $env:RUNNER_TEMP 'station-stderr.txt'
+          $proc = Start-Process -FilePath $exe -PassThru `
+            -RedirectStandardOutput $out -RedirectStandardError $err
+
+          try {
+            # The console stays visible (ADR-0010 7), which is what makes the
+            # port readable here at all: the launcher logs the port it bound
+            # and never logs the one-time session link (SI-07).
+            $port = $null
+            foreach ($attempt in 1..60) {
+              Start-Sleep -Milliseconds 500
+              $text = (Get-Content $err, $out -ErrorAction SilentlyContinue) -join "`n"
+              if ($text -match 'loopback port (\d+)') { $port = [int]$Matches[1]; break }
+            }
+            if (-not $port) { throw "the application never reported a listening port" }
+            if ($port -le 1024) { throw "the port is not ephemeral: $port" }
+
+            # Measured rather than assumed, because the previous spelling had
+            # two readings and no way to tell them apart without running
+            # Actions. It is the first: with no matching row
+            # Get-NetTCPConnection raises a CimJobException whose text is
+            # "No matching MSFT_NetTCPConnection objects found ... Verify
+            # query parameters and retry" - and under pwsh's $ErrorAction-
+            # Preference = 'stop' that ends the job with a message about a
+            # CIM query rather than about a listening socket. Silenced and
+            # checked explicitly instead: an empty result is a real failure
+            # and now says so, and the array subexpression keeps a single row
+            # from being scalar. SI-01 is not left to a cmdlet's error
+            # preference either way.
+            $listening = @(
+              Get-NetTCPConnection -State Listen -OwningProcess $proc.Id -ErrorAction SilentlyContinue
+            )
+            if ($listening.Count -eq 0) {
+              throw "the process reported port $port but owns no listening socket, so the loopback assertion below would have checked nothing"
+            }
+            foreach ($row in $listening) {
+              if ($row.LocalAddress -ne '127.0.0.1' -and $row.LocalAddress -ne '::1') {
+                throw "listening on a non-loopback address: $($row.LocalAddress)"
+              }
+            }
+
+            $health = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$port/api/health"
+            if ($health.StatusCode -ne 200) { throw "health probe failed" }
+
+            # The protected route must refuse an unauthenticated caller. The
+            # stage number behind it needs a session and therefore the
+            # one-time link, which is never printed - see the header.
+            $status = 0
+            try {
+              Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$port/api/app/status" | Out-Null
+            } catch { $status = $_.Exception.Response.StatusCode.value__ }
+            if ($status -ne 401) { throw "the protected status route answered $status" }
+
+            # Nothing is unpacked into %TEMP%: onedir, not onefile
+            # (ADR-0010 2), so no _MEIxxxx directory appears.
+            $tempAfter = (Get-ChildItem $env:TEMP -Directory -ErrorAction SilentlyContinue).Name
+            $new = Compare-Object -ReferenceObject @($tempBefore) -DifferenceObject @($tempAfter) `
+              -PassThru | Where-Object { $_ -like '_MEI*' }
+            if ($new) { throw "the bundle unpacked into TEMP: $new" }
+
+            # The single-instance lock is held while it runs (ADR-0010 8).
+            if (-not (Test-Path (Join-Path $dataDir 'station.lock'))) {
+              throw "the running application holds no single-instance lock"
+            }
+          }
+          finally {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+          }
+
+          # Every file it wrote is under the data directory it was given.
+          if (-not (Test-Path (Join-Path $dataDir 'station.sqlite3'))) {
+            throw "the application wrote no database under STATION_DATA_DIR"
+          }
+
+          # The lock is deliberately NOT asserted to be gone here. Stop-Process
+          # -Force is a kill, not a shutdown: no `finally` runs, so the lock
+          # survives - which is exactly the stale-lock case the refusal message
+          # names a path for. A graceful stop needs a console this runner does
+          # not give a Start-Process child, so the release-on-exit path is
+          # asserted in-process instead, by
+          # tests/security/test_packaging_boundary.py::
+          # test_the_launcher_releases_the_lock_when_the_server_stops.
+          if (-not (Test-Path (Join-Path $dataDir 'station.lock'))) {
+            throw "a killed process cleared the lock; the stale-lock guidance is wrong"
+          }

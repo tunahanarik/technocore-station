@@ -31,6 +31,7 @@ from station_api.evidence.service import EvidenceService
 from station_api.identity.service import IdentityService
 from station_api.opencode.service import OpenCodeService
 from station_api.proof.service import ProofService
+from station_api.resources import PackagedLayoutError, is_frozen, shipped_web_dist
 from station_api.routes import agent as agent_routes
 from station_api.routes import api as api_routes
 from station_api.routes import compose as compose_routes
@@ -67,9 +68,17 @@ from station_api.workscan.service import WorkScanService
 
 _log = logging.getLogger(__name__)
 
-#: apps/station-api/src/station_api/app.py -> repo root
-REPO_ROOT = Path(__file__).resolve().parents[4]
-DEFAULT_WEB_DIST = REPO_ROOT / "apps" / "station-web" / "dist"
+#: Sentinel default for ``create_app``'s ``web_dist``: "serve whatever SPA
+#: this build actually ships with", resolved by
+#: :func:`station_api.resources.shipped_web_dist` at call time.
+#:
+#: A sentinel rather than a module constant because the answer depends on how
+#: the process was started, and a module constant is computed at import. The
+#: old ``DEFAULT_WEB_DIST`` was exactly that constant, and it was wrong
+#: everywhere except an editable install (ADR-0010 1). ``None`` still means
+#: "mount no SPA at all", which is what most tests pass, so a third value was
+#: needed rather than a second.
+SHIPPED_WEB_DIST: Path = Path("<shipped-spa>")
 
 _NO_BUILD_PAGE = (
     '<!doctype html><html lang="tr"><head><meta charset="utf-8">'
@@ -109,9 +118,24 @@ def _allowed_origins(port: int, settings: Settings) -> frozenset[str]:
 
 
 def _mount_spa(app: FastAPI, web_dist: Path) -> None:
-    """Serve the built SPA from this origin."""
+    """Serve the built SPA from this origin.
+
+    The frozen check here is the second half of ADR-0010 1's requirement and
+    it is deliberately not the same check as
+    :func:`~station_api.resources.shipped_web_dist`'s. That one refuses to
+    *resolve* a missing bundle; this one refuses to *mount* a directory that
+    has no ``index.html``, whoever chose it - so a packaged build cannot reach
+    the 503 page even by being handed an explicit ``web_dist``. Two
+    independent refusals, because one of them is the one somebody edits.
+    """
     index_html = web_dist / "index.html"
     assets_dir = web_dist / "assets"
+
+    if is_frozen() and not index_html.is_file():
+        raise PackagedLayoutError(
+            "Bu paket derlenmis arayuzu tasimiyor. Paket eksik uretilmis; "
+            "yeniden paketlenmesi gerekir."
+        )
 
     if assets_dir.is_dir():
         app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
@@ -187,7 +211,7 @@ def create_app(
     settings: Settings,
     port: int,
     engine: Engine | None = None,
-    web_dist: Path | None = DEFAULT_WEB_DIST,
+    web_dist: Path | None = SHIPPED_WEB_DIST,
     token_store: BootstrapTokenStore | None = None,
     conformance: ConformanceService | None = None,
     technocore: TechnocoreService | None = None,
@@ -399,8 +423,9 @@ def create_app(
     app.include_router(proof_routes.router)
 
     # Registered last so it cannot shadow /api or /session.
-    if web_dist is not None:
-        _mount_spa(app, web_dist)
+    resolved_dist = shipped_web_dist() if web_dist is SHIPPED_WEB_DIST else web_dist
+    if resolved_dist is not None:
+        _mount_spa(app, resolved_dist)
 
     # Starlette wraps the LAST added middleware outermost, so this block reads
     # innermost-first. Effective order: SecurityHeaders -> RequestId ->

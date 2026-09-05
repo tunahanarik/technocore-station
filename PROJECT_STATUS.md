@@ -2,8 +2,10 @@
 
 > Ana karar kaynağı: [`Technocore-Station-Proje-Kunyesi.md`](Technocore-Station-Proje-Kunyesi.md)
 > Çalışma kuralları: [`AGENTS.md`](AGENTS.md) · [`CLAUDE.md`](CLAUDE.md)
-> Son güncelleme: **5 Eylül 2026** (Aşama 10 / Paket H3 — kanıt çalışma
-> alanı: kanıt paketi, tek kullanımlık dış paylaşım onayı, kullanıcı kabulü)
+> Son güncelleme: **5 Eylül 2026** (Aşama 11 / Paket I — Windows paketleme:
+> yol çözümü, sınır taramalarının genişletilmesi, tek örnek kilidi;
+> **artefakt üretildi, çalıştırıldı ve ölçüldü**, paketleme CI'ı artık
+> dördüncü kapı)
 
 ## Aşama checklist
 
@@ -16,7 +18,9 @@
 - [x] **Aşama 4 — Composer & Participation** — tamamlandı
 - [x] **Aşama 5 — Evidence & Audit** — tamamlandı
 - [x] **Aşama 6 — Project Modules** — tamamlandı (temel; görünür yüzey H1/H2)
-- [ ] **Aşama 7 — Packaging**
+- [x] **Aşama 7 — Packaging** — betik, spec ve testler tamamlandı;
+      **artefakt üretildi ve çalıştırıldı** (PyInstaller kilitli bir
+      **geliştirme** bağımlılığı; artefaktın içine girmez)
 
 ---
 
@@ -1696,12 +1700,307 @@ mutasyon hayatta kaldi; **sekiz bulgunun hepsi kapatildi.** Ayrintili tablo:
       yapilmadi, H3 diff'i disindaki paketler incelenmedi, DPAPI/ACL
       davranisi incelenmedi. Kapilar ve e2e orkestrator tarafindan kosuldu.
 
-## Sonraki asama: Asama 11 - I Windows paketleme
+## Sonraki asama: Asama 12 - J teslim ve kilavuz
 
 **Gercek servise hicbir istek gonderilmedi** ve **hicbir ucretli cagri
 yapilmadi** - her sey mock tasiyiciya karsi, iki katmanli ag kesici altinda.
 
 On kosul: kullanici acikca "baslayalim" demeden gercek gonderim yapilmaz.
+
+
+---
+
+## Aşama 11 / Paket I — Windows paketleme (5 Eylül 2026)
+
+Kapsam kararları: [`docs/decisions/0010-paket-i-kapsam-kararlari-2026-09-05.md`](docs/decisions/0010-paket-i-kapsam-kararlari-2026-09-05.md) ·
+Uygulama: [`docs/packaging.md`](docs/packaging.md) ·
+Doğrulama: [`docs/verification/paket-i.md`](docs/verification/paket-i.md)
+
+### En önemli satır: **artefakt üretildi, çalıştırıldı ve ölçüldü**
+
+Bu bölümün ilk hâli "artefakt üretilmedi" diyordu; nedeni PyInstaller'ın bu
+deponun bağımlılığı olmamasıydı. **O karar alındı ve uygulandı.**
+
+- **PyInstaller `dev` grubuna, tam pinle eklendi:**
+  `apps/station-api/pyproject.toml` içinde `pyinstaller==6.16.0`,
+  `apps/station-api/uv.lock` güncellendi (`uv lock` + `uv sync --locked`).
+  **Üretim bağımlılığı değildir** ve **artefaktın içine girmez** — yalnız
+  build zamanı çalışır, ürünün çalışma zamanı bağımlılık yüzeyi
+  **değişmedi**.
+- **Lisans kurulu paketten okundu**, hafızadan veya webden değil:
+  `pyinstaller-6.16.0.dist-info/METADATA` ve `licenses/COPYING.txt` (636
+  satır). SPDX: **`GPL-2.0-or-later WITH Bootloader-exception`**. İstisna
+  maddesi ("Bootloader Exception") derlenmiş bootloader'ı ve ilgili
+  dosyaları başka programlarla birleştirip **o dosyaların kullanımından
+  doğan hiçbir kısıt olmadan** dağıtma izni verir; run-time hook'lar ayrıca
+  Apache-2.0'dır. Üretilen exe'nin baytlarında `pyiboot01_bootstrap`,
+  `pyimod01_archive`, `pyimod02_importers` ve üç rthook **bulundu** — yani
+  artefakt gerçekten PyInstaller kaynaklı dosya taşıyor ve okunan metin tam
+  olarak bunu karşılıyor. **Kendi kodumuz MIT kalır.** `README.md`
+  bağımlılık tablosuna satır, `NOTICE`'a gönderilen bundle'ın lisans
+  haritası eklendi.
+
+**Ölçülen artefakt** (Windows 11 Pro 10.0.26200, CPython 3.12, `onedir`):
+boyutlar ve SHA-256'lar **burada tekrarlanmaz**, tek kaynak
+[`docs/verification/paket-i.md` §13.1](docs/verification/paket-i.md#131-üretim-ve-ölçüm).
+Bu dosya bir kopya taşıyordu ve artefakt yeniden üretildiğinde eskidi;
+bağımsız inceleme üç ayrı belgede aynı eskimiş özeti ölçtü.
+
+**Artefakt çalıştırıldı** (geçici `STATION_DATA_DIR` ile; kullanıcının veri
+dizinine **dokunulmadı**, dört dosyanın adı/boyutu/mtime'ı önce–sonra aynı):
+yalnız `127.0.0.1`, efemer port, `/api/health` **200**, korumalı rota
+**401**, `GET /` gövdesi `dist/index.html` ile **bayt-birebir** (yani
+"Arayuz derlenmemis" 503'ü **üretilmedi**), `%TEMP%`'te `_MEI*` **yok**,
+yazılan her dosya veri dizininin **içinde**.
+
+**Bayt-birebir testi ilk kez gerçek bir bundle'a karşı koştu** ve sürüldü:
+gönderilen `index.html`'in son baytı değiştirildiğinde test kırmızıya döndü
+ve farkı isimle raporladı; dosya geri yüklendi, test yeşile döndü.
+
+### Kapanış turu — üç kusur kapatıldı (5 Eylül 2026, ikinci geçiş)
+
+İlk çalıştırmada ölçülen üç kusurun **üçü de kapatıldı**. Kayıt silinmedi:
+ne bulunduğu ve nasıl kapandığı
+[`docs/verification/paket-i.md`](docs/verification/paket-i.md) §13.3/§13.5
+ve [`docs/packaging.md`](docs/packaging.md) §5'te duruyor. Yeni değişmezler:
+**SI-326**, **SI-327**.
+
+1. **Ctrl+C çöküş gibi görünüyordu** (çıkış kodu **1**, konsolda
+   `KeyboardInterrupt` + PyInstaller'ın `Failed to execute script` satırı).
+   **Kapandı:** `launcher.absorbing_shutdown_signals()`, `uvicorn.Server.run`
+   çağrısının **etrafına** kurulan ve uvicorn'un kapanıştan sonra yeniden
+   yükselttiği sinyali yutan handler. Yeniden üretilen artefaktla ölçüldü:
+   **çıkış kodu 0**, konsolda çöküş metni **yok**, kilit **silindi**.
+2. **Ctrl+Break bayat kilit bırakıyordu** (çıkış kodu **3**, `finally`
+   çalışmıyor, `station.lock` kalıyor, uygulama bir daha açılmıyor). Aynı
+   mekanizma kapattı. Ölçüldü: **çıkış kodu 0**, kilit **silindi**, ve aynı
+   veri dizininde **yeniden başlatıldı** — "zaten calisiyor" reddi çıkmadı.
+   ADR-0010 §8'in `os.kill(pid, 0)` reddi **yerinde duruyor**; canlılık
+   yoklaması eklenmedi.
+3. **`test_bind.py`'nin dosya sayısı bundle'ın varlığına bağlıydı** (bundle
+   varken `packaging/` altında 14 dosya, 12'si artefakt içindeki kopyalar).
+   **Kapandı:** tarama artık kaynağı kopyadan **tam yolla** ayırıyor
+   (`packaging/artifacts`, dizin adıyla değil — ADR-0010 §3'ün uyardığı
+   körlük eklenmedi) ve `build`/`dist`/`out` **ada göre atlanmayı bıraktı**,
+   yani üçüne ekilen bir `0.0.0.0` artık yakalanıyor. Bundle diskteyken
+   ölçüldü: `packaging/` **2 dosya**.
+
+**Mutasyon:** on hedefli mutasyonun **onu** öldürüldü; ayrıca kusur öncesi
+kodla **ayrı bir `.exe` üretilip** aynı düzenekle çalıştırıldı ve eski
+çıkış kodları (`1` ve `3`) yeniden gözlendi — yani ölçüm düzeneğinin kusuru
+görebildiği kanıtlandı.
+
+### Bağımsız inceleme turu — on iki bulgu kapatıldı (5 Eylül 2026, üçüncü geçiş)
+
+Dışarıdan bir düşman inceleme **yirmi iki mutasyon** yaptı; **beşi sıfır
+kırmızı** verdi. On iki bulgunun tamamı kapatıldı, her biri mutasyonla veya
+kırmızı→yeşil geçişiyle sürüldü. Tam tablo:
+[`docs/security-invariants.md`](docs/security-invariants.md) §9l üçüncü
+mutasyon kaydı. Yeni değişmezler: **SI-328**, **SI-329**.
+
+**Sıfır kırmızı veren beş mutasyon ve kapanışları**
+
+1. **`dist` hâlâ ada göre muaftı** — PyInstaller'ın **varsayılan
+   distpath**'i. `packaging/dist/helper.py` ekildi, `.gitignore` yuttu, 2184
+   test yeşil kaldı. `dist` iki listeden de çıkarıldı; muafiyetler artık tam
+   yol. Ölçüm: **0 → 3 kırmızı**.
+2. **`ctypes` allow-list'i her şeyi muaf tutuyordu.** `vault/dpapi.py`'ye
+   `import subprocess` + `subprocess.Popen` ekildi; ruff, mypy ve 2184 test
+   yeşildi. Muafiyet **sembole** bağlandı; `EXECUTION_ATTRIBUTES`'a `Popen`
+   ve on dört süreç başlatan giriş noktası eklendi (`run`/`call`
+   eklenmedi — ürün onları meşru olarak çağırıyor, gerekçe kodda ölçümle
+   yazılı). Ölçüm: **0 → 1 kırmızı**.
+3. **İki tarama ağaçlarını sessizce kaybediyordu.** İncelemenin önerdiği
+   düzeltme **totolojikti** ve ölçülerek reddedildi: döngü, denetlediği
+   listeyle birlikte küçülüyor. Guard ikiye bölündü — listeyi gezen yarı ve
+   **depoyu** gezen yarı. Ölçüm: her iki listede **0 → 1 kırmızı**.
+4. **Başlatma sırasındaki her hata bayat kilit bırakıyordu.** `finally`
+   yalnız `Server.run`'ı sarıyordu; migration'daki Ctrl+C, soket hatası ve
+   `PackagedLayoutError` kilidi geride bırakıyordu — sonuncusu, bu paketin
+   var oluş sebebi olan hatanın ardından kullanıcıya **yanlış** sebep
+   söylüyordu. `finally` tüm gövdeyi sarıyor; elle `release()` kaldırıldı.
+   Ölçüm: yeni testler düzeltme öncesi **4 kırmızı**, sonrası **0**.
+5. **Gönderilen ZIP geliştiricinin kullanıcı adını ve ev dizini yolunu
+   taşıyordu.** `station.spec` iki Python ağacını `__pycache__` dâhil
+   kopyalıyordu; `.pyc`'lerin `co_filename`'i mutlak yol taşır. Ölçüldü: 152
+   dosyanın **11'i** sızdırıyordu (exe ve PYZ temizdi). Spec dosya dosya
+   kopyalıyor; **artefaktı tarayan bir test eklendi** — depoda böyle bir
+   tarama yoktu. Yeniden üretilen artefakt: **141 dosya, 0 sızıntı, 0
+   `.pyc`**.
+
+**Diğer yedi bulgu.** Bayt-birebir SPA denetimi CI'da hiç koşmuyordu
+(`packaging.yml`'e build **sonrası** pytest adımı eklendi ve komut yerelde
+ekili bir baytla sürüldü); yayımlanan SHA-256'lar artefaktla eşleşmiyordu
+(üç kopya kaldırıldı, **tek kaynak**
+[`docs/verification/paket-i.md` §13.1](docs/verification/paket-i.md#131-üretim-ve-ölçüm));
+`README.md` PyInstaller'ı hâlâ "bağımlılık değil" diyordu; doğrulama belgesi
+"dört ağaç" diyordu (beş); `packaging.yml`'in `PATH` stripleme adımı ne
+strip ettiğini doğrulamıyordu — **ve doğrulama eklenince striplemenin
+çalışmadığı ortaya çıktı**, bu yüzden stripleme çözünürlük sürücülü hâle
+getirildi; `Get-NetTCPConnection` belirsizliği açık bir `throw` ile kaldırıldı
+(cmdlet'in boş sonuçta `CimJobException` fırlattığı **ölçüldü**).
+
+**Kapılar:** 2201 pytest (taban 2184, +17 yeni test), 315 Vitest, ruff ×2,
+mypy 133 dosya, eslint, vite build — hepsi yeşil.
+
+### Tamamlanan görevler
+
+- [x] **PyInstaller kilitli bir geliştirme bağımlılığı oldu.** `dev` grubuna
+      `pyinstaller==6.16.0` (tam pin, aralık değil), `uv lock` +
+      `uv sync --locked`. Alternatifler ADR-0010 §2'de ölçülerek elenmişti.
+      Üretim bağımlılığı değildir. `README.md` bağımlılık tablosuna satır
+      (ad, sürüm, **kurulu paketten okunan** lisans, gerekçe), `NOTICE`'a
+      gönderilen bundle'ın lisans haritası eklendi.
+- [x] **Artefakt üretildi, ölçüldü ve çalıştırıldı** (yukarıdaki tablolar).
+      Bayt-birebir SPA testi **ilk kez gerçek bir bundle'a karşı** koştu ve
+      mutasyonla sürüldü.
+- [x] **Paketleme CI işi dördüncü kapı yapıldı.** `packaging.yml` tetikleyicisi
+      `pull_request` + `push → main`; kilitsiz kurulum adımı silindi.
+      Workflow **koşturulmadı**, YAML yerel olarak ayrıştırıldı.
+- [x] **BLOKER kapatıldı (ADR-0010 §1).** `app.py`'nin
+      `Path(__file__).resolve().parents[4]` satırı dokuz pakettir yalnız
+      editable kurulum sayesinde çalışıyordu; wheel'den kurulunca `.venv`'in
+      üstüne düşer ve uygulama **sessizce 503 "Arayuz derlenmemis"** servis
+      eder. O sayfaya bakan **hiçbir test yoktu**. Yeni
+      `station_api/resources.py` yolu `importlib.resources` ve donmuş dalda
+      `sys._MEIPASS` ile çözüyor; **ortam değişkeni reddedildi** ve
+      reddedildiği ölçülüyor. Aynı düzeltme `db/migrations_runner.py`'nin
+      `MIGRATIONS_DIR`'ine uygulandı (Alembic `env.py`'yi **dosya olarak**
+      okur).
+- [x] **Paketlenmiş bir çalıştırma "build yok" 503'ünü üretemez.** İki
+      bağımsız ret: çözücü olmayan bir dizini **adlandırmayı**, `_mount_spa`
+      onu **bağlamayı** reddeder. Mutasyon tablosunda ikisi de ayrı ayrı
+      öldürüyor. Depo kopyasında aynı sayfa **korundu** — orada doğru olan
+      tek durum odur.
+- [x] **`0.0.0.0` taraması genişletildi (ADR-0010 §3).** Eskiden yalnız
+      `apps/station-api/src` altındaki `.py`. `packaging/station.spec`'e
+      ekilen bir `0.0.0.0` **hiçbir testi kırmıyordu**. Artık dört ağaç, on
+      beş uzantı ve `.github/workflows`; ekili ihlal `.spec`/`.ps1`/`.bat`/
+      `.iss`/`.yml` için **ayrı ayrı** sürülüyor.
+- [x] **Yürütme yasağı ürün geneline çıkarıldı (ADR-0010 §3).** Eskiden
+      yalnız `agent/` ve `proof/`. `packaging/build_bundle.py`'ye ekilen bir
+      `import subprocess` **hiçbir testi kırmıyordu**, oysa
+      `arbitrary_execution_supported: Literal[False]` ürün geneli hakkında
+      bir iddia. `ctypes` muafiyeti **iki dosya**, birebir allow-list, ve
+      üçüncü bir dosyanın import etmesi kırmızı veriyor. `importlib` bu
+      listeye **konmadı** — ADR-0010 §1'in çözümü tam olarak odur.
+- [x] **Build betiği `subprocess` kullanmıyor:** PyInstaller kendi Python
+      API'sinden sürülüyor.
+- [x] **`test_tracked_sources` genişletildi.** `packaging/` ağacı ve sekiz
+      uzantı eklendi. Asıl karar `GENERATED_NAMES`'e **`build`/`out`
+      eklenmemesidir**: ADR-0010 §3'ün adını verdiği kaza
+      (`packaging/build/helper.py`) tam olarak o eklemeyle görünmez olurdu.
+      Çıktı `packaging/artifacts/` altına alındı ve `.gitignore`'a
+      **çapalanmış** tek bir kural eklendi; muafiyet **kaldırıldı**.
+- [x] **Gönderilen SPA bayt-birebir (ADR-0010 §4).** Tek iddia mevcut altı
+      denetimi gönderilen artefakta taşıyor; spec'in kopyaladığı kaynak
+      `apps/station-web/dist` olarak sabitlendi; karşılaştırma tek baytlık
+      farkta **hangi dosya** olduğunu adıyla raporluyor. Paket varken SPA'sı
+      beklenen yerde değilse test **kırmızıdır**.
+- [x] **Paketleyici (ADR-0010 §2, §7).** `packaging/station.spec`: `onedir`
+      (`COLLECT`), `console=True`, `codesign_identity=None`, `nacl` hariç;
+      datas olarak SPA + migration ağacı + pinli conformance vektörleri.
+      `onefile` reddedildi (her çalıştırmada `%TEMP%`'e açar; ürün bugün
+      `%TEMP%`'e hiç yazmıyor).
+- [x] **Yükseltme ve geri dönüş (ADR-0010 §6).** İki test, ikisi de daha
+      önce yoktu: `0007` şemasına **gerçek satır** yazılıp `0009`'a
+      yükseltiliyor ve satırlar değer değer korunuyor; tanınmayan bir
+      revizyonla işaretli veritabanı `SchemaAheadError` ile **anlaşılır
+      biçimde** reddediliyor. İkincisi bir ürün değişikliğidir:
+      `run_migrations` artık `guard_against_a_newer_schema` çağırıyor.
+      Sürümlü kurulum kökü ve `current` junction **reddedildi** (H2'nin
+      reparse-point savunması).
+- [x] **Tek örnek kilidi (ADR-0010 §8).** Veri dizininde `station.lock`,
+      `O_CREAT | O_EXCL`. Launcher kilidi **veritabanını açmadan önce**
+      alıyor (sıra testte sabit) ve `finally` ile bırakıyor. `os.kill(pid,
+      0)` ile canlılık yoklaması **yapılmadı**: Windows CPython'da o çağrı
+      `TerminateProcess`'e düşer, yani sinyal `0` sorulan süreci
+      sonlandırırdı.
+- [x] **SHA-256 ve imzasızlık (ADR-0010 §9).** `digests.py`'ye `file_digest`
+      eklendi — modülün kendi iki kuralına **bilinçli istisna**, çünkü değerin
+      `Get-FileHash` ile doğrulanabilmesi gerekir; test bunu ölçüyor. İkinci
+      hash yardımcısı yazılmadı. **"SmartScreen'i kapatın" hiçbir yerde
+      yazmıyor** ve bir test bunu arıyor.
+- [x] **Aşama numarası `9 → 10` (ADR-0010 §11).** Beş giriş noktası ve
+      `CURRENT_SCHEMA_STAGE` atomik. `CURRENT_MIGRATION_HEAD` **`0009`'da
+      kaldı** — bu paket şemaya dokunmadı.
+- [x] **Yeni değişmezler SI-314 … SI-325.** SI-02 ve SI-232 **güncellendi,
+      silinmedi**: SI-02'nin iddiası aynı, kapsamı büyüdü.
+- [x] **Mutasyon tablosu: 20 mutasyon, 20'si de en az bir testi öldürdü.**
+      Sıfır öldüren guard yok. İkisi (`.spec`'e `0.0.0.0`,
+      `build_bundle.py`'ye `subprocess`) **bu paketten önce sıfır kırmızı
+      verirdi** — ADR-0010 §3'ün ölçtüğü iki delik.
+
+### CI (ADR-0010 §10) — artık **dördüncü kapı**
+
+`.github/workflows/packaging.yml`: `windows-latest`, tam SHA pin, cache yok,
+secret yok. **Tetikleyici `workflow_dispatch`'ten `quality.yml`'ninkine
+çevrildi**: `pull_request` (hedef `main`) + `push` (`main`); elle koşturma
+için `workflow_dispatch` da korundu. Kapı olamamasının kaydedilmiş tek nedeni
+ortadan kalktı — PyInstaller `uv.lock` içinde ve `uv sync --locked` onu
+kuruyor. Kilitsiz `uv pip install` adımı **silindi**; yerine paketleyicinin
+sürümünü yazdıran bir doğrulama adımı kondu.
+
+`quality.yml`'ye dördüncü **iş** olarak taşınmadı, ayrı workflow olarak
+bırakıldı: bu iş donmuş bir ikiliyi derleyip **çalıştırır** (40 dakikaya
+kadar) ve başarısızlığı "bundle bozuk" diye okunmalıdır. Tetikleyici,
+`permissions`, pin ve cache politikası `quality.yml` ile birebir aynıdır.
+
+**Workflow koşturulmadı ve koşturulamaz** — yerelde GitHub Actions yok. YAML
+yerel bir ayrıştırıcıyla doğrulandı: tetikleyiciler, `permissions:
+{contents: read}`, `concurrency`, tek iş `bundle`, `runs-on: windows-latest`,
+`timeout-minutes: 40`, **11 adım**, üç action da `quality.yml` ile **aynı tam
+SHA'lara** pinli, dosyada hiç `secrets.` geçmiyor. İçindeki PowerShell
+**çalıştırılmadı**; **ilk kez CI'da koşacak.**
+
+Workflow header'ı artık "temiz kapanış" iddia **etmiyor**: iş süreci
+`Stop-Process -Force` ile öldürüyor, yani ölçtüğü şey bayat kilidin kaldığı
+hâldir — ve bu, kapanış turundan sonra da doğrudur, çünkü zorla sonlandırma
+`finally`'yi hiç çalıştırmaz. Graceful kapanış yerelde elle ölçüldü; iki
+kusur çıktı ve **ikisi de kapatıldı** (yukarıda).
+
+`/api/app/status`'ün aşama numarası CI'da hâlâ doğrulanamıyor: rota oturum
+ister, oturum tek kullanımlık bağlantıyı ister, o bağlantı bilinçle
+loglanmaz (SI-07). Aşama numarası süreç içinde doğrulanıyor.
+
+### Test sonuçları
+
+| Kapı | Sonuç |
+|---|---|
+| `uv run --directory apps/station-api ruff check .` | **temiz** |
+| `uv run --project apps/station-api ruff check apps/station-api/src packages/technocore-conform/src tests` | **temiz** |
+| `uv run --project apps/station-api mypy --config-file apps/station-api/pyproject.toml` | **133 dosya, sorun yok** |
+| `uv run --directory apps/station-api pytest ../../tests -q -p no:warnings` | **2184 geçti** (taban 2114, **+70**; kapanış turu **+15**) |
+| `npm --prefix apps/station-web run lint` | **temiz** |
+| `npm --prefix apps/station-web run test` | **315 geçti** (değişmedi) |
+| `npm --prefix apps/station-web run build` | **başarılı** |
+| `packaging/build_bundle.py` (kapı değil, elle) | **artefakt üretildi**, üç ön koşul da `[OK]` |
+
+Yeni test dosyası: `tests/security/test_packaging_boundary.py` (kapanış
+turundan sonra 50 test). Genişletilen: `test_bind.py` (kapanış turunda +5),
+`test_tracked_sources.py`, `test_frontend_bundle.py`, `test_database.py`.
+
+### Bu turda ölçülmeyenler — adıyla
+
+- **`packaging.yml` hiç koşturulmadı.** YAML yerel olarak ayrıştırıldı
+  (yukarıda değer değer); GitHub Actions koşturulmadı, içindeki PowerShell
+  çalıştırılmadı. İlk kez CI'da koşacak.
+- **Temiz Windows profili doğrulanmadı.** Artefakt uv/Node/Python `PATH`'te
+  **iken** çalıştırıldı; `PATH`'ten çıkararak çalıştırmak workflow'un adımı
+  ve o adım koşmadı.
+- **İmzalama doğrulanamaz** (sertifika yok, secret yok). Artefakt imzasız.
+- **Yeniden üretilebilirlik ölçülmedi.** Bundle bir kez üretildi; ikinci bir
+  yapının aynı SHA-256'yı vereceği **denenmedi ve iddia edilmiyor**.
+- **Çift örnek yarışının gerçekten bozup bozmadığı** ölçülmedi; koruma
+  ADR-0010 §8'in gerekçesiyle var.
+- **Kaldırma akışı elle denenmedi.** Artefakt hiçbir yere **kurulmadı**;
+  program dizini oluşmadı. Kullanıcının veri dizinine **dokunulmadı** — dört
+  dosyanın adı, boyutu ve mtime'ı önce–sonra karşılaştırıldı, birebir aynı.
+  Ölçüm için kullanılan geçici `STATION_DATA_DIR` sonra silindi.
+- **Playwright tarayıcı QA koşturulmadı.**
+- Gerçek DID/seed/private key/recovery/`.tcrec`/API anahtarı **okunmadı,
+  istenmedi, yazılmadı**. Gerçek Technocore'a hiçbir istek gitmedi.
+  `git commit`/`push`/PR/tag/release **yapılmadı**.
 
 ---
 

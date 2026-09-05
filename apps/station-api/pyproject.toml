@@ -31,6 +31,16 @@ dependencies = [
 # libsodium binding the official server verifies with - so "our signature
 # verifies" is not a claim `cryptography` makes about its own output. A
 # security test asserts it is absent from every runtime dependency list.
+# PyInstaller is a BUILD-TIME tool and nothing else. It freezes the
+# application into packaging/artifacts/ (ADR-0010 2) and does not enter the
+# artefact it produces: the bundle carries CPython, this project's runtime
+# dependencies and PyInstaller's small C bootloader, not the packager. So the
+# product's runtime dependency surface is unchanged by this line.
+#
+# Exact pin, not a range, for the reason every other pin in this repository
+# exists (uv.lock, full-SHA action pins, the vendor commit pin): the bytes a
+# packager emits are part of the artefact, and "whatever resolved today" is
+# not a description of an artefact anyone can reproduce.
 dev = [
     "pytest>=8.3",
     "hypothesis>=6.120",
@@ -38,6 +48,7 @@ dev = [
     "pynacl>=1.5,<2",
     "ruff>=0.8",
     "mypy>=1.14",
+    "pyinstaller==6.16.0",
 ]
 
 # Package boundary: technocore-conform is a separate, platform-independent
