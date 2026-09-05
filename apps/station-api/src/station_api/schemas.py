@@ -659,8 +659,13 @@ TaskEvidenceFieldName = Literal[
     "task_outcome", "test_result", "user_acceptance", "public_share"
 ]
 
-#: All nine states. Six are producible in this release; the other three are
-#: defined, listed, and refused by ``validate_transition`` (ADR-0004 3).
+#: All nine states. Under Package F six were producible; H1 opened
+#: ``suggested`` when it built a suggester, and H2 opened ``running`` and
+#: ``paused`` when it built the deterministic tool runner (ADR-0008 3). All
+#: nine are reachable now, which is why ``unproducible_states`` on
+#: ``TaskListResponse`` is an empty list rather than a removed field: a reader
+#: who saw three names there last release is told the set is now empty rather
+#: than left to notice the field went away.
 TaskStateName = Literal[
     "suggested",
     "awaiting_approval",
@@ -670,6 +675,23 @@ TaskStateName = Literal[
     "failed",
     "review_needed",
     "ready_to_publish",
+    "published",
+]
+
+#: The transitions a **person** may ask for over HTTP.
+#:
+#: ``running`` and ``paused`` are deliberately absent. They are the runner's,
+#: and they are reached through the run routes - which record a plan, its
+#: promised artifacts and its success criterion first. A route that let a
+#: person put a task straight into ``running`` would be a way into the
+#: executing state with no plan written down, which is the property ADR-0008 7
+#: exists to protect. ``ready_to_publish`` is absent for the older reason: it
+#: is derived from evidence and cannot be asked for (SI-222).
+TaskUserTransitionName = Literal[
+    "awaiting_approval",
+    "blocked",
+    "failed",
+    "review_needed",
     "published",
 ]
 
@@ -1241,4 +1263,317 @@ class WorkScanSuggestResponse(StrictModel):
     source_id: str
     source_version_id: str
     state: Literal["suggested"] = "suggested"
+    detail: str
+
+
+# --- the agent runtime and the Activity Desk (Package H2) -------------------
+#
+# Declared here rather than in ``station_api/agent/`` for the reason the task
+# models are (ADR-0004 8, ADR-0008 9): all three tests in
+# ``tests/security/test_no_secret_fields.py`` walk ``vars(schemas)``, and a
+# response model declared in a new module would leave that protection silently
+# out of scope. Not a leak - a lost control, which is worse because it looks
+# like nothing.
+#
+# Four things these models refuse to flatten:
+#
+# * an **ending** is not "failed". Running out of the ceiling, a tool
+#   refusing, the user stopping the run and a promised artifact never being
+#   produced are four phases with four sentences (ADR-0008 7);
+# * a **test result** is not a boolean the runner supplies. It is
+#   ``not_implemented`` and stays that way while execution is closed, which is
+#   why a finished run leaves a task in ``review_needed`` and not in
+#   ``ready_to_publish``;
+# * a **measured facility** is not a relied-upon one. Docker is reported as
+#   present *and* ``relied_upon: false`` rather than omitted (ADR-0008 1);
+# * an **activity row** is not an audit link. ``chain_referenced`` says which
+#   rows the chain refers to, and those are the rows nothing may prune.
+#
+# There is no field here for a model's reasoning or a provider payload, and
+# no field carrying a filesystem path: a workspace file is named, never
+# located.
+
+
+#: Where a run is. The four endings are distinct values, on purpose.
+AgentRunPhaseName = Literal[
+    "planned",
+    "running",
+    "paused",
+    "completed",
+    "cancelled",
+    "tool_error",
+    "budget_exhausted",
+    "artifact_missing",
+]
+
+#: What became of one planned step.
+AgentStepPhaseName = Literal["planned", "ran", "refused", "failed", "skipped"]
+
+#: The permission a tool needs. None of them leaves this machine.
+AgentToolScopeName = Literal[
+    "read_approved_input",
+    "write_workspace",
+    "deterministic_check",
+    "read_run_state",
+]
+
+#: The parameter types the tool registry declares. There is deliberately no
+#: ``path`` and no ``url``: a tool cannot be handed an address.
+AgentToolParamTypeName = Literal["text", "file_name", "digest", "json_text"]
+
+#: What the measurement established. ``not_measured`` is not ``absent``.
+AgentIsolationStateName = Literal["present", "absent", "not_measured"]
+
+#: Who acted. There is no ``model`` actor, because there is no model lane.
+ActivityActorName = Literal["user", "station_runner"]
+
+ActivityOutcomeName = Literal["ok", "refused", "failed", "pending"]
+
+ActivityActionName = Literal[
+    "run_planned",
+    "run_started",
+    "tool_called",
+    "artifact_produced",
+    "check_recorded",
+    "approval_awaited",
+    "run_stopped",
+    "run_resumed",
+    "run_finished",
+    "run_failed",
+    "permission_denied",
+    "budget_exhausted",
+    "execution_unavailable",
+    "activity_deleted",
+]
+
+
+class AgentToolParamStatus(StrictModel):
+    """One typed parameter of one tool."""
+
+    name: str
+    type: AgentToolParamTypeName
+    required: bool
+    detail: str
+
+
+class AgentToolStatus(StrictModel):
+    """One registered tool, with everything a person needs to approve it."""
+
+    id: str
+    scope: AgentToolScopeName
+    purpose: str
+    params: list[AgentToolParamStatus]
+    #: What one call spends against the ceiling. One, for every tool.
+    call_cost: int
+    produces_artifact: bool
+
+
+class AgentCeilingStatus(StrictModel):
+    """The run ceiling, in the only three units this build can measure."""
+
+    max_tool_calls: int
+    max_wall_clock_seconds: int
+    max_concurrency: Literal[1] = 1
+    units: list[str]
+    #: Units this product refuses to denominate a ceiling in, and why. Stated
+    #: rather than left out, so "there is no token budget" is a claim on the
+    #: wire instead of an absence a reader has to notice (ADR-0008 4).
+    refused_units: list[str]
+    refused_units_detail: str
+    detail: str
+    #: The ceiling is a compile-time constant and no code path writes it.
+    #: A ``Literal[False]`` rather than prose, so the wire value is structural.
+    agent_can_raise_ceiling: Literal[False] = False
+
+
+class AgentIsolationFindingStatus(StrictModel):
+    """One measured facility, and - separately - whether it is relied upon."""
+
+    facility: str
+    measured: AgentIsolationStateName
+    measured_at: str
+    detail: str
+    #: Always false. Docker being installed on the developer's machine is not
+    #: a guarantee the product may offer (ADR-0008 1).
+    relied_upon: Literal[False] = False
+
+
+class AgentExecutionStatus(StrictModel):
+    """Why arbitrary code and shell execution are closed, as a reason."""
+
+    #: Structural: there is no code path that runs a command.
+    arbitrary_execution_supported: Literal[False] = False
+    reason: Literal["execution_unavailable"] = "execution_unavailable"
+    detail: str
+    inventory: list[AgentIsolationFindingStatus]
+
+
+class AgentRunStepStatus(StrictModel):
+    """One planned tool call and what became of it.
+
+    ``arguments_sha256`` rather than the arguments: the digest is what a
+    later reader needs to know the step was not edited, and the text is
+    already the user's own.
+    """
+
+    ordinal: int
+    tool_id: str
+    scope: AgentToolScopeName
+    arguments_sha256: str
+    phase: AgentStepPhaseName
+    started_at: datetime | None
+    finished_at: datetime | None
+    #: The name of the file this step produced, never its path.
+    artifact_name: str = ""
+    artifact_sha256: str = ""
+    detail: str = ""
+
+
+class AgentWorkspaceFileStatus(StrictModel):
+    """One workspace file: its name, its size and its digest. No path."""
+
+    name: str
+    byte_count: int
+    sha256: str
+
+
+class AgentRunStatus(StrictModel):
+    """One run, with its plan, its usage and its ending kept apart."""
+
+    id: str
+    task_id: str
+    phase: AgentRunPhaseName
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    stop_requested: bool
+    #: Digest over the frozen plan: steps, expected artifacts, test condition.
+    #: A start whose recomputed digest differs is refused (ADR-0008 7).
+    plan_sha256: str
+    #: The check the plan says would establish success. Recorded, never run.
+    test_condition: str
+    #: Always ``not_implemented`` in this release, and it is a field rather
+    #: than an omission: a run that produced files has still not been tested,
+    #: and the task cannot become ``ready_to_publish`` (SI-222).
+    test_result_state: Literal["not_implemented"] = "not_implemented"
+    test_result_detail: str
+    expected_artifacts: list[str]
+    steps: list[AgentRunStepStatus]
+    tool_calls_used: int
+    elapsed_ms: int
+    max_tool_calls: int
+    max_wall_clock_seconds: int
+    concurrency: Literal[1] = 1
+    detail: str
+
+
+class AgentSurfaceResponse(StrictModel):
+    """The whole agent surface, read-only. Contacts nobody and runs nothing."""
+
+    execution: AgentExecutionStatus
+    ceiling: AgentCeilingStatus
+    tools: list[AgentToolStatus]
+    honesty: str
+    stop_statement: str
+    #: Runs a restart left in ``running``. Listed, never resumed: continuing
+    #: is a person's decision and there is no startup hook that makes it
+    #: (SI-224, ADR-0008 10).
+    interrupted_runs: list[AgentRunStatus]
+    resumed_any: Literal[False] = False
+
+
+class AgentTaskRunsResponse(StrictModel):
+    """One task's runs and the files its workspace currently holds."""
+
+    task: TaskStatusResponse
+    runs: list[AgentRunStatus]
+    workspace_files: list[AgentWorkspaceFileStatus]
+    honesty: str
+
+
+class AgentPlanStepRequest(StrictModel):
+    """One step of a plan: a registered tool id and its arguments."""
+
+    tool_id: str
+    #: Validated against the tool's declared parameters before the plan is
+    #: recorded, so an unregistered tool or a bad argument is refused while
+    #: planning rather than half-way through a run.
+    arguments: dict[str, str] = Field(default_factory=dict)
+
+
+class AgentPlanRequest(StrictModel):
+    """Record a plan for one task. Nothing runs until a separate request."""
+
+    steps: list[AgentPlanStepRequest] = Field(min_length=1, max_length=32)
+    #: The file names the plan promises to produce. A promise that is not
+    #: kept ends the run in ``artifact_missing``.
+    expected_artifacts: list[str] = Field(default_factory=list, max_length=16)
+    #: How success would be established. Recorded, never run in this release.
+    test_condition: str = Field(min_length=1, max_length=500)
+
+
+class TaskTransitionRequest(StrictModel):
+    """A user-driven state change.
+
+    ``running`` and ``paused`` are deliberately **absent** from
+    :data:`TaskUserTransitionName`. They belong to the runner and are reached
+    through the run routes, which record a plan first; a route that let a
+    person put a task into ``running`` directly would be a way to reach the
+    executing state without a plan ever being written down.
+    """
+
+    target: TaskUserTransitionName
+    detail: str = Field(default="", max_length=200)
+
+
+class ActivityEventStatus(StrictModel):
+    """One timeline row.
+
+    No reasoning trace, no prompt, no completion and no raw provider payload:
+    the model lane is closed, and the table this comes from has nowhere to
+    put such a thing (ADR-0008 6).
+    """
+
+    id: str
+    recorded_at: datetime
+    run_id: str
+    task_id: str
+    actor: ActivityActorName
+    action: ActivityActionName
+    outcome: ActivityOutcomeName
+    duration_ms: int
+    artifact_sha256: str
+    check_sha256: str
+    detail: str
+    #: True when an audit link names this row. Those rows are never pruned
+    #: and never deleted, which is what lets the timeline have a retention
+    #: policy while the chain keeps not having one.
+    chain_referenced: bool
+
+
+class ActivityListResponse(StrictModel):
+    """The timeline, newest first, bounded."""
+
+    events: list[ActivityEventStatus]
+    event_count: int
+    chain_referenced_count: int
+    retained_events: int
+    detail: str
+
+
+class ActivityDeleteRequest(StrictModel):
+    """Remove timeline rows. Chain-referenced rows are kept regardless."""
+
+    #: Empty means "every row". A run id narrows it to one run.
+    run_id: str = Field(default="", max_length=32)
+
+
+class ActivityDeleteResponse(StrictModel):
+    """What the deletion did, as two counts that are never summed."""
+
+    deleted: int
+    kept_because_chain_referenced: int
+    #: The deletion is itself an audit event (ADR-0008 6). Stated on the wire
+    #: so a user is told their removal was recorded rather than discovering it.
+    recorded_in_audit_chain: Literal[True] = True
     detail: str

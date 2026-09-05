@@ -53,18 +53,23 @@ export const SECTIONS: readonly SectionDefinition[] = [
     ready: true,
   },
   {
-    // Paket F / H2 (gorev modulu + agent calisma ortami) ile acilir.
+    // Paket H2 (gorev yuzeyi + agent calisma ortami) ile acildi (ADR-0008 8).
+    // Plan once yazilir, calistirmak ayri bir istektir, ve keyfi kod/kabuk
+    // yurutmesi kapalidir: bolum bunu bir eksiklik olarak degil, gerekcesiyle
+    // birlikte gosterir.
     id: "tasks",
     label: "Gorevler",
-    purpose: "Kullanicinin baslattigi sinirli gorevlerin listesi ve durumu.",
-    ready: false,
+    purpose: "Kullanicinin baslattigi sinirli gorevlerin listesi, plani ve durumu.",
+    ready: true,
   },
   {
-    // Paket H2 (Activity Desk) ile acilir.
+    // Paket H2 (Activity Desk) ile acildi. "Gorevler" ile **birlikte** acilir:
+    // aktivite akisi gorev ve calisma kimlikleri tasir, ve sahibi gorunmeyen
+    // olaylari gosteren bir zaman cizelgesi okunamaz (ADR-0008 8).
     id: "activity",
     label: "Aktivite",
-    purpose: "Agent calisma ortaminin adim adim aktivite kaydi.",
-    ready: false,
+    purpose: "Agent calisma ortaminin adim adim, olay turu ayrilmis aktivite kaydi.",
+    ready: true,
   },
   {
     id: "identity",

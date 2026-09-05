@@ -27,8 +27,8 @@ kaybolmuş bir hedefe işaret eden kayıt, kayıt olmayandan kötüdür.
 | Kayıt | Durum | Sahibi olan kod / açan paket |
 |---|---|---|
 | `project_zero` | `available` | `identity`, `recovery`, `conformance`, `technocore`, `compose`, `evidence` |
-| `work_scan` | `planned` | Paket H1 |
-| `agent_workspace` | `planned` | Paket H2 |
+| `work_scan` | `available` | Paket H1'de acildi |
+| `agent_workspace` | `available` | Paket H2'de acildi |
 | `proof_workspace` | `planned` | Paket H3 |
 
 `planned` kayıtlar `sections.ts` kalıbını izler: hedef yerleşim kod
@@ -101,13 +101,15 @@ published         → (son durum)
 Geçiş doğrulaması **saf bir fonksiyondur** (`validate_transition`); servis onu
 çağırır ve geçersiz geçişi reddeder.
 
-### Üretilemeyen üç durum
+### Üretilemeyen üç durum — artık üretilebilir
 
-`suggested` bir öneri üreticisi (H1), `running` ve `paused` bir yürütücü (H2)
-ister. Üçü de **tanımlı kalır** — tablodan silmek H2'nin makineyi hafızadan
-yeniden türetmesi demek olurdu — fakat **hiçbir kod yolu onları üretemez**:
-`validate_transition` hedef `UNPRODUCIBLE_STATES` içindeyse geçişi adıyla
-reddeder.
+Paket F'te `suggested` bir öneri üreticisi (H1), `running` ve `paused` bir
+yürütücü (H2) beklediği için üçü de **tanımlı ama üretilemez** tutulmuştu.
+H1 öneri üreticisini, H2 deterministik yürütücüyü getirdi; bu yüzden
+`UNPRODUCIBLE_STATES` bugün **boştur**. `validate_transition`'ın reddi
+silinmedi — mekanizma yerinde durur ve bir durum yeniden üretilemez hâle
+gelirse yine ateşlenir; testi bunu boş bir döngüyle değil, testin süresince
+bir durumu kapatarak sürer.
 
 Bunu **dört** test sabitler; hangisinin neyi tuttuğu ayrı ayrı yazılıdır,
 çünkü ilk sürümde tek bir cümle üç ayrı iddiayı birden üstleniyordu ve
@@ -256,8 +258,13 @@ Bu erteleme sessiz değildir:
 - `test_the_deferral_is_recorded_in_the_documents` bu bölümün varlığını
   denetler.
 
-**Kalan yarım gereksinim:** harcama bağlamı Paket G'ye, bütçe/izin sınırı
-Paket H2'ye ertelenmiştir.
+**Kalan yarım gereksinim (F'te):** harcama bağlamı Paket G'ye, bütçe/izin
+sınırı Paket H2'ye ertelenmişti. **Her ikisi de kapandı:** G harcama
+bağlamını getirdi, H2 bütçeyi yeni `agent/` paketinde açtı — araç çağrısı
+sayısı, duvar saati ve eşzamanlılık. Token ve para birimi **sayılmaz** ve bu
+ret telde `refused_units` olarak yayımlanır. Görev katmanı (`tasks/`,
+`modules/`) bu paketlerde **hiç dokunulmadı**, dolayısıyla yukarıdaki
+"F bütçe alanı açmaz" kararı bugün de harfiyen doğrudur.
 
 ---
 

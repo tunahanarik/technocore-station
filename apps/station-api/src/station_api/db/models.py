@@ -743,3 +743,172 @@ class OpenCodeModelSnapshot(Base):
             f"OpenCodeModelSnapshot(model_id={self.model_id!r}, "
             f"selectable={self.selectable!r})"
         )
+
+
+class AgentRun(Base):
+    """One bounded run of registered tools over one task.
+
+    Package H2's storage, and the reason it is a table rather than a field on
+    ``task_record``: a plan, its steps, its expected artifacts and its test
+    condition are written down **before** the run starts (ADR-0008 7), and a
+    row created at plan time and never rewritten is what makes "changing the
+    plan cannot quietly loosen the success criterion" a structural claim.
+    ``plan_sha256`` covers the ordered steps together with the expected
+    artifacts and the test condition, so an edited plan is a different plan
+    and says so.
+
+    ``phase`` is deliberately **not** called ``state``. The task's state is
+    the nine-value machine in :mod:`station_api.tasks.states`, written by one
+    function; this column is the run's own bookkeeping, and giving the two the
+    same name is how a reader ends up believing there are two state machines
+    for one thing. The naming also keeps the state-write scan
+    (``test_only_the_transition_method_writes_a_task_state``, extended to this
+    package in H2) meaningful rather than noisy.
+
+    The ceiling columns are a **copy** taken at plan time, for the record. No
+    code path writes them afterwards and nothing reads them to decide
+    anything: the live decision is made by
+    :func:`station_api.agent.budget.check` against the compile-time constant.
+
+    No column holds a model reasoning trace, a provider payload, a credential,
+    a filesystem path or a seed. The model lane is closed (ADR-0008 2), so
+    there is nothing of the kind to store.
+    """
+
+    __tablename__ = "agent_run"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    task_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("task_record.id", ondelete="CASCADE"), nullable=False
+    )
+    #: ``planned``, ``running``, ``paused``, ``completed``, ``cancelled``,
+    #: ``tool_error``, ``budget_exhausted`` or ``artifact_missing``. Kept
+    #: apart so "the ceiling was reached", "a tool failed" and "the user
+    #: stopped it" are three different sentences (ADR-0008 7).
+    phase: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    #: Set by the stop route. The runner reads it before every tool call.
+    stop_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    #: Digest over the frozen plan: steps, expected artifacts, test condition.
+    plan_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: The check the plan says would establish success. Recorded, never run.
+    test_condition: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: Canonical JSON array of the file names the plan promises to produce.
+    expected_artifacts: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    tool_calls_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    elapsed_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_tool_calls: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_wall_clock_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    concurrency: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"AgentRun(id={self.id!r}, phase={self.phase!r})"
+
+
+class AgentRunStep(Base):
+    """One planned tool call, and what became of it.
+
+    Written at plan time with ``phase='planned'`` and updated once, when the
+    runner reaches it. A step that was never reached keeps its planned row,
+    which is what lets a stopped run show what it was going to do next
+    instead of ending in silence.
+    """
+
+    __tablename__ = "agent_run_step"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("agent_run.id", ondelete="CASCADE"), nullable=False
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: A ``ToolId`` value from the compile-time registry, never a free string.
+    tool_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: The tool's declared ``ToolScope``, copied so a review can read the
+    #: permission a step needed without resolving the registry again.
+    scope: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: The validated arguments, as a canonical JSON object. The user's own
+    #: text, swept and bounded before it got here. Stored rather than kept in
+    #: memory so a run interrupted by a restart can be *loaded* and looked at,
+    #: and so a resume executes what was written down rather than what a later
+    #: request rebuilt (ADR-0008 7).
+    arguments_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    #: Digest over those arguments. Re-derived before every call, so a row
+    #: edited underneath the run is a refusal rather than a silent change.
+    arguments_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: ``planned``, ``ran``, ``refused``, ``failed`` or ``skipped``.
+    phase: Mapped[str] = mapped_column(String(32), nullable=False, default="planned")
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    artifact_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    artifact_sha256: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"AgentRunStep(run_id={self.run_id!r}, ordinal={self.ordinal!r})"
+
+
+class ActivityEvent(Base):
+    """The Activity Desk log: append-only, and a different layer from the chain.
+
+    ADR-0008 6 keeps two things apart that a single table would merge:
+
+    * **this table** is the step-by-step record. It is voluminous, it has its
+      own retention (``RETAINED_EVENTS``), and its rows are **not chain
+      links** - deleting one cannot break any MAC.
+    * **the audit chain** carries only decision points, as new
+      ``AuditEventName`` members. It is never pruned (ADR-0003 7).
+
+    ``chain_referenced`` is what makes the two compatible rather than merely
+    adjacent: when a decision point is written into the chain it names this
+    row's id, and retention refuses to delete a row carrying the flag. So
+    "the chain is never pruned" and "the timeline has a retention policy" are
+    both true, and neither is achieved by weakening the other.
+
+    What is **not** here, and could not be added without a migration a
+    reviewer would see: a reasoning trace, a prompt, a completion, a raw
+    provider payload. The model lane is closed, and this table has nowhere to
+    put such a thing (ADR-0008 6).
+    """
+
+    __tablename__ = "activity_event"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    #: Empty when the event is not about one run.
+    run_id: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    task_id: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    #: ``user`` or ``station_runner``. There is no ``model`` actor.
+    actor: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: An ``ActivityAction`` value. "planned", "ran", "check recorded",
+    #: "artifact produced" and "awaiting approval" are separate members.
+    action: Mapped[str] = mapped_column(String(48), nullable=False)
+    #: ``ok``, ``refused``, ``failed`` or ``pending``.
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    artifact_sha256: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    #: The digest of the deterministic checker's own output, when one ran.
+    check_sha256: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    #: One safe sentence. Swept, redacted and bounded before it is stored.
+    detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: True once an audit link names this row. Retention may not remove it.
+    chain_referenced: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"ActivityEvent(id={self.id!r}, action={self.action!r})"

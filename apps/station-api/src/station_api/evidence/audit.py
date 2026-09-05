@@ -80,6 +80,28 @@ class AuditEventName(StrEnum):
     CAPTURE_ATTEMPTED = "capture_attempted"
     EVIDENCE_EXPORTED = "evidence_exported"
     CHAIN_STARTED = "chain_started"
+
+    # --- Package H2, the agent runtime's decision points (ADR-0008 6) -----
+    #
+    # Five members and not one more. The Activity Desk's step-by-step record
+    # lives in its own append-only table with its own retention; only
+    # **decisions** enter the chain, because the chain is never pruned and a
+    # per-step chain would grow without a bound anybody chose. Each of these
+    # is user- or policy-driven and therefore bounded in practice.
+    #
+    # Every one of them is recordable by a real code path in this build,
+    # which is the rule the ``evidence_deleted`` note below states: a name in
+    # this enum that nothing can ever record is a reader's evidence for a
+    # feature that does not exist.
+    TASK_EXECUTION_REFUSED = "task_execution_refused"
+    TOOL_CALL_REFUSED = "tool_call_refused"
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    EXECUTION_UNAVAILABLE = "execution_unavailable"
+    #: An activity row a person asked to remove. Deleting timeline rows is
+    #: permitted precisely because they are not chain links; the deletion
+    #: itself is a decision, so it is one (ADR-0008 6).
+    ACTIVITY_DELETED = "activity_deleted"
+
     # ``evidence_deleted`` is deliberately **absent**. ADR-0003 7 has two
     # halves: evidence is never pruned automatically, and a deletion a user
     # asks for is itself an audit event. The first half is implemented; the

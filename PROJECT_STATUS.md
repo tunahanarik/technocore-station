@@ -1393,9 +1393,77 @@ kapatildi; her duzeltme testle ve **mutasyon kontroluyle** kanitlandi
 - [x] SI-282...SI-284, IMP-403...IMP-408. SI-273, SI-278, SI-279 ve SI-281
       metinlerindeki yanlis iddialar **duzeltildi**, silinmedi.
 
-## Sonraki asama: Asama 9 - H2 Agent calisma ortami ve Activity Desk
+### Paket H2 - Agent calisma ortami ve Activity Desk (Asama 9)
 
-Butce/izin siniri ve model cagrisi H2'nin; public paylasim H3'un.
+Kapsam kararlari: [ADR-0008](docs/decisions/0008-paket-h2-kapsam-kararlari-2026-09-05.md).
+Dogrulama raporu: [docs/verification/paket-h2.md](docs/verification/paket-h2.md).
+
+- [x] **Keyfi kod/shell yurutmesi KAPALI.** Olcum yapildi (Docker Desktop
+      4.89.0 kurulu ve daemon acik, WSL2 var, Windows Sandbox yok, Hyper-V
+      yonetim yuzeyi yok, kullanici local admin degil, optional feature
+      durumlari admin gerektigi icin **olculemedi**) ve yurutme yine de
+      kapatildi: Docker **kullanicinin kurulumudur, urunun degil**, ve
+      konteyner calistiran bir yol CI'da dogrulanamaz. Hicbir sey kurulmadi,
+      hicbir konteyner calistirilmadi. Urun kaynaginda `subprocess`/`exec`/
+      `eval`/`os.system` **hala yok**.
+- [x] **`execution_unavailable` bir durum gerekcesi** ve UI'da olculen
+      envanterle gosteriliyor; `not_measured` ile `absent` **ayri** tutuluyor.
+      Test sonucu alani `not_implemented` kaldigi icin gorev
+      `ready_to_publish`'e **gecemiyor** - calistirilmamis kod test edilmis
+      sayilmaz.
+- [x] **Model lane'i kapali kaldi.** `tool_calls_supported: Literal[False]`
+      degismedi, `post_completion` produksiyonda cagrilmiyor,
+      `OUTBOUND_CLIENT_MODULES` **beste kaldi**. Tool-call wire formati hala
+      yayimlanmamis (ADR-0005 §1.2).
+- [x] **Arac semasi Station'in altinci kapali registry'si**: derleme zamani
+      tuple, sekiz arac, tipli parametreler, **`path`/`url` parametresi yok**.
+      Durdur/devam bilerek arac degil. Kayitsiz kimlik gosterilebilir bir ret
+      donduruyor.
+- [x] **Guven siniri:** git, PR, merge, paket kurulumu, ayar duzenleme, izin
+      listesi ve plugin registry'de **yok** ve bu **import zamaninda**
+      denetleniyor (ekili `git_commit` kaydiyla suruldu). SI-213'un yasagi
+      yeni `agent/` paketine **tasindi**.
+- [x] **Butce acildi**: arac cagrisi (32), duvar saati (120 sn), eszamanlilik
+      `Literal[1]`. Token ve para birimi **gerekcesiyle reddedildi** ve telde
+      `refused_units` olarak **yayimlaniyor**. "Agent kendi butcesini
+      yukseltemez" uc kilitle yapisal; dort yazimi tarayan AST testi ekili bir
+      yaziciyla suruldu. `tasks/` ve `modules/` **hic dokunulmadi**.
+- [x] **Workspace savunmasi sifirdan**: ad allow-list'ten yeniden kurulur ve
+      yeniden yazilacaksa **reddedilir**; `resolve()` + `is_relative_to`;
+      `is_symlink()` **ve** `os.path.isjunction()` ile koke kadar yuruyus;
+      tavanlar diskten okunur. **Arsiv acma yolu hic yok.** 15 dusmanca ad,
+      iki gorev arasi okuma, yaprakta ve ust dizinde bag - hepsi reddedildi.
+- [x] **`RUNNING`/`PAUSED` acildi**; `ALLOWED_TRANSITIONS` ve `INITIAL_STATE`
+      **degismedi**; `UNPRODUCIBLE_STATES` bosaldi. Bosalan uc test
+      **sessizce birakilmadi** - saf-fonksiyon testi artik mekanizmayi
+      suruyor, bos `parametrize` kaldirildi, yanlis adlandirilmis test
+      duzeltildi. `STATE_DETAIL`'in yalan olan iki cumlesi duzeltildi.
+      `_state_writers` taramasi `agent` paketini de kapsiyor.
+- [x] **Activity Desk**: ayri yalniz-ekleme tablo, kendi retention'i (500),
+      satirlari zincir halkasi **degil**. Zincire yalniz **bes karar noktasi**
+      giriyor. `chain_referenced` append basarili olduktan **sonra** yaziliyor
+      ve isaretli satir budanamiyor. Silme bir audit olayi ve sonrasinda
+      zincir `INTACT` dogrulaniyor. Modelin muhakemesi/ham payload icin
+      **sutun yok**.
+- [x] **Frontend**: `Gorevler` ve `Aktivite` birlikte acildi.
+      `HIDDEN_SECTIONS` artik elle yazilmis liste degil, `SECTIONS`'tan
+      **turetiliyor** ve boslugu kendi adlandirilmis iddiasi olarak
+      olculuyor; `never shows a section that is not ready` testinin govdesi
+      **degismedi**. On dort eylem, on dort etiket; yuk tasiyan bes olay
+      benzersiz **etiket sayisiyla** test ediliyor. Sahte progress yok.
+- [x] **Mutasyon gercek bir kusur yakaladi**: `activity._clean` denetimden
+      **once** notruyordu ve guard'i sessizce no-op yapiyordu (IMP-420).
+      Ayrica guard silme (3 kirmizi), reparse-point yuruyusu silme (2),
+      `_assert_plan_intact` silme (1), `safe_name` yeniden adlandirma (17).
+- [x] **1974 pytest** (1769 -> 1974) + **289 Vitest** (256 -> 289) +
+      **65 Playwright** (58 -> 65). Yeni HeroUI bileseni yok (kume 11'de),
+      yeni bagimlilik yok. Asama numarasi bes giris noktasinda `7 -> 8`.
+- [x] `docs/task-modules.md`'nin eskiyen uc yuzeyi (modul tablosu iki satir,
+      "uretilemeyen uc durum", butce ertelemesi) **kaydedilerek** guncellendi.
+
+## Sonraki asama: Asama 10 - H3 Proof Workspace
+
+Public paylasim ve kanit paketi H3'un.
 
 **Gercek servise hicbir istek gonderilmedi** ve **hicbir ucretli cagri
 yapilmadi** - her sey mock tasiyiciya karsi, iki katmanli ag kesici altinda.

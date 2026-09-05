@@ -14,6 +14,10 @@
  */
 
 import type {
+  ActivityDeleteResponse,
+  ActivityListResponse,
+  AgentSurfaceResponse,
+  AgentTaskRunsResponse,
   AppStatus,
   AuditChainStatus,
   ComposeCapability,
@@ -29,6 +33,9 @@ import type {
   ProtectionMode,
   RecoveryInspectResult,
   SessionBootstrap,
+  TaskListResponse,
+  TaskStatusResponse,
+  TaskUserTransitionName,
   TechnocoreStatus,
   WorkScanStatus,
   WorkScanSuggestion,
@@ -892,4 +899,168 @@ async function readErrorDetail(response: Response): Promise<string> {
     // No parseable body; fall through to the catalogue fallback.
   }
   return "";
+}
+
+// --- Tasks, runs and the Activity Desk (Paket H2) ---------------------------
+//
+// Every call below is **local**. Nothing in this group opens an outbound
+// connection: a run is a chain of deterministic tools over files inside one
+// task's workspace, and the Activity Desk reads a table on this machine. The
+// group therefore has no long deadline for a remote service and no retry of
+// its own - the one long deadline here is `AGENT_RUN_TIMEOUT_MS`, and it is
+// long because the *server* holds the request open while it works, not
+// because anything is waiting on a network.
+//
+// Three shapes are deliberately absent:
+//
+// * **there is no call that runs a command.** No function here, and no
+//   argument to a function here, reaches a shell, a process or an
+//   interpreter. `execution_unavailable` arrives as a reason with a sentence
+//   from `fetchAgentSurface` (ADR-0008 1);
+// * **there is no call that records evidence.** Nothing lets a caller assert
+//   that a test passed or that a result was accepted; those fields are
+//   written by what actually produced them, or not at all;
+// * **there is no timer and no poll.** Every function below runs inside a
+//   user action, once. A restart resumes nothing on its own, and
+//   `resumeRun` exists so continuing is a person's decision (SI-224,
+//   SI-272).
+
+/**
+ * The deadline for starting or resuming a run.
+ *
+ * A run executes **inside the request that asked for it**: the backend has no
+ * scheduler and no background task, so `POST /runs/{id}/start` holds the
+ * connection open for as long as the tool chain takes. The server's own
+ * ceiling is 120 wall-clock seconds (`AgentCeilingStatus.max_wall_clock_seconds`),
+ * after which it stops the run itself and answers with a
+ * `budget_exhausted` phase; 150 000 ms sits above that with margin for the
+ * final digest pass and the response write.
+ *
+ * A shorter deadline would abandon a run the server is still executing and
+ * report `timeout` - a claim about the local service - while discarding the
+ * per-step record that is the entire point of the reply.
+ */
+export const AGENT_RUN_TIMEOUT_MS = 150000;
+
+/** The tasks, newest first, bounded. Reads a local table and nothing else. */
+export async function fetchTasks(): Promise<TaskListResponse> {
+  return request<TaskListResponse>("/api/tasks");
+}
+
+/**
+ * The agent surface: what runs, what does not, and why.
+ *
+ * Read on mount, and safe there for the same reason `fetchWorkScanStatus` is:
+ * it contacts nobody. It carries the `execution_unavailable` reason, the
+ * ceiling with its refused units, the whole tool registry and any run a
+ * restart left interrupted - which it **lists** and never continues.
+ */
+export async function fetchAgentSurface(): Promise<AgentSurfaceResponse> {
+  return request<AgentSurfaceResponse>("/api/tasks/surface");
+}
+
+/** One task's runs and the files its workspace currently holds. */
+export async function fetchTaskRuns(taskId: string): Promise<AgentTaskRunsResponse> {
+  return request<AgentTaskRunsResponse>(`/api/tasks/${taskId}/runs`);
+}
+
+/**
+ * Move a task the way a person may move it.
+ *
+ * The target type omits `running` and `paused` - those belong to the runner
+ * and are reached by recording a plan first - and omits `ready_to_publish`,
+ * which is derived from evidence and cannot be asked for.
+ */
+export async function transitionTask(input: {
+  readonly taskId: string;
+  readonly target: TaskUserTransitionName;
+  readonly detail?: string;
+}): Promise<TaskStatusResponse> {
+  return mutate<TaskStatusResponse>(`/api/tasks/${input.taskId}/transition`, {
+    target: input.target,
+    detail: input.detail ?? "",
+  });
+}
+
+/**
+ * Record a plan. **Runs nothing.**
+ *
+ * Two decisions rather than one, the shape the composer uses for signing and
+ * sending: a person approves *what will be done*, and then, separately, that
+ * it be done. The recorded plan is frozen - re-planning opens a new run - so
+ * a success criterion cannot be loosened after the fact.
+ */
+export async function planTaskRun(input: {
+  readonly taskId: string;
+  readonly steps: readonly { readonly tool_id: string; readonly arguments: Record<string, string> }[];
+  readonly expectedArtifacts: readonly string[];
+  readonly testCondition: string;
+}): Promise<AgentTaskRunsResponse> {
+  return mutate<AgentTaskRunsResponse>(`/api/tasks/${input.taskId}/runs`, {
+    steps: input.steps.map((step) => ({ tool_id: step.tool_id, arguments: step.arguments })),
+    expected_artifacts: [...input.expectedArtifacts],
+    test_condition: input.testCondition,
+  });
+}
+
+/** Carry the recorded plan out. Blocking on the server; see the deadline. */
+export async function startTaskRun(
+  taskId: string,
+  runId: string,
+): Promise<AgentTaskRunsResponse> {
+  return mutate<AgentTaskRunsResponse>(
+    `/api/tasks/${taskId}/runs/${runId}/start`,
+    {},
+    AGENT_RUN_TIMEOUT_MS,
+  );
+}
+
+/**
+ * Block the next tool call.
+ *
+ * Not a cancellation of the request in flight: the flag is read by the runner
+ * before each call, and a result that arrives after a stop is discarded
+ * rather than recorded. The default deadline is right because this writes one
+ * flag.
+ */
+export async function stopTaskRun(
+  taskId: string,
+  runId: string,
+): Promise<AgentTaskRunsResponse> {
+  return mutate<AgentTaskRunsResponse>(`/api/tasks/${taskId}/runs/${runId}/stop`, {});
+}
+
+/** Continue a paused run, within the scope already approved. */
+export async function resumeTaskRun(
+  taskId: string,
+  runId: string,
+): Promise<AgentTaskRunsResponse> {
+  return mutate<AgentTaskRunsResponse>(
+    `/api/tasks/${taskId}/runs/${runId}/resume`,
+    {},
+    AGENT_RUN_TIMEOUT_MS,
+  );
+}
+
+/**
+ * The timeline, newest first, bounded.
+ *
+ * `runId` is the only narrowing this endpoint accepts and it is matched for
+ * equality against a column; it never becomes a path, a name or an address.
+ * An empty value means "every run".
+ */
+export async function fetchActivity(runId = ""): Promise<ActivityListResponse> {
+  const query = runId === "" ? "" : `?run_id=${encodeURIComponent(runId)}`;
+  return request<ActivityListResponse>(`/api/activity${query}`);
+}
+
+/**
+ * Remove timeline rows, and record that removal as an audit event.
+ *
+ * Chain-referenced rows are kept and counted separately. The two numbers are
+ * never summed: "twelve removed" and "three kept because the chain refers to
+ * them" answer different questions.
+ */
+export async function deleteActivity(runId = ""): Promise<ActivityDeleteResponse> {
+  return mutate<ActivityDeleteResponse>("/api/activity/delete", { run_id: runId });
 }

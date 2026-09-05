@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { resetSessionState } from "./api/client";
 import type { AppStatus, ConformanceStatus, IdentityStatus, TechnocoreStatus } from "./api/types";
+import { SECTIONS } from "./sections";
 
 const HEALTHY_STATUS: AppStatus = {
   service: { state: "running", stage: 2, mode: "production" },
@@ -104,6 +105,13 @@ const VISIBLE_SECTIONS = [
   // that reads it - "never shows a section that is not ready" - is unchanged,
   // which is the point of keeping the expectation in a constant.
   "Is Tara",
+  // Paket H2 (ADR-0008 8) opened these two, and opened them *together*: the
+  // Activity Desk's rows carry task and run identifiers, so shipping it while
+  // Gorevler was still hidden would have been a timeline of events with no
+  // way to reach what they happened to. Same rule as above - the data moved,
+  // the assertion did not.
+  "Gorevler",
+  "Aktivite",
   "Kimlik ve Guvenlik",
   "Olustur ve Dogrula",
   "Kaynaklar",
@@ -111,7 +119,23 @@ const VISIBLE_SECTIONS = [
   "Ayarlar ve Yardim",
 ] as const;
 
-const HIDDEN_SECTIONS = ["Gorevler", "Aktivite"] as const;
+/**
+ * The sections the registry still marks as not ready.
+ *
+ * **Derived, not hand-written** - and that change is the point. H2 emptied
+ * this list, and a hand-written `[]` would have turned the loop below into a
+ * loop over nothing: a test that passes because it asserts nothing looks
+ * exactly like a test that passes because the code is right. Reading the
+ * registry keeps the loop honest in both directions: it is genuinely empty
+ * today, and a section registered as unready tomorrow is covered without
+ * anybody remembering to add its label here.
+ *
+ * The emptiness itself is not left silent either; it is asserted as a claim
+ * of its own, in "registers no unready section any more" below.
+ */
+const HIDDEN_SECTIONS: readonly string[] = SECTIONS.filter(
+  (section) => !section.ready,
+).map((section) => section.label);
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -174,10 +198,23 @@ describe("App shell", () => {
     expect(labels).toEqual([...VISIBLE_SECTIONS]);
   });
 
+  it("registers no unready section any more, so the hidden list is empty by measurement", () => {
+    // H2 opened the last two. The loop below this test would therefore run
+    // zero times, and a silently empty loop proves nothing - so the emptiness
+    // is asserted here as its own claim, against the registry rather than
+    // against a constant somebody edited. The guard that follows keeps
+    // working the day a tenth section is registered unready.
+    expect(HIDDEN_SECTIONS).toEqual([]);
+    expect(SECTIONS.map((section) => section.label)).toEqual([...VISIBLE_SECTIONS]);
+    expect(SECTIONS.every((section) => section.ready)).toBe(true);
+  });
+
   it("never shows a section that is not ready", async () => {
-    // Gorevler and Aktivite stay registered for packages F/H2 but must not
-    // appear as empty menu items before they exist. Is Tara left this list
-    // when H1 built it, and nothing about the assertion below changed.
+    // Is Tara left this list when H1 built it, and Gorevler and Aktivite left
+    // it when H2 did (ADR-0008 8); nothing about the assertion below changed.
+    // The list is empty today - which the test above states outright - and
+    // this one is what still refuses an unbuilt section the moment one is
+    // registered again.
     stubBackend();
     render(<App />);
     await screen.findByRole("navigation", { name: "Ana bolumler" });
@@ -233,15 +270,20 @@ describe("App shell", () => {
     await screen.findByText("Technocore durumu");
 
     // Tab order: collapse toggle, then the nav buttons in registry order.
-    // "Is Tara" sits between the first two entries since H1 opened it, so it
-    // is tabbed *through* rather than skipped - a missing stop here would
-    // mean a section reachable by mouse and not by keyboard.
+    // "Is Tara" sits between the first two entries since H1 opened it, and
+    // "Gorevler"/"Aktivite" follow it since H2 did, so all three are tabbed
+    // *through* rather than skipped - a missing stop here would mean a
+    // section reachable by mouse and not by keyboard.
     await user.tab();
     expect(screen.getByRole("button", { name: "Menuyu daralt" })).toHaveFocus();
     await user.tab();
     expect(screen.getByRole("button", { name: /Genel Bakis/ })).toHaveFocus();
     await user.tab();
     expect(screen.getByRole("button", { name: "Is Tara" })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Gorevler" })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Aktivite" })).toHaveFocus();
     await user.tab();
     expect(screen.getByRole("button", { name: "Kimlik ve Guvenlik" })).toHaveFocus();
 

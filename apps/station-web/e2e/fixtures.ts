@@ -300,6 +300,12 @@ export const SECTION_LABELS = [
   // Opened by Paket H1 (ADR-0007 9). Every loop over this list - the
   // accessibility pass, the CSP pass and the tab order - now covers it.
   "Is Tara",
+  // Opened together by Paket H2 (ADR-0008 8), and listed in registry order
+  // because the tab-order assertion walks this list literally. Both sections
+  // read only local endpoints, so adding them to the accessibility and CSP
+  // loops keeps this suite's zero-outbound rule intact.
+  "Gorevler",
+  "Aktivite",
   "Kimlik ve Guvenlik",
   "Olustur ve Dogrula",
   "Kaynaklar",
