@@ -155,9 +155,14 @@ Paket H3 onu doldurulabilir yaptı ve **koşulu yapısal tuttu** (ADR-0009 §1):
 Bu iki ayrı reddetmedir ve ikisi de tek başına yeterli değildir —
 `EvidenceRef` yapıcısı **şekli** (32 küçük harf hex) denetler ve veritabanı
 görmez; `TaskService.record_evidence` **satırın gerçekten var olduğunu**
-denetler. `verified` çağırandan alınmaz: `ProofService` arşivdeki kaydın
-kendi `write_outcome` değerini okur, yani `outcome_unknown` dönmüş bir
-gönderim kaydedilir fakat **doğrulanmış sayılmaz**.
+denetler. `verified` **`ProofService` yolunda** çağırandan alınmaz: servis arşivdeki
+kaydın kendi `write_outcome` değerini okur, yani `outcome_unknown` dönmüş bir
+gönderim kaydedilir fakat **doğrulanmış sayılmaz**. Bu cümle önce koşulsuz
+yazılmıştı ve **yanlıştı**: `TaskService.record_evidence` `verified`'ı
+çağırandan alır ve bugün `write_outcome`'u `refused` olan bir kayda
+`verified=True` yazan doğrudan bir çağrı `PASSED` üretebilir. Bugün o
+çağrıyı açan **hiçbir HTTP rotası yok**, yani bu bir belge kusuruydu, bir
+delik değil — ama koşulsuz yazılması onu deliğe çevirirdi.
 
 Alan `PUBLICATION_FIELDS`'e **girmedi** ve girmeyecek. `ready_to_publish`'i
 engellemez — dış paylaşımı bitirme koşulu yapmak, hiçbir görevin

@@ -25,8 +25,11 @@ is exactly where a project stops inheriting them by accident.
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
+from typing import Literal
 
 import pytest
 from fastapi import FastAPI
@@ -34,16 +37,18 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 from station_api.agent.service import AgentService
+from station_api.agent.workspace import task_workspace, workspace_root
 from station_api.compose.nonce import NonceReserver
 from station_api.db.models import EvidenceRecord
 from station_api.modules.registry import ModuleId
 from station_api.proof.bundle import BUNDLE_FORMATS, BUNDLE_STEM
 from station_api.proof.language import BUNDLE_SCOPE_SENTENCE, HASH_SCOPE_SENTENCE
 from station_api.routes.proof import DELIVERED_AT_HEADER
+from station_api.schemas import EvidenceExportRequest, ProofShareRequest
 from station_api.tasks.service import TaskService
 from station_api.tasks.sources import TaskSourceId
 
-from tests.security.agent_fixtures import write_plan
+from tests.security.agent_fixtures import plant_a_real_reparse_point, write_plan
 from tests.security.conftest import collect_route_paths
 
 pytestmark = pytest.mark.security
@@ -321,6 +326,14 @@ def test_a_share_without_the_acknowledgement_never_reaches_a_handler(
     A body that omits it, and a body that says ``false``, are both refused by
     the model before the route runs - the rule the evidence export is built
     on, applied to the surface that hands a proof to the browser.
+
+    Since an adversarial review of H3 this is the **only** refusal of a missing
+    acknowledgement on this route. The handler used to re-check the same field
+    and call itself the second of two independent refusals; ``Literal[True]``
+    admits one value, so that branch could never be taken and deleting it
+    failed nothing. The branch is gone, and
+    ``test_the_acknowledgement_is_enforced_by_the_annotation_and_only_there``
+    below pins the annotation that replaced it.
     """
     prepared = _prepare(client, csrf_token, proof_task_id)
 
@@ -338,6 +351,110 @@ def test_a_share_without_the_acknowledgement_never_reaches_a_handler(
             headers={CSRF: csrf_token},
         )
         assert response.status_code == 422
+
+
+def test_a_reparse_point_in_the_workspace_is_a_stated_refusal_not_a_500(
+    client: TestClient,
+    app: FastAPI,
+    csrf_token: str,
+    data_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real junction, and the answer a person gets because of it.
+
+    Measured on H3 before this was fixed: ``mklink /J`` inside
+    ``workspace/v1/<task_id>`` made ``GET /api/proof/{id}`` answer **500**.
+    ``AgentService.workspace_files`` raised ``WorkspaceError`` from the
+    reparse walk, ``ProofService.build`` passed it through, and every proof
+    route catches ``(ProofError, TaskError)`` only. The generic contract
+    redacted the body, so nothing leaked - what was lost was the sentence. The
+    workspace layer knew precisely what was wrong and the route replaced that
+    with "an error occurred", on a screen whose whole subject is telling a
+    person what this machine can and cannot establish.
+
+    ``proof.build`` now translates ``AgentError``, so the refusal arrives with
+    its own status and its own wording.
+
+    Driven against an actual reparse point, with the predicate forced on the
+    same real path where the platform will not plant one - no skip, because a
+    guard that has only ever been monkeypatched is the guard this repository
+    keeps finding holes in.
+    """
+    assert csrf_token  # the session these reads need; no body is posted
+    tasks: TaskService = app.state.tasks
+    view = tasks.open_task(
+        module_id=ModuleId.AGENT_WORKSPACE,
+        source=TaskSourceId.OPERATOR_REQUEST,
+        content=b"TEST-ONLY reparse proof task",
+        title="TEST-ONLY junction gorevi",
+    )
+
+    elsewhere = data_dir / "baska-taraf"
+    elsewhere.mkdir(parents=True, exist_ok=True)
+    (elsewhere / "rapor.md").write_text("TEST-ONLY disarida", encoding="utf-8")
+
+    workspace_root(data_dir).mkdir(parents=True, exist_ok=True)
+    planted = task_workspace(data_dir, view.id)
+
+    # The permitted case first: with no reparse point the read answers 200, so
+    # a route that refused everything would fail here rather than below.
+    assert client.get(f"{PROOF_PREFIX}/{view.id}").status_code == 200
+
+    real = plant_a_real_reparse_point(planted, elsewhere)
+    if not real:  # pragma: no cover - only where the platform plants neither
+        planted.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(
+            os.path, "isjunction", lambda path: Path(path) == planted
+        )
+
+    try:
+        response = client.get(f"{PROOF_PREFIX}/{view.id}")
+
+        assert response.status_code == 400, response.text
+        detail = response.json()["detail"]
+        assert "baglanti" in detail
+        # The refusal is the workspace layer's own sentence, not a generic
+        # one, and it names neither the planted path nor the other side.
+        assert str(planted) not in detail
+        assert str(elsewhere) not in detail
+
+        # The run listing inherits nothing broken: ``routes/agent.py`` catches
+        # ``AgentError``, and ``WorkspaceError`` is one, so that route already
+        # answered a stated refusal. Asserted rather than assumed, because the
+        # review that found the proof route reported this one as sharing the
+        # defect and it does not.
+        runs = client.get(f"/api/tasks/{view.id}/runs")
+        assert runs.status_code == 400, runs.text
+        assert "baglanti" in runs.json()["detail"]
+    finally:
+        if real:
+            planted.rmdir()
+
+
+def test_the_acknowledgement_is_enforced_by_the_annotation_and_only_there() -> None:
+    """The annotation, pinned - because nothing else refuses now.
+
+    ``ProofShareRequest.acknowledged`` is ``Literal[True]`` and has no
+    default. Both halves matter and neither is visible from an HTTP response:
+    widening the type to ``bool`` would make ``acknowledged: false`` reach a
+    handler that no longer re-checks it, and giving it a default would let a
+    body omit it entirely. The 422s above would keep passing through the first
+    of those two changes, because a *missing* field is still a 422 under
+    ``bool`` with no default - which is exactly how a defence disappears
+    without a red test.
+
+    Read off the model rather than off the source text, so a re-spelling that
+    keeps the meaning passes and a widening that keeps the spelling does not.
+    """
+    field = ProofShareRequest.model_fields["acknowledged"]
+
+    assert field.annotation == Literal[True]
+    assert field.is_required()
+
+    # And the twin that is *not* this shape, named here so the difference is a
+    # measurement rather than a memory: the evidence export takes a plain bool
+    # and its handler really does check it (``routes/evidence.py``).
+    assert EvidenceExportRequest.model_fields["acknowledged"].annotation is bool
 
 
 def test_a_format_outside_the_closed_set_is_a_422(
@@ -490,11 +607,20 @@ def test_a_public_share_body_carries_no_address_and_no_text(
 def test_the_task_reports_the_fourth_field_as_available_now(
     client: TestClient, csrf_token: str, proof_task_id: str
 ) -> None:
-    """The wire value moved with the fact, and is derived from the constant.
+    """The wire value moved with the fact.
 
     ``public_share_available`` was ``Literal[False]`` until H3. It is a plain
     boolean now and it is ``true``, which is the honest answer: the field can
     be filled - from an archived send and from nothing else.
+
+    This test reads the *value* over HTTP and says nothing about where it came
+    from: a hard-coded ``True`` on the model passes it, which an adversarial
+    review measured. The claim that the wire is derived from
+    ``UNFILLABLE_FIELDS`` is driven in ``test_task_evidence.py``'s
+    ``test_the_task_status_view_still_reports_a_closed_field_as_unavailable``,
+    which closes the field and re-reads the projection. The docstring is
+    corrected rather than the assertion strengthened, because an HTTP test
+    cannot reach the constant that decides it.
     """
     assert csrf_token
     payload = client.get(f"{PROOF_PREFIX}/{proof_task_id}").json()

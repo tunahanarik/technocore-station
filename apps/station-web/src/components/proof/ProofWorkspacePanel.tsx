@@ -56,9 +56,16 @@ import { StatusPill } from "../StatusPill";
  *    browser through an object URL, exactly as the recovery file and the
  *    evidence export are. There is no directory to choose, so there is no
  *    traversal question to answer (ADR-0009 3).
- * 7. **Nothing here polls and nothing here sends.** Two reads on mount; every
- *    other request is inside a click (SI-272). No route on this surface can
- *    reach an outbound client.
+ * 7. **Nothing here polls and nothing here sends.** One read on mount - the
+ *    task list, and nothing else - and every other request is inside a click
+ *    (SI-272). No route on this surface can reach an outbound client.
+ *
+ *    It said "two reads" until an adversarial review counted them. There is a
+ *    single `useEffect` here and it calls `loadTasks()`; the proof itself is
+ *    read when a task is opened, which is a click. `TasksPanel` is the surface
+ *    that really does two, because it also reads the agent surface, and
+ *    `docs/ui-action-map.md` 15.1 has said one for this panel all along - so
+ *    the comment was the thing that was wrong.
  */
 
 // --- vocabulary ------------------------------------------------------------

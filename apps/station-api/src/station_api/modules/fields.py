@@ -99,15 +99,25 @@ PUBLICATION_FIELDS: frozenset[EvidenceField] = frozenset(
 #:
 #: Emptying it is the deliberate half of ADR-0009 1, exactly as emptying
 #: ``UNPRODUCIBLE_STATES`` was the deliberate half of ADR-0008 3. The constant
-#: stays because four branches consult it - the task gate, the task service's
-#: row reader, the module completion check and the constructor below - and
-#: those four branches *are* the refusal machinery. A package that defines a
-#: fifth field it cannot fill edits this one line and gets all four refusals
-#: back; deleting the constant would mean writing them again from memory.
+#: stays because **five** branches consult it - the task gate, the task
+#: service's row reader, the module completion check, the constructor below,
+#: and :func:`station_api.tasks.views.to_task_status`, which derives what the
+#: wire says about ``public_share`` from it. The first four are the refusal
+#: machinery; the fifth is the *report* of it, and it is counted here because
+#: a report that drifts from the rule is how a user learns a field is
+#: available after the rule closed it. A package that defines a sixth field it
+#: cannot fill edits this one line and gets all five back; deleting the
+#: constant would mean writing them again from memory.
+#:
+#: The count was four until an adversarial review of H3 measured it. Mutating
+#: ``to_task_status``'s derivation to a hard-coded ``True`` killed nothing -
+#: the two tests that claimed "the wire and the rule cannot drift apart" both
+#: passed against a fixed literal - so the fifth reader is now named here and
+#: driven like the other four.
 #:
 #: The branches are not left unexecuted. ``tests/security`` closes one
 #: genuinely fillable field for the duration of a test and drives each of the
-#: four, having first checked that the same path is *permitted* with nothing
+#: five, having first checked that the same path is *permitted* with nothing
 #: closed - without that first half a function that refused everything would
 #: pass the second half too (ADR-0009 2).
 UNFILLABLE_FIELDS: frozenset[EvidenceField] = frozenset()

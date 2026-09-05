@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-09-05T12:05:00Z",
+  "updated_utc": "2026-09-05T14:10:00Z",
   "base_sha": "5411171dd2302c6fea5a2af22695503859317c27",
   "note": "Kayit ile gercek Git/GitHub durumu celisirse Git/GitHub kaniti esastir.",
   "stages": [
@@ -206,15 +206,32 @@
     {
       "id": "H3",
       "name": "Proof Workspace",
-      "status": "implementing",
+      "status": "in_review",
       "branch": "stage-h3-proof-workspace",
-      "pr": null,
+      "pr": 19,
       "reviewed_sha": null,
-      "tested_sha": null,
+      "tested_sha": "f5d6b97",
       "merge_sha": null,
-      "findings": [],
+      "findings": [
+        "ADR-0009: yetki KUNYEDEN DEGIL kapsam ekinden ve prompt §14'ten geliyor - kunye Proof Workspace'i Proje 1'e koymustu; fark kayda gecirildi",
+        "public_share acildi ama kosul YAPIYA konuldu: uc gereksiz olmayan denetim (yapici kimlik BICIMINI, servis SATIRIN VARLIGINI, proof servisi verified'i arsivlenmis gonderimin KENDI write_outcome'undan turetiyor) - outcome_unknown kaydedilir ama DOGRULANMAZ. PUBLICATION_FIELDS UCTE KALDI (ADR-0004 §4 korundu)",
+        "ALANI ACMAK BIR KUSUR DOGURUYORDU: satir okuyucusu firlatan bir yapiciya bakar hale geldi; elle yazilmis TEK bir satir o gorevin HER okumasini (listeleme dahil) kirabilirdi - yakalandi, satir atlaniyor",
+        "UNFILLABLE_FIELDS bosalinca dort dal olu kalacak ve hicbiri kirmizi vermeyecekti (H2'nin UNPRODUCIBLE_STATES tuzaginin aynisi). Dordu de alani test suresince kapatarak suruluyor; kapatma HER TUKETEN MODULUN KENDI BAGLAMASI uzerinde (yalniz birini patch'lemek digerlerini surmeden birakirdi) ve her test IZINLI HALI ONCE okuyor",
+        "proof_workspace SON PLANNED kayitti: sozlesme bir fonksiyona cevrildi, testin kendi kurdugu kayitlar uzerinde suruluyor, 'artik planlanan modul yok' KENDI ADLANDIRILMIS iddiasi",
+        "Mevcut bir iddia YANLISA donecekti ve yesile cevirmenin yolu tam da ADR-0004'un yasakladigi duzenlemeydi; elle yazilmis kehanetle karsilastiriliyor",
+        "Paket hicbir yere yazilmiyor: iki bicim, Content-Disposition, yeni dosya koku yok, ZIP YOK (zip-slip ACMADAN dogar, uretmeden degil - ayrim ADR'ye yazildi)",
+        "Onay ExportConsent degil SendApproval kalibi: paket digest'i + gorev + icerik surumu + oturum, tek kullanimlik, ve REDDEDILEN TESLIM DE TOKEN'I HARCIYOR",
+        "YENI PAKET HICBIR SINIR TARAMASININ ICINDE DEGILDI (H2'nin PACKAGE_F_DIRS dersi); uc tarama genisletildi, iki yenisi eklendi, her biri IKI KEZ suruldu (dosyalari gercekten actigi + ekili ihlalin raporlandigi)",
+        "independent_check ve exit_code gerekcesiyle not_implemented: model lane kapali (ikinci gorus yok), yurutme kapali (exit code yok). Kabul hicbir durumu tasimiyor - gecisin girdisi",
+        "Hash'in ne kanitladigi iki bicime ve ekrana ILK DIGEST'IN USTUNE yazildi: baytlari tanimlar, dogrulugu degil",
+        "Frontend: bolum acilmadi (9/9 ready). types.ts'te public_share_available BAYATTI (false tiplenmisken backend true gonderiyordu); true'ya sabitlenmedi, boolean'a genisletildi - false'u geri koymak artik DERLEME HATASI",
+        "Bir test YANLIS SEBEPLE geciyordu (guard'i degil, basari sonrasi sifirlamayi suruyordu); istegi ucusta tutacak sekilde yeniden yazildi. Ajan busy guard'i ile isDisabled'in gereksiz oldugunu olctu ve DOM'dan erisilemeyen yari icin ZORLAMA TEST UYDURMADI",
+        "2105 pytest (1992'den) + 315 Vitest (289'dan) + 74 Playwright (65'ten). 16 mutasyon, 16'si en az bir test olduruyor. HeroUI 11'de (MCP ile dogrulandi, v3.2.4), yeni bagimlilik yok, migration yok, asama 8->9",
+        "ACIK BOSLUK: ready_to_publish HTTP'den hala erisilemiyor (TaskUserTransitionName tasimiyor, ADR-0009 kapsaminda degil). Kapatilmis karar DEGIL, acik bosluk - proof-workspace.md §10",
+        "proof.spec.ts her rotayi mock'luyor: onayin gercekten tek kullanimlik/digest'e bagli/sunucuda harcandigi ve paket deterministligi hakkinda HICBIR SEY kanitlamiyor - bunlar Python suite'inde"
+      ],
       "failed_attempts": 0,
-      "next_safe_step": "Proof Workspace: kanit paketi, kullanici kabulu, dis paylasim onayi. GERCEK YAZMA YOK, GERCEK HARCAMA YOK."
+      "next_safe_step": "PR #19 CI + bagimsiz inceleme; bulgular kapaninca merge."
     },
     {
       "id": "I",

@@ -1195,9 +1195,15 @@ def test_the_task_layer_states_where_the_ceiling_lives_rather_than_implying_none
     assert "Token ve para birimi sayilmaz" in payload.budget_detail
     # ``public_share_available`` moved from ``Literal[False]`` to a derived
     # boolean when Package H3 made the field fillable (ADR-0009 1). The
-    # assertion moved with the fact rather than being deleted, and it is
-    # asserted against the constant that decides it so the wire and the rule
-    # cannot drift apart.
+    # assertion moved with the fact rather than being deleted.
+    #
+    # These two lines pin the two facts *separately* and nothing more. They do
+    # **not** pin the link between them: both are true of a hard-coded
+    # ``True`` on the model, which an adversarial review measured. The link -
+    # close the field, and the wire must follow - is driven by
+    # ``test_the_task_status_view_still_reports_a_closed_field_as_unavailable``
+    # below, and this comment says so rather than claiming a strength it has
+    # not got.
     assert payload.public_share_available is True
     assert EvidenceField.PUBLIC_SHARE not in UNFILLABLE_FIELDS
 
@@ -1211,16 +1217,17 @@ def test_the_deferral_is_recorded_in_the_documents(repo_root: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# ADR-0009 2 - the honesty condition: four branches that would go quiet
+# ADR-0009 2 - the honesty condition: five branches that would go quiet
 # ---------------------------------------------------------------------------
 #
-# Emptying ``UNFILLABLE_FIELDS`` leaves four branches with nothing to match,
+# Emptying ``UNFILLABLE_FIELDS`` leaves five branches with nothing to match,
 # and none of them turns red when that happens:
 #
 #     tasks/gate.py        ``if field in UNFILLABLE_FIELDS``
 #     tasks/service.py     ``if field in UNFILLABLE_FIELDS: continue``
 #     modules/completion.py``or requirement.evidence in UNFILLABLE_FIELDS``
 #     modules/fields.py    ``EvidenceRef.__post_init__``'s refusal
+#     tasks/views.py       ``public_share_available=... not in UNFILLABLE_FIELDS``
 #
 # That is the shape H2 hit with ``UNPRODUCIBLE_STATES``, and it takes H2's
 # answer: the mechanism is **driven** with one genuinely fillable field closed
@@ -1228,9 +1235,17 @@ def test_the_deferral_is_recorded_in_the_documents(repo_root: Path) -> None:
 # nothing closed, so a function that refused everything would fail rather than
 # pass - which is the way a driven mutation goes quietly wrong.
 #
+# The fifth entry was added after an adversarial review of H3 mutated
+# ``to_task_status``'s derivation into a hard-coded ``True`` and measured zero
+# failures. Two tests claimed the wire and the rule could not drift apart, and
+# both were reading a literal: ``public_share_available is True`` and
+# ``PUBLIC_SHARE not in UNFILLABLE_FIELDS`` are each true on their own with no
+# link between them. Only closing the field and re-reading the wire tests the
+# link, so that is what the test below does.
+#
 # The patch is applied to the module that *uses* the constant, never to
 # ``fields`` alone: each consumer holds its own ``from ... import`` binding, so
-# patching only the definition would leave three of the four untouched and the
+# patching only the definition would leave four of the five untouched and the
 # test would report a success it had not measured.
 
 
@@ -1360,6 +1375,45 @@ def test_a_reference_for_a_closed_field_cannot_be_constructed(
             verified=True,
             source_version_id="v1",
         ).field is field
+
+
+def test_the_task_status_view_still_reports_a_closed_field_as_unavailable(
+    service: TaskService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``tasks/views.py``'s branch: the wire, driven against the rule.
+
+    The fifth reader, and the one that had never been driven. It is not a
+    refusal - it is the *report* of one - and that is precisely why it needs
+    driving: a report that stops tracking the rule tells a user a field is
+    available on a build that closed it, which is the
+    ``arbitrary_execution_supported`` mistake in a new place.
+
+    ``public_share`` is closed here rather than ``CLOSED_FOR_THE_PROBE``,
+    because ``public_share`` is the field this line reads. It is genuinely
+    fillable today (ADR-0009 1), so closing it is a measurement rather than a
+    tautology, and the permitted case is read first: with nothing closed the
+    wire says ``True``. Replacing the derivation with a literal ``True`` -
+    which is what the model carried before H3 - turns the second half red.
+    """
+    from station_api.tasks import views as views_module
+
+    view = _open(service)
+
+    permitted = to_task_status(view, service.gate(view.id))
+    assert permitted.public_share_available is True
+
+    monkeypatch.setattr(
+        views_module,
+        "UNFILLABLE_FIELDS",
+        frozenset({EvidenceField.PUBLIC_SHARE}),
+    )
+    closed = views_module.to_task_status(view, service.gate(view.id))
+
+    assert closed.public_share_available is False
+    # The sentence that says *why* is unaffected: the availability flag and
+    # the explanation are two separate facts, and a build that closed the
+    # field still owes the reader the reason.
+    assert closed.public_share_detail == permitted.public_share_detail
 
 
 def test_the_service_refuses_to_record_a_closed_field(

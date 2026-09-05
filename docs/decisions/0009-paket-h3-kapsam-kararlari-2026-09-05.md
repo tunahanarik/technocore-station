@@ -35,17 +35,25 @@ bir Technocore gönderimine dayanır; elle yazılan bir dize kabul edilmez.
 reddetti. `test_public_share_does_not_block_a_finished_task`'in **gerekçesi
 korunur**.
 
-## 2. Dürüstlük şartı: boşalacak dört dal sessiz bırakılamaz
+## 2. Dürüstlük şartı: boşalacak **beş** dal sessiz bırakılamaz
 
-`UNFILLABLE_FIELDS` boşalınca **dört kod dalı ölü kalır** ve hiçbiri kırmızı
+`UNFILLABLE_FIELDS` boşalınca **beş kod dalı ölü kalır** ve hiçbiri kırmızı
 vermez:
 
 | Yer | Dal |
 |---|---|
-| `tasks/gate.py:121` | `if field in UNFILLABLE_FIELDS:` |
-| `tasks/service.py:184` | `if field in UNFILLABLE_FIELDS: continue` |
-| `modules/completion.py:113` | `or requirement.evidence in UNFILLABLE_FIELDS` |
-| `modules/fields.py:113` | `EvidenceRef.__post_init__` reddi |
+| `tasks/gate.py` | `if field in UNFILLABLE_FIELDS:` |
+| `tasks/service.py` | `if field in UNFILLABLE_FIELDS: continue` |
+| `modules/completion.py` | `or requirement.evidence in UNFILLABLE_FIELDS` |
+| `modules/fields.py` | `EvidenceRef.__post_init__` reddi |
+| `tasks/views.py` | `public_share_available=... not in UNFILLABLE_FIELDS` |
+
+**Bu ADR ilk hâlinde yalnız dördünü sayıyordu ve beşincisi tam da sessiz
+kalan oldu.** Bağımsız inceleme ölçtü: `tasks/views.py`'yi sabit bir
+`True`'ya çevirmek 1770 testin **hiçbirini** kırmıyordu, yani "tel ile kural
+ayrışamaz" diyen iki test sabit bir literal'e karşı geçiyordu. Envanterin
+kendisi eksik olduğu için merge şartı kendi hedefini ıskalamıştı; beşincisi
+diğer dördüyle aynı disiplinle sürülür.
 
 Bu, H2'nin `UNPRODUCIBLE_STATES` tuzağının **birebir tekrarıdır** ve aynı
 çözümü alır: mekanizma, test süresince **geçici olarak kapatılmış** bir
@@ -99,7 +107,8 @@ Genişletilecekler, adıyla ve **merge şartı olarak**:
 
 - `test_task_states` durum yazıcısı taraması (bugün `modules`, `tasks`,
   `agent`),
-- `test_module_registry` bütçe alanı yasağı taraması,
+- `test_task_evidence`'in bütçe alanı yasağı taraması (`BUDGET_SCANNED_DIRS`
+  orada yaşar; bu ADR ilk hâlinde onu `test_module_registry`'ye atfediyordu),
 - `test_agent_boundary`'nin yürütme/zamanlayıcı/giden/secret sınırı
   taramasının bir aynası,
 - yeni bir `test_proof_language.py` (SI-280 kalıbı, paketin **her string

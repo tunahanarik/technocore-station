@@ -31,6 +31,26 @@ from station_api.logging_setup import forget_secret, register_secret
 #: 32 bytes == 256 bits of entropy. token_urlsafe encodes them base64url.
 TOKEN_ENTROPY_BYTES = 32
 
+#: How many unspent tokens one store keeps at once.
+#:
+#: The same ceiling ``MAX_OPEN_DRAFTS`` puts on the composer's draft store, and
+#: for the same reason. A TTL says when a token *stops being valid*; on its own
+#: it says nothing about when the entry stops occupying memory, and an expired
+#: entry is only removed when somebody presents that exact token - which is the
+#: one thing an abandoned token never has happen to it.
+#:
+#: The gap was measured on the share-approval store: fifty prepares left fifty
+#: entries, and five more prepares after the clock had passed the TTL left
+#: fifty-five, none of them spendable. ``DraftStore`` had the answer already -
+#: purge on every ``put`` and cap what is kept - so it is applied here rather
+#: than reinvented, which fixes the composer's send approvals and the bootstrap
+#: handoff in the same edit.
+#:
+#: Sixty-four is far above what any real use reaches: a person prepares one
+#: bundle at a time, signs one message at a time, and the launcher mints one
+#: handoff. It is a ceiling on unbounded growth, not a working limit.
+MAX_PENDING_TOKENS = 64
+
 
 @dataclass(frozen=True)
 class _Issued[T]:
@@ -49,10 +69,15 @@ class SingleUseStore[T]:
     """
 
     def __init__(
-        self, *, ttl_seconds: int, clock: Callable[[], float] = time.monotonic
+        self,
+        *,
+        ttl_seconds: int,
+        clock: Callable[[], float] = time.monotonic,
+        capacity: int = MAX_PENDING_TOKENS,
     ) -> None:
         self._ttl = ttl_seconds
         self._clock = clock
+        self._capacity = capacity
         self._tokens: dict[str, _Issued[T]] = {}
         self._lock = threading.Lock()
 
@@ -60,14 +85,43 @@ class SingleUseStore[T]:
     def ttl_seconds(self) -> int:
         return self._ttl
 
+    @property
+    def capacity(self) -> int:
+        return self._capacity
+
     def issue(self, payload: T) -> str:
-        """Mint a token. The caller must not log the return value."""
+        """Mint a token. The caller must not log the return value.
+
+        Expired entries are dropped first, and the store is capped, both under
+        the same lock that adds the new one. ``DraftStore.put``'s shape, and
+        the reason is the same: a TTL decides when a token stops being
+        *valid*, and nothing else here decides when it stops occupying memory.
+        ``consume`` only ever reaches the token it was handed, so an abandoned
+        one is exactly the entry no code path removes.
+
+        Over the cap the **oldest** entry is dropped rather than the newest
+        refused, again as the drafts do: the person is in front of the newest
+        one, and an entry that close to the cap is one somebody walked away
+        from. Dropping an unspent approval can only cost a re-prepare; the
+        approval itself is still single-use and still bound to everything it
+        was bound to.
+        """
         token = secrets.token_urlsafe(TOKEN_ENTROPY_BYTES)
         register_secret(token)
+        evicted: list[str] = []
         with self._lock:
+            evicted.extend(self._purge_locked())
+            while len(self._tokens) >= self._capacity:
+                oldest = min(
+                    self._tokens, key=lambda item: self._tokens[item].expires_at
+                )
+                del self._tokens[oldest]
+                evicted.append(oldest)
             self._tokens[token] = _Issued(
                 expires_at=self._clock() + self._ttl, payload=payload
             )
+        for dead in evicted:
+            forget_secret(dead)
         return token
 
     def consume(self, token: str) -> tuple[bool, T | None]:
@@ -89,13 +143,25 @@ class SingleUseStore[T]:
         return True, issued.payload
 
     def purge_expired(self) -> None:
-        now = self._clock()
+        """Drop every entry the clock has passed. Called on every ``issue``."""
         with self._lock:
-            dead = [t for t, issued in self._tokens.items() if now > issued.expires_at]
-            for token in dead:
-                del self._tokens[token]
+            dead = self._purge_locked()
         for token in dead:
             forget_secret(token)
+
+    def _purge_locked(self) -> list[str]:
+        """Remove expired entries; the caller holds the lock and forgets them.
+
+        Returns the tokens it removed rather than forgetting them here:
+        ``forget_secret`` is the redaction filter's, and calling into another
+        component while holding this lock is how a lock ordering gets invented
+        by accident.
+        """
+        now = self._clock()
+        dead = [t for t, issued in self._tokens.items() if now > issued.expires_at]
+        for token in dead:
+            del self._tokens[token]
+        return dead
 
     def discard_where(self, predicate: Callable[[T], bool]) -> int:
         """Drop every pending token whose payload matches.
@@ -134,9 +200,10 @@ class BootstrapTokenStore:
         *,
         ttl_seconds: int = BOOTSTRAP_TOKEN_TTL_SECONDS,
         clock: Callable[[], float] = time.monotonic,
+        capacity: int = MAX_PENDING_TOKENS,
     ) -> None:
         self._store: SingleUseStore[None] = SingleUseStore(
-            ttl_seconds=ttl_seconds, clock=clock
+            ttl_seconds=ttl_seconds, clock=clock, capacity=capacity
         )
 
     @property
@@ -160,4 +227,9 @@ class BootstrapTokenStore:
         return self._store.pending_count
 
 
-__all__ = ["TOKEN_ENTROPY_BYTES", "BootstrapTokenStore", "SingleUseStore"]
+__all__ = [
+    "MAX_PENDING_TOKENS",
+    "TOKEN_ENTROPY_BYTES",
+    "BootstrapTokenStore",
+    "SingleUseStore",
+]

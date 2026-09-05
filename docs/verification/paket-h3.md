@@ -4,10 +4,15 @@ Tarih: 2026-09-05 · Kapsam kararları:
 [`ADR-0009`](../decisions/0009-paket-h3-kapsam-kararlari-2026-09-05.md) ·
 Uygulama ayrıntısı: [`../proof-workspace.md`](../proof-workspace.md).
 
-Bu rapor **backend**'i anlatır. Frontend başka bir ajanın işidir ve
-`apps/station-web/src/**` bu turda **hiç değiştirilmedi** — tek istisna
-`apps/station-web/e2e/harness/serve.py`'nin aşama numarasıdır, çünkü o dosya
-veritabanını açan beş giriş noktasından biridir (ADR-0009 §10).
+Bu raporun gövdesi **backend** turunda yazıldı; frontend ayrı bir ajanın
+işiydi ve aşağıdaki "Frontend" bölümü o tur bittikten sonra eklendi.
+**Bu rapor bir noktada kendisiyle çelişiyordu** — girişi
+`apps/station-web/src/**`'in hiç değiştirilmediğini söylerken aynı raporda
+dolu bir frontend bölümü vardı. Ölçüm: `git show f5d6b97 --stat --
+apps/station-web/src` → **8 dosya, +2590/−7**. Doğrusu şudur: backend turu
+`src/` altına dokunmadı (tek istisna `e2e/harness/serve.py`'nin aşama
+numarası, çünkü o dosya veritabanını açan beş giriş noktasından biridir,
+ADR-0009 §10); frontend turu dokundu.
 
 ## En büyük karar: alan açıldı, koşulu yapısal tutuldu
 
@@ -249,7 +254,7 @@ kullanıldı. Yeni npm bağımlılığı yok.
 
 | Kapı | Sonuç |
 |---|---|
-| pytest | **2105 geçti** (1992 → 2105; +113) |
+| pytest | **2114 geçti** (1992 → 2105 → inceleme sonrası 2114) |
 | Vitest | **315 geçti** (289 → 315) |
 | Playwright (e2e) | **74 geçti** (65 → 74) |
 | ruff (iki koşu) / mypy strict | geçti / 0 hata |
@@ -257,8 +262,120 @@ kullanıldı. Yeni npm bağımlılığı yok.
 
 ## Bağımsız inceleme sonucu
 
-(PR üzerinde doldurulacak — temiz bağlamlı reviewer subagent koşulacak; bu
-**insan güvenlik incelemesi değildir**, ADR-0001 §5 kalan risk.)
+Temiz bağlamlı bir reviewer subagent koşuldu: **31 backend + 5 frontend
+mutasyon, 6 ekili ihlal, 13 uçtan uca prob.** Dört mutasyon hayatta kaldı ve
+**sekiz bulgunun hepsi kapatıldı.** Bu **insan güvenlik incelemesi
+değildir**; ADR-0001 §5'in kalan riski yerinde duruyor.
+
+### P1-1: `UNFILLABLE_FIELDS`'in dört değil **beş** okuyucusu vardı
+
+Beşincisi `tasks/views.py` — telin kendisi. Sabit bir `True`'ya çevirmek
+1770 testin **hiçbirini** kırmıyordu, yani "tel ile kural ayrışamaz" diyen
+iki test sabit bir literal'e karşı geçiyordu. ADR-0009 §2 "hiçbir boşalan
+dal sessiz bırakılmaz"ı bir merge şartı yapmıştı, ama **envanterin kendisi
+eksik olduğu için şart kendi hedefini ıskaladı.** Beşincisi artık diğer
+dördüyle aynı disiplinle sürülüyor (izinli hâl önce, sonra kapatma):
+0 → **1 kırmızı**. ADR-0009 §2'nin tablosu, `modules/fields.py`'nin "dört
+dal" cümlesi ve SI-301 **beşe** düzeltildi; iki testin fazla iddia eden
+docstring'i **iddiaları korunarak** gerçeğe indirildi.
+
+### P1-2: `safe_text`'in sweep→neutralise **sırası** sabitlenmemişti
+
+Sırayı ters çevirmek 0 test kırıyordu, ama mutant **eşdeğer değil** ve fark
+ölçüldü: `fold()` sıfır-genişlikli karakteri **siler**, `sweep_untrusted`
+**boşlukla değiştirir**. Yasak bir ifadenin iki kelimesi arasına konan bir
+U+200B ham metinde `neutralise`'a görünmez, sweep'ten sonra birebir yasak
+ifade olur ve `routes/proof.py` yalnız `(ProofError, TaskError)` yakaladığı
+için **yakalanmayan 500** üretir. Tam olarak IMP-420'nin "bir klavye ürünün
+ne söyleyeceğine karar veremez" kuralı. Davranışsal test (önce
+`neutralise(hostile) == hostile` öncülü doğrulanıyor) + `neutralise`'ın
+argümanının bir `sweep_untrusted(...)` çağrısı olduğunu sabitleyen AST
+testi: 0 → **2 kırmızı**.
+
+### P2-3: "üç gereksiz olmayan denetim" — esas iddia doğru, **mekanizmanın
+adı yanlıştı**
+
+İncelemeci elle yazılmış bir dizeyle "paylaşıldı" **diyemedi** — esas iddia
+ayakta. Ama fiilen reddeden `EvidenceService.get`, hiçbir belgenin anmadığı
+bir dördüncü denetim; şekil denetimini pydantic'in `min_length=32`'si,
+satır-varlık denetimini `evidence.get` gölgeliyor. H2'nin
+containment-reparse'ı-gölgeliyor kalıbının aynısı.
+
+**Düzeltme ajanı incelemeciyi burada ölçerek düzeltti:** önerilen "sonuç
+okumasını taşı" seçeneği **ucuz değil, yapısal olarak imkânsız** —
+`record.write_outcome`, `verified`'ın **girdisi**, dolayısıyla ondan sonraya
+konan her denetim o yolda tanım gereği erişilemez. Mekanizma olduğu gibi
+bırakılıp **doğru adlandırıldı**: dört katman, hangisinin ateşlediği, ve
+gölgelenen ikisinin "`ProofService`'i atlayan çağıranlar için derinlik
+savunması" olduğu. Ayrıca ölçüldü ki gölgelenen iki denetim **kendi
+düzeylerinde zaten sürülüyordu**; yeni bir test ikisinin **ayrımını**
+(`evidence_field_refused` vs `evidence_record_missing`) tek yerde sabitliyor.
+
+### P2-4: rotadaki `acknowledged` denetimi erişilemez ölü koddu
+
+`Literal[True]` olduğu için handler yalnız `True` ile çalışabiliyordu, ama
+docstring "iki bağımsız ret" diyordu (evidence export'ta model `bool`
+olduğu için orada ikileme **gerçek**). Ajan modeli genişletmek yerine **ölü
+dalı kaldırmayı** seçti — genişletmek reddi şemadan handler'a **geciktirir**
+ve mevcut bir testi 422'den 400'e **zayıflatmayı** gerektirirdi. Anotasyon
+artık tek savunma olduğu için kendi testine kavuştu (`Literal[True]` **ve**
+zorunluluk, artı export'un `bool`'uyla karşıtlık): **2 kırmızı**.
+
+### P2-5, P3-6, P3-7, P3-8
+
+TTL sabiti ikizinin yaptığı gibi sabitlendi (0 → 1 kırmızı). Paylaşım onayı
+deposu hiçbir şey atmıyordu — 50 hazırlık, TTL geçildikten sonra 5 tane
+daha → **55**; `DraftStore` kalıbı `SingleUseStore`'un kendisine uygulandı
+(compose ve bootstrap da kazandı), ölçüm artık **5**, ve tavan ayrı bir
+testle sürülüyor. Workspace'teki gerçek bir junction kanıt okumasını 500'e
+çeviriyordu; `ProofService.build` `AgentError`'ı çevirerek dört rotayı birden
+kapattı ve **gerçek bir NTFS junction** ile sürüldü (bu makinede
+`isjunction: True` doğrulandı, sessiz skip yok). Panel yorumunun "iki okuma"
+iddiası bire indirildi.
+
+**Ajan incelemeciyi ikinci kez düzeltti:** `routes/agent.py` bir bulgu
+değildi — `WorkspaceError`, `AgentError`'ın alt sınıfı ve rota zaten
+`(TaskError, AgentError)` yakalıyor, yani orası **hep** belirtilen 400'ü
+döndürüyordu. Yeni test bunu da ölçüyor.
+
+### İncelemecinin doğruladıkları
+
+2105 pytest (iki kez tam koşu), 315 Vitest, ruff/mypy/eslint/build temiz,
+`PUBLICATION_FIELDS` = 3, `UNFILLABLE_FIELDS` boş,
+`OUTBOUND_CLIENT_MODULES` = 5, proof ağacında zip/arşiv/dosya-yazma fiili
+yok, yeni dosya kökü yok, yeni migration yok, bağımlılık/lockfile
+değişmedi, HeroUI **öncesinde ve sonrasında** 11, `sections.ts` dokunulmamış
+ve 9/9 `ready`, aşama 9 beş giriş noktasında, dört dalın her biri **izinli
+hâl önce okunarak** sürülüyor, planlanan-modül sözleşmesi testin kendi
+kurduğu kayıtlar üzerinde sürülüyor, yazarın 12 yeniden koşulabilir
+mutasyon satırının **hepsi aynı kırmızı sayısıyla** üretildi, çift
+etkinleştirme testi isteği gerçekten uçuşta tutuyor, `ready_to_publish`
+HTTP'den erişilemez (422) ve onu öneren bir düğme yok.
+
+**Sızıntı bulunamadı.** Arşivlenmiş gönderimi olan bir görevden kurulan
+9715 baytlık paket, iki biçimde de: mutlak yol yok, `data_dir` yok, `C:\`
+yok, ham istek gövdesi yok, imza yok, DID yok, oturum kimliği yok. Hata
+gövdeleri: `/api/proof/../../etc/passwd` → 404, bilinmeyen görev → 404.
+
+**Onay yarış-güvenli:** tek token'la 8 eşzamanlı teslim → tam olarak **1
+`ok`, 7 `approval_invalid`**.
+
+### İncelemecinin ölçmedikleri (kendi beyanı)
+
+Playwright suite'i **koşulmadı** (statik olarak sayıldı); hiçbir tarayıcı,
+görsel veya manuel QA yapılmadı; H3 diff'i dışındaki paketler (vault,
+compose, opencode, audit zinciri) incelenmedi; DPAPI/Windows ACL davranışı
+incelenmedi; tek 8-iş parçacıklı token yarışı dışında eşzamanlılık
+ölçülmedi. Kapılar ve e2e orkestratör tarafından ayrıca koşuldu.
+
+### Bu raporda düzeltilen iki yanlış
+
+Girişi `apps/station-web/src/**`'in hiç değiştirilmediğini söylüyordu, oysa
+aynı raporda dolu bir frontend bölümü vardı (ölçüm: 8 dosya, +2590/−7).
+`docs/task-modules.md`'nin "`verified` çağırandan alınmaz" cümlesi
+**koşulsuz** yazılmıştı ve `TaskService` yolunda yanlıştı; bugün o çağrıyı
+açan hiçbir rota olmadığı için bir delik değil bir belge kusuruydu, ama
+koşulsuz kalması onu deliğe çevirirdi.
 
 ## Ölçülmeyenler (dürüst kapsam)
 

@@ -45,6 +45,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from station_api.agent.errors import AgentError
 from station_api.agent.service import AgentService, RunView
 from station_api.evidence.service import EvidenceError, EvidenceService
 from station_api.modules.fields import EvidenceField
@@ -122,6 +123,17 @@ class ProofService:
     def pending_approvals(self) -> int:
         return self._approvals.pending_count
 
+    @property
+    def approval_capacity(self) -> int:
+        """How many unspent approvals this store keeps at once.
+
+        Exposed so a test can read it off the *shipped* service rather than
+        off a store it built itself. The default store used to be unbounded,
+        and an unbounded store looks identical from the outside until
+        somebody counts.
+        """
+        return self._approvals.capacity
+
     # --- reads -------------------------------------------------------------
 
     def build(self, task_id: str) -> ProofBundle:
@@ -131,6 +143,23 @@ class ProofService:
         report a fact the rest of the product would disagree with. It is a
         pure read: no row is written, no file is created and no request leaves
         this process.
+
+        Both owners' refusals are translated, and the second half of that is
+        newer than the first. ``AgentService.workspace_files`` walks the
+        workspace for reparse points and raises :class:`WorkspaceError` when
+        it finds one - a junction planted in ``workspace/v1/<task_id>`` is the
+        real case, and ``mklink /J`` needs no administrator right. That
+        exception used to travel straight out of every proof route, which
+        catches ``(ProofError, TaskError)`` only, and became an unhandled 500.
+        The generic contract redacts the body, so nothing leaked; what the
+        person lost was the *stated* refusal. The workspace layer knew exactly
+        what was wrong and said so, and the route replaced that sentence with
+        "an error occurred".
+
+        ``AgentError`` rather than ``WorkspaceError`` alone, because it is the
+        base every refusal in that package carries a ``reason`` on, and a
+        proof read that grows a second agent-side failure should not have to
+        remember to add it here.
         """
         try:
             view = self._tasks.get(task_id)
@@ -139,8 +168,12 @@ class ProofService:
         except TaskError as exc:
             raise ProofError(str(exc), reason=exc.reason) from exc
 
-        runs: tuple[RunView, ...] = self._agent.list_runs(task_id)
-        files = self._agent.workspace_files(task_id)
+        try:
+            runs: tuple[RunView, ...] = self._agent.list_runs(task_id)
+            files = self._agent.workspace_files(task_id)
+        except AgentError as exc:
+            raise ProofError(str(exc), reason=exc.reason) from exc
+
         return build_bundle(
             task=view, gate=gate, completion=completion, runs=runs, files=files
         )
@@ -290,11 +323,39 @@ class ProofService:
     ) -> TaskView:
         """Mark the fourth field from an archived send, and only from one.
 
-        The identity is checked three times over, by three different things,
-        and none of them is redundant with the others: the constructor checks
-        the *shape*, ``TaskService.record_evidence`` checks that a **row**
-        exists, and this method reads that row's own **outcome** to decide
-        whether the reference may call itself verified.
+        Four things stand between a typed string and this field, and they do
+        not all fire on this path. Naming them accurately matters more than
+        counting them, because an adversarial review of H3 found the docstring
+        that used to be here describing three checks of which two are
+        unreachable from here:
+
+        ``ProofPublicShareRequest.evidence_id`` (``min_length=32``)
+            The HTTP shape gate. A caller who posts ``"paylasildi"`` gets a
+            422 from the model and never reaches this function.
+
+        :meth:`EvidenceService.get` - **the check that fires here**
+            The archive read below. It is not a validation step bolted on: the
+            record's ``write_outcome`` is an *input* to ``verified``, so the
+            row has to be fetched before anything can be recorded. Every
+            pointer that names no archived send stops here, whatever its
+            shape, with ``evidence_record_missing``.
+
+        :meth:`TaskService.record_evidence`'s row-existence check
+            Reached only with a row that exists, so on this path it can only
+            agree. It is depth for the callers that skip this service -
+            ``record_evidence`` is public, and it is the only function in the
+            product that writes these columns.
+
+        :meth:`EvidenceRef.__post_init__`'s shape check
+            Same: by the time it runs, the id came back from the archive's own
+            primary key. It is what covers every place an ``EvidenceRef`` is
+            built with no database at hand.
+
+        So the two deeper checks are **defence in depth for callers that
+        bypass this method**, not three independent refusals of one request.
+        They are driven at their own level in ``tests/security``, because a
+        defence that only ever runs behind another one is a defence nobody has
+        watched work.
         """
         if self._evidence is None:
             raise ProofError(

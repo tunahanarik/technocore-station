@@ -341,7 +341,15 @@ def create_app(
     #
     # Building it starts nothing and contacts nobody. There is no scheduler,
     # no background task and no request at launch; the single-use share
-    # approvals it mints live in process memory and expire on their own.
+    # approvals it mints live in process memory, stop being valid on their own
+    # after ``SHARE_TOKEN_TTL_SECONDS`` and are *removed* on the next mint.
+    #
+    # The second half of that sentence is newer than the first. There is no
+    # sweeper here and there never will be - a scheduler is exactly what this
+    # process refuses to grow - so the store purges and caps itself inside
+    # ``issue``, the way the composer's draft store always has. Before that,
+    # "expire on their own" was true of validity and false of memory: fifty
+    # abandoned approvals stayed fifty entries for the life of the process.
     app.state.proof = (
         ProofService(
             tasks=app.state.tasks,

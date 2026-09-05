@@ -61,6 +61,11 @@ _EXEMPT = frozenset({"language.py"})
 
 TEST_ONLY_CONTENT = b"TEST-ONLY proof task content."
 
+#: U+200B ZERO WIDTH SPACE. Written as an escape rather than as the character,
+#: because a bare zero-width space in source is invisible to a reviewer - and a
+#: test whose input a reviewer cannot see is a test nobody can check.
+ZERO_WIDTH_SPACE = "​"
+
 
 def _package(api_source_root: Path) -> Path:
     return api_source_root / "station_api" / "proof"
@@ -377,6 +382,81 @@ def test_turning_the_neutraliser_off_lets_a_users_words_refuse_the_product(
         proof.record_acceptance(
             task.id, bundle_sha256=proof.build(task.id).sha256, detail=hostile
         )
+
+
+def test_a_zero_width_character_cannot_smuggle_a_phrase_into_our_sentence(
+    proof, task  # type: ignore[no-untyped-def]
+) -> None:
+    """``safe_text`` sweeps **before** it neutralises, driven on a real note.
+
+    The order inside ``safe_text`` was not pinned by anything until an
+    adversarial review swapped the two calls and measured zero failures. The
+    mutant is not equivalent, and the reason is that the two functions
+    disagree about invisible characters by design: ``fold`` - which
+    ``neutralise`` compares through - **deletes** them, so ``w<ZWSP>allet`` is
+    one word to a matcher, while ``sweep_untrusted`` **replaces** them with a
+    space, so nothing can hide behind one in a scanned sentence.
+
+    Put a zero-width space between two words of a forbidden phrase and the two
+    behaviours pull apart. Folded, the phrase reads ``bagimsizolarak
+    dogrulandi`` and matches no entry in the registry; swept, it is the
+    registry entry, character for character. Sweeping first therefore hands
+    ``neutralise`` the string it has to see. Sweeping second hands
+    ``assert_no_forbidden_claim`` a live forbidden phrase, and
+    ``routes/proof.py`` catches only ``(ProofError, TaskError)`` - so a note a
+    person typed would come back as an unhandled 500 on their own acceptance,
+    which is IMP-420's failure exactly: a keyboard deciding what this product
+    may say.
+    """
+    hostile = f"bence bu cikti bagimsiz{ZERO_WIDTH_SPACE}olarak dogrulandi"
+    # The premise, asserted rather than assumed: neutralising the raw text
+    # alone does nothing, so the sweep is doing the work being measured.
+    assert neutralise(hostile) == hostile
+
+    bundle = proof.build(task.id)
+    recorded = proof.record_acceptance(
+        task.id, bundle_sha256=bundle.sha256, detail=hostile
+    )
+    stored = next(
+        ref.detail for ref in recorded.refs if ref.field.value == "user_acceptance"
+    )
+
+    assert find_forbidden_phrases(stored) == ()
+    assert NEUTRALISED_MARK in stored
+    assert ZERO_WIDTH_SPACE not in stored
+
+
+def test_the_sweep_happens_inside_the_neutralise_call_and_not_around_it(
+    api_source_root: Path,
+) -> None:
+    """The same order, read off the syntax tree as well as driven.
+
+    The behavioural test above can only see the one path it drives, and
+    ``safe_text`` is called from four places. This pins the shape itself:
+    ``neutralise``'s argument must *be* a ``sweep_untrusted`` call, so the two
+    cannot be swapped, and the sweep cannot be lifted out to a later step
+    where it would re-expose what the neutraliser had removed.
+    """
+    path = _package(api_source_root) / "bundle.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    launderer = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "safe_text"
+    )
+    neutralise_calls = [
+        node
+        for node in ast.walk(launderer)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "neutralise"
+    ]
+
+    assert len(neutralise_calls) == 1
+    inner = neutralise_calls[0].args[0]
+    assert isinstance(inner, ast.Call)
+    assert isinstance(inner.func, ast.Name)
+    assert inner.func.id == "sweep_untrusted"
 
 
 def test_the_guard_is_wired_into_the_package_and_not_only_defined(

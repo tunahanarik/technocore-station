@@ -35,7 +35,7 @@ from station_api.agent.workspace import list_files, task_workspace
 from station_api.compose.nonce import NonceReserver
 from station_api.db.models import EvidenceRecord
 from station_api.identity.write_gate import CheckState
-from station_api.modules.fields import EvidenceField
+from station_api.modules.fields import EvidenceField, EvidenceFieldError, EvidenceRef
 from station_api.proof.approvals import SHARE_TOKEN_TTL_SECONDS, ShareApproval
 from station_api.proof.bundle import (
     BUNDLE_FORMATS,
@@ -54,8 +54,9 @@ from station_api.proof.bundle import (
 )
 from station_api.proof.language import HASH_SCOPE_SENTENCE
 from station_api.proof.service import ProofError, ProofService
-from station_api.security.tokens import SingleUseStore
+from station_api.security.tokens import MAX_PENDING_TOKENS, SingleUseStore
 from station_api.strict_json import loads_strict
+from station_api.tasks.service import TaskError
 from station_api.tasks.states import TaskState
 
 from tests.security.agent_fixtures import write_plan
@@ -476,6 +477,24 @@ def test_an_expired_approval_is_refused(
     assert service.approval_ttl_seconds == SHARE_TOKEN_TTL_SECONDS
 
 
+def test_the_share_approval_ttl_is_the_documented_three_minutes() -> None:
+    """Pinned, because the number is a decision (ADR-0009 4), not a default.
+
+    Its twin in ``test_compose_flow.py`` has been pinned since Package C; this
+    one was not, and an adversarial review moved ``SHARE_TOKEN_TTL_SECONDS``
+    from 180 to 86400 without turning anything red. Every other use of the
+    constant in this file is *relative* - a fake clock is advanced to
+    ``TTL + 1`` - so a day-long window expires exactly as promptly as a
+    three-minute one and every one of those tests still passes.
+
+    Three minutes is written down as a deliberate window in
+    ``docs/proof-workspace.md`` 3 and SI-305, and the frontend shows the
+    literal text "180 saniye". A constant three documents describe and no test
+    reads is a constant anybody can change.
+    """
+    assert SHARE_TOKEN_TTL_SECONDS == 180
+
+
 def test_ending_a_session_discards_its_pending_approvals(
     proof: ProofService, task  # type: ignore[no-untyped-def]
 ) -> None:
@@ -486,6 +505,78 @@ def test_ending_a_session_discards_its_pending_approvals(
     assert proof.pending_approvals == 2
     assert proof.discard_session(TEST_ONLY_SESSION) == 1
     assert proof.pending_approvals == 1
+
+
+def test_abandoned_share_approvals_stop_occupying_memory(
+    tasks, agent, task  # type: ignore[no-untyped-def]
+) -> None:
+    """A TTL that only decides validity is not a TTL that frees anything.
+
+    Measured before it was fixed: fifty prepares left fifty pending entries,
+    and five more prepares taken *after* the clock had passed the TTL left
+    fifty-five - none of them spendable, all of them still in the dictionary.
+    ``purge_expired`` existed and was called from nowhere in the product, and
+    ``consume`` only ever reaches the one token it is handed, which is the one
+    thing an abandoned approval never has happen to it.
+
+    ``SingleUseStore.issue`` now purges first, exactly as ``DraftStore.put``
+    does. Driven on a controlled clock rather than waited out, and the count
+    is read before and after so a store that dropped everything would fail the
+    first half.
+    """
+    clock = {"now": 0.0}
+    store: SingleUseStore[ShareApproval] = SingleUseStore(
+        ttl_seconds=SHARE_TOKEN_TTL_SECONDS, clock=lambda: clock["now"]
+    )
+    service = ProofService(tasks=tasks, agent=agent, approvals=store)
+
+    for _ in range(50):
+        service.prepare_share(task.id, session_id=TEST_ONLY_SESSION)
+    assert service.pending_approvals == 50
+
+    clock["now"] = SHARE_TOKEN_TTL_SECONDS + 1
+    for _ in range(5):
+        service.prepare_share(task.id, session_id=TEST_ONLY_SESSION)
+
+    assert service.pending_approvals == 5
+
+
+def test_the_share_approval_store_has_a_ceiling_and_the_shipped_one_uses_it(
+    tasks, agent, task  # type: ignore[no-untyped-def]
+) -> None:
+    """Purging is not enough on its own; an unexpired flood is still a flood.
+
+    The composer's ``DraftStore`` has enforced ``MAX_OPEN_DRAFTS`` since
+    Package C and this store enforced nothing, so approvals that had **not**
+    expired grew without limit. The cap is driven with a small explicit
+    ceiling - a loop of ten is a measurement, a loop of sixty-five is a wait -
+    and the ceiling the product actually ships with is read off the service
+    rather than assumed, because a bounded store and an unbounded one look
+    identical from outside until somebody counts.
+
+    The oldest entry is dropped rather than the newest refused, as the drafts
+    do: the person is in front of the newest one.
+    """
+    store: SingleUseStore[ShareApproval] = SingleUseStore(
+        ttl_seconds=SHARE_TOKEN_TTL_SECONDS, capacity=4
+    )
+    service = ProofService(tasks=tasks, agent=agent, approvals=store)
+
+    tokens = [
+        service.prepare_share(task.id, session_id=TEST_ONLY_SESSION)[0]
+        for _ in range(10)
+    ]
+
+    assert service.pending_approvals == 4
+    # The newest four survive and the oldest were dropped, so the person who
+    # is actually waiting on a bundle can still take it.
+    assert store.consume(tokens[-1])[0] is True
+    assert store.consume(tokens[0])[0] is False
+
+    # And the store the application builds is bounded too - the default, not
+    # the one this test constructed.
+    shipped = ProofService(tasks=tasks, agent=agent)
+    assert shipped.approval_capacity == MAX_PENDING_TOKENS
 
 
 # ---------------------------------------------------------------------------
@@ -727,7 +818,24 @@ def test_a_send_whose_outcome_is_unknown_is_recorded_but_not_verified(
 def test_a_public_share_pointer_that_names_no_send_is_refused(
     proof: ProofService, task  # type: ignore[no-untyped-def]
 ) -> None:
-    """Both shapes of wrong pointer, with the two different reasons."""
+    """Both shapes of wrong pointer, and the **one** reason both get.
+
+    The docstring here used to say "the two different reasons", and the two
+    assertions underneath it have always read the same one. An adversarial
+    review of H3 measured why: on this path the archive read is the gate.
+    ``EvidenceService.get`` runs before anything else can, because the
+    record's own ``write_outcome`` decides ``verified``, so a well-formed id
+    that names nothing and a sentence somebody typed are the same fact to it -
+    there is no such row - and both come back
+    ``evidence_record_missing``.
+
+    That is the honest description of the mechanism, and the assertions are
+    unchanged: what a caller cannot do is mark this field with a string they
+    wrote. What they get told is that no archived send has that identity. The
+    two deeper refusals - the shape check in ``EvidenceRef`` and the
+    row-existence check in ``TaskService`` - are driven in the test below, at
+    the level where they actually fire.
+    """
     with pytest.raises(ProofError) as invented:
         proof.record_public_share(task.id, evidence_id="0" * 32)
     assert invented.value.reason == "evidence_record_missing"
@@ -735,6 +843,73 @@ def test_a_public_share_pointer_that_names_no_send_is_refused(
     with pytest.raises(ProofError) as typed:
         proof.record_public_share(task.id, evidence_id="paylasildi")
     assert typed.value.reason == "evidence_record_missing"
+
+
+def test_the_two_shadowed_public_share_refusals_are_driven_where_they_fire(
+    tasks, engine: Engine, task  # type: ignore[no-untyped-def]
+) -> None:
+    """The depth defences, exercised by the callers they exist for.
+
+    ``TaskService.record_evidence`` is public and it is the only function in
+    this product that writes these columns; ``EvidenceRef`` is constructed in
+    places where no database is at hand. Neither can rely on
+    ``ProofService.record_public_share`` having run first, and behind that
+    method neither can ever be the refusal a caller sees. So each is driven
+    here, against the layer it belongs to:
+
+    * a **well-formed** id that names no archived row reaches the task
+      service's ``SELECT`` and is refused there - the shape check has already
+      passed, so this is the row-existence check on its own;
+    * a **badly-shaped** id never reaches a database at all: the constructor
+      refuses it, which is what covers the callers that have none.
+
+    The permitted case is read first in both halves, so a service that refused
+    every pointer would fail rather than pass.
+    """
+    archived = _archive_a_send(engine)
+
+    # Permitted first: a real archived id goes all the way through.
+    tasks.record_evidence(
+        task.id,
+        field=EvidenceField.PUBLIC_SHARE,
+        ref_id=archived,
+        verified=True,
+    )
+    assert tasks.gate(task.id).check_for(EvidenceField.PUBLIC_SHARE).ref_id == archived
+
+    # The row-existence check, alone: thirty-two hex characters that name
+    # nothing. ``uuid4().hex``'s shape, so the constructor is satisfied.
+    absent = uuid.uuid4().hex
+    with pytest.raises(TaskError) as missing_row:
+        tasks.record_evidence(
+            task.id,
+            field=EvidenceField.PUBLIC_SHARE,
+            ref_id=absent,
+            verified=True,
+        )
+    assert missing_row.value.reason == "evidence_record_missing"
+
+    # The shape check, alone: no database is consulted, and the refusal comes
+    # from the constructor every caller passes through.
+    with pytest.raises(EvidenceFieldError):
+        EvidenceRef(
+            field=EvidenceField.PUBLIC_SHARE,
+            ref_id="paylasildi",
+            verified=True,
+            source_version_id="v1",
+        )
+
+    # And the shape check is not the row check wearing another name: the same
+    # badly-shaped pointer refused through the service reports the *field*
+    # refusal, not the missing row.
+    with pytest.raises(TaskError) as bad_shape:
+        tasks.record_evidence(
+            task.id,
+            field=EvidenceField.PUBLIC_SHARE,
+            ref_id="paylasildi",
+            verified=True,
+        )
+    assert bad_shape.value.reason == "evidence_field_refused"
 
 
 def test_a_machine_without_an_archive_refuses_rather_than_pretending(

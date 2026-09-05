@@ -67,7 +67,25 @@ Kullanılan kalıp `compose/approvals.py`'nin `SendApproval` kalıbıdır
 Onay `SingleUseStore` ile harcanır ve **her sonuçta** silinir: reddedilen bir
 teslim de token'ı harcar, yoksa paket tekrar eşleşene kadar denenebilirdi.
 TTL 180 saniyedir ve `SEND_TOKEN_TTL_SECONDS`'tan **ayrı yazılmıştır** —
-tesadüfen eşit olan iki pencere tek pencere değildir.
+tesadüfen eşit olan iki pencere tek pencere değildir. 180 sayısı artık
+`test_proof_bundle.py::test_the_share_approval_ttl_is_the_documented_three_minutes`
+tarafından **sabitlenmiştir**; H3 boyunca sabitlenmemişti ve bir düşman
+inceleme onu 86400'e çekip hiçbir testi kırmadan geçti, çünkü dosyadaki her
+kullanım sahte bir saatte `TTL + 1`'e gidiyordu — göreli bir kontrol, mutlak
+bir kararı korumaz.
+
+**Terk edilen onaylar bellekten de düşer.** Bu cümlenin ikinci yarısı
+birincisinden yenidir. `SingleUseStore.consume` yalnız kendisine verilen
+token'a ulaşır, yani terk edilmiş bir onay tam olarak hiçbir kod yolunun
+silmediği kayıttır; `purge_expired` vardı ve ürün kodunda **hiçbir yerden**
+çağrılmıyordu, kapasite tavanı da yoktu. Ölçüm: 50 hazırlık → 50 bekleyen;
+saat TTL'i geçtikten sonra 5 hazırlık daha → **55**, hiçbiri
+harcanabilir değil. Çözüm `compose/approvals.py`'nin `DraftStore`'unun
+zaten uyguladığı kalıptır ve oradan alındı — her `issue` **önce süresi
+dolanları temizler**, sonra `MAX_PENDING_TOKENS` (64) tavanını uygular ve
+tavana varılmışsa **en eskisini** düşürür, çünkü kullanıcı en yenisinin
+önündedir. Aynı düzeltme composer'ın gönderim onaylarını ve bootstrap
+handoff'unu da kapsar; hepsi aynı depodur.
 
 ## 4. Üretilmeyen iki kayıt, gerekçesiyle
 
@@ -116,20 +134,81 @@ tam olarak bunu bekliyordu. H3 ayrı bir kabul rotası açtı:
 
 ## 7. Dördüncü alan: `public_share`
 
-Paket F'te bu alan **temsil edilemezdi**. H3 onu doldurulabilir yaptı ve
-koşulu üç ayrı katmanda tuttu (ADR-0009 §1):
+Paket F'te bu alan **temsil edilemezdi**. H3 onu doldurulabilir yaptı
+(ADR-0009 §1). Elle yazılmış bir dizeyle "paylaşıldı" denemez — bu ölçüldü —
+fakat **bunu yapan mekanizmanın adı** bu belgede yanlış yazılmıştı. Doğrusu:
 
-1. `EvidenceRef` yapıcısı `ref_id`'nin **şeklini** denetler (32 küçük harf
-   hex — `uuid4().hex`'in ürettiği tek şekil). Elle yazılmış bir cümle burada
-   durur, "çağıran hatırlarsa" değil.
-2. `TaskService.record_evidence` **satırın gerçekten var olduğunu** denetler.
-   Şekli doğru, uydurulmuş bir kimlik burada durur.
-3. `ProofService` arşivdeki kaydın kendi `write_outcome` değerini okur ve
-   `verified`'ı ondan türetir. `outcome_unknown` dönmüş bir gönderim
-   **kaydedilir fakat doğrulanmış sayılmaz** — sunucunun mesajı saklamış
-   olabileceği, saklamamış da olabileceği durum (ADR-0002 §3).
+Dört katman vardır ve **ürün yolunda hepsi ateşlenmez**:
+
+1. **`ProofPublicShareRequest.evidence_id` (`min_length=32`)** — HTTP şekil
+   kapısı. `"paylasildi"` gönderen bir çağıran modelden **422** alır ve
+   handler'a hiç ulaşmaz.
+2. **`EvidenceService.get` — burada fiilen reddeden denetim.** Kaydın
+   `write_outcome` değeri `verified`'ın **girdisidir**, yani satır her şeyden
+   önce okunmak zorundadır. Arşivlenmiş bir gönderimi adlandırmayan her
+   işaretçi — şekli ne olursa olsun — burada `evidence_record_missing` ile
+   durur. `"0"*32` ve `"paylasildi"` bu yüzden **aynı** gerekçeyi alır.
+3. **`TaskService.record_evidence`'ın satır-varlık denetimi** — bu yola
+   ancak var olan bir satırla ulaşılır, dolayısıyla burada yalnız onaylayabilir.
+   `ProofService`'i **atlayan** çağıranlar için derinlik savunmasıdır;
+   `record_evidence` public'tir ve bu sütunları yazan tek fonksiyondur.
+4. **`EvidenceRef.__post_init__`'in şekil denetimi** — aynı şekilde: buraya
+   geldiğinde kimlik zaten arşivin birincil anahtarından dönmüştür. Elinde
+   veritabanı olmayan her `EvidenceRef` kurucusunu o kapsar.
+
+Yani 3 ve 4 birbirinden ve 2'den bağımsız üç ret değil, **2'nin gölgelediği
+iki derinlik savunmasıdır**. İkisi de kendi seviyelerinde ayrıca sürülür
+(`test_task_evidence.py`'nin iki testi ve
+`test_proof_bundle.py::test_the_two_shadowed_public_share_refusals_are_driven_where_they_fire`),
+çünkü yalnız bir başkasının arkasında çalışan bir savunma, kimsenin
+çalıştığını görmediği savunmadır.
+
+`verified` her durumda arşivdeki kaydın kendi `write_outcome` değerinden
+türer: `outcome_unknown` dönmüş bir gönderim **kaydedilir fakat doğrulanmış
+sayılmaz** — sunucunun mesajı saklamış olabileceği, saklamamış da olabileceği
+durum (ADR-0002 §3).
 
 Alan `PUBLICATION_FIELDS`'e girmedi: yayımlamadan da bir görev tamamlanabilir.
+
+**Paylaşım onayı ile onaylama iki ayrı rettir; onaylama tek kattadır.**
+`share` rotası hem tek kullanımlık onayı harcar hem gövdede `acknowledged`
+ister — bunlar gerçekten iki bağımsız rettir. Fakat `acknowledged`'ın
+**kendisi** bir kez denetlenir: `ProofShareRequest.acknowledged`
+`Literal[True]`'dur ve varsayılanı yoktur, yani eksik gövde de `false` gövde
+de handler çalışmadan **422**'dir. Handler'ın tepesinde duran ikinci bir
+`if body.acknowledged is not True` dalı, kendisini "iki bağımsız retten
+ikincisi" diye tanıtıyordu; `Literal[True]` tek değer kabul ettiği için o dal
+**alınamazdı** ve bir düşman inceleme onu silip hiçbir testi kırmadan geçti.
+Dal kaldırıldı, model genişletilmedi — `bool`'a genişletmek reddi şemadan
+handler'a **geciktirmek** olurdu — ve annotation'ın kendisi artık
+`test_proof_http.py::test_the_acknowledgement_is_enforced_by_the_annotation_and_only_there`
+ile sabitlenmiştir. Kanıt dışa aktarımı (`EvidenceExportRequest.acknowledged:
+bool`) gerçekten çift katlıdır; şekli kopyalarken tipi kopyalamamak, yalnız
+bir docstring cümlesi olan bir savunma üretmişti.
+
+## 7b. Çalışma alanındaki bir reparse point: 500 değil, söylenmiş bir ret
+
+`ProofService.build` çalışma alanını `AgentService.workspace_files` üzerinden
+okur ve o da reparse point yürüyüşünü yapar. `workspace/v1/<task_id>` üzerine
+gerçek bir NTFS junction kurulduğunda (`mklink /J`, yönetici hakkı istemez)
+yükselen `WorkspaceError`, `routes/proof.py`'nin **yakalamadığı** bir
+istisnaydı — rota yalnız `(ProofError, TaskError)` yakalıyor — ve
+`GET /api/proof/{id}` **500** dönüyordu. Genel hata sözleşmesi gövdeyi
+redakte ettiği için hiçbir şey sızmıyordu; kaybolan şey **cümleydi**. Çalışma
+alanı katmanı neyin yanlış olduğunu tam olarak biliyordu ve rota onun yerine
+"bir hata oluştu" diyordu — hem de bütün konusu "bu makine neyi ortaya
+koyabilir, neyi koyamaz" olan bir ekranda.
+
+`build` artık `AgentError`'ı (`WorkspaceError` onun alt sınıfıdır) `ProofError`'a
+çevirir ve rota onu kendi gerekçesiyle **400** olarak döndürür. Gerçek bir
+junction ile sürülür (`test_proof_http.py::test_a_reparse_point_in_the_workspace_is_a_stated_refusal_not_a_500`);
+junction kuramayan bir makinede predikat aynı gerçek yol üzerinde zorlanır,
+**sessiz skip yoktur**.
+
+`routes/agent.py`'nin çalışma alanı okuması bu kusuru **paylaşmıyordu**:
+`read_runs` zaten `(TaskError, AgentError)` yakalıyor ve `WorkspaceError` bir
+`AgentError`'dır. İnceleme onu da kusurlu bildirmişti; aynı test bunu
+ölçerek reddediyor.
 
 ## 8. Sınır: yeni paket hiçbir taramanın içinde değildi
 

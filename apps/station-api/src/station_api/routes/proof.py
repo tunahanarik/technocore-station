@@ -35,7 +35,10 @@ What is deliberately absent
   route hands out as a side effect (SI-222, ADR-0009 8).
 * **No second consent shape.** ``share`` spends a single-use approval bound to
   the bundle digest, and *also* requires ``acknowledged`` in the body - two
-  independent refusals, because a file leaving this machine is worth two.
+  independent refusals, because a file leaving this machine is worth two. The
+  two are the *approval* and the *acknowledgement*; the acknowledgement itself
+  is checked exactly once, by the model, and a handler-level re-check of a
+  ``Literal[True]`` field is unreachable rather than redundant.
 """
 
 from __future__ import annotations
@@ -261,21 +264,28 @@ def take_bundle(
 ) -> Response:
     """Spend the approval and hand the file to the browser. Writes no path.
 
-    ``acknowledged`` is checked here as well as being ``Literal[True]`` on the
-    model. Redundant on purpose: the model refuses a body that omits it, and
-    this refuses a caller that reached the handler some other way - the same
-    doubling the evidence export uses, for a file that leaves this machine.
+    The acknowledgement is enforced **once**, by the model:
+    ``ProofShareRequest.acknowledged`` is ``Literal[True]`` with no default, so
+    a body that omits it and a body that says ``false`` are both a 422 before
+    this function runs. There is nothing to re-check here, and there used to
+    be: a handler-level ``if body.acknowledged is not True`` sat at the top of
+    this function calling itself the second of "two independent refusals".
+
+    It was neither independent nor a refusal. ``Literal[True]`` admits exactly
+    one value, so the branch could not be taken, and an adversarial review
+    deleted it with no test failing anywhere. The evidence export *does* carry
+    a real doubling - ``EvidenceExportRequest.acknowledged`` is a plain
+    ``bool``, so its handler check genuinely bites - and copying the shape
+    without copying the type produced a defence that was only ever a sentence
+    in a docstring.
+
+    The branch is gone rather than the model widened. Widening ``Literal[True]``
+    to ``bool`` to make the second check reachable would move the refusal
+    *later* - out of the schema and into a handler - to buy a redundancy the
+    schema had already made unnecessary. ``test_proof_http.py`` now pins the
+    annotation itself, because it is the only thing enforcing this.
     """
     proof = _proof(request)
-    if body.acknowledged is not True:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "Dis paylasim acik onay ister. Onay verilmeden paket "
-                "uretilmez."
-            ),
-            headers=_NO_STORE,
-        )
     try:
         result = proof.deliver_share(
             task_id,

@@ -188,6 +188,20 @@ def safe_text(value: str) -> str:
     pasted novel out of a document meant to be read. Neutralising after the
     guard would make the guard a no-op, which is exactly how Package H2's
     first attempt went wrong.
+
+    Sweeping before neutralising is the half that is easy to get backwards,
+    and getting it backwards is not cosmetic. The two functions disagree about
+    invisible characters on purpose: :func:`fold` **deletes** them, because
+    ``w<ZWSP>allet`` is one word to a reader, while
+    :func:`~station_api.technocore.projection.sweep_untrusted` **replaces**
+    them with a space, because a marker hidden behind one must not survive
+    into a scanned sentence. So a zero-width space between two words of a
+    forbidden phrase makes that phrase invisible to ``neutralise`` and visible
+    again after the sweep: with the calls swapped, the phrase reaches
+    :func:`assert_no_forbidden_claim` intact and a note a person typed becomes
+    an unhandled error on their own acceptance. Swapping them is measured, not
+    assumed - ``test_proof_language.py`` drives a note carrying exactly that
+    character.
     """
     return neutralise(sweep_untrusted(value)).strip()[:MAX_BUNDLE_TEXT_CHARS]
 

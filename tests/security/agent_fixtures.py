@@ -14,7 +14,55 @@ properties of actually doing those things.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 from station_api.agent.service import AgentService
+
+#: ``mklink``'s host. Read from the environment rather than spelled, and with
+#: the documented default when it is unset.
+_COMSPEC = os.environ.get("COMSPEC", r"C:\Windows\System32\cmd.exe")
+
+
+def plant_a_real_reparse_point(link: Path, target: Path) -> bool:
+    """Create a real link at ``link`` pointing at ``target``; say whether it worked.
+
+    A symbolic link first, because it is the one the standard library can
+    make. Where Windows refuses it - developer mode off, which is the common
+    case for this product's users - an NTFS junction is created with
+    ``mklink /J``, which needs no administrator right.
+
+    It lives here rather than in ``test_agent_workspace.py`` because it is no
+    longer that file's alone: an adversarial review of H3 found that a real
+    junction inside a task workspace turned ``GET /api/proof/{id}`` into an
+    unhandled 500, and driving that needs the same planted point. A helper two
+    test files force a monkeypatch around instead of sharing is how a guard
+    ends up never meeting a real reparse point - which is the measurement that
+    produced this function in the first place.
+
+    ``subprocess`` is forbidden in the **product source**, where
+    ``test_agent_boundary.py`` reads the syntax tree to say so. A test may
+    spawn one, and several in ``tests/conformance`` already do.
+    """
+    try:
+        link.symlink_to(target, target_is_directory=target.is_dir())
+    except (OSError, NotImplementedError):
+        pass
+    else:
+        return True
+
+    if sys.platform != "win32" or not target.is_dir():
+        return False
+    result = subprocess.run(  # noqa: S603 - fixed argv, no shell, tmp_path operands
+        [_COMSPEC, "/c", "mklink", "/J", str(link), str(target)],
+        capture_output=True,
+        check=False,
+    )
+    # Asserted rather than inferred from the exit code: a reparse point the
+    # predicate does not recognise would not be driving the guard.
+    return result.returncode == 0 and os.path.isjunction(link)
 
 #: Content a task is opened for. Marked so a stray artefact is recognisable.
 TEST_ONLY_CONTENT = b"TEST-ONLY task content for the agent runtime, not real work."
