@@ -31,7 +31,7 @@ from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
 from station_api.agent import budget as budget_module
 from station_api.agent.activity import ActivityAction, ActivityLog, ActivityOutcome
-from station_api.agent.budget import RunCeiling
+from station_api.agent.budget import CEILING, RunCeiling
 from station_api.agent.errors import RunError, ToolArgumentError, ToolRegistryError
 from station_api.agent.service import (
     TEST_RESULT_STATE,
@@ -48,6 +48,12 @@ from station_api.tasks.states import TaskState
 from tests.security.agent_fixtures import TEST_ONLY_CONDITION, write_plan
 
 pytestmark = pytest.mark.security
+
+#: The tool-call ceiling, typed out rather than imported. An oracle read out
+#: of the constant under test proves only that the code agrees with itself -
+#: which is how a review was able to raise the real ceiling to 9999 with the
+#: whole suite staying green.
+EXPECTED_MAX_TOOL_CALLS = 32
 
 
 def _actions(log: ActivityLog, run_id: str = "") -> list[str]:
@@ -117,21 +123,145 @@ def test_an_unregistered_tool_is_refused_and_recorded_as_a_permission_denial(
 ) -> None:
     """ADR-0008 7: recorded, and the task is **not** re-pointed somewhere else.
 
-    An agent that answered "I cannot run a shell, so I will do this other
-    thing instead" would be choosing its own objective. The refusal is an
-    event; the task stays exactly where it was.
+    An agent that answered "I cannot do that, so I will do this other thing
+    instead" would be choosing its own objective. The refusal is an event;
+    the task stays exactly where it was.
+
+    This test used to plant ``run_shell_command`` here. It cannot any more,
+    and the reason is a repair rather than a rename: a name that reads as a
+    command now earns ``execution_unavailable`` - the measured reason, with
+    the isolation inventory's sentence - instead of being folded into
+    "unknown tool". ``test_agent_activity.py`` drives that half. What is left
+    here is the half this test was actually about: an identifier that is
+    simply not in the registry.
     """
-    with pytest.raises(ToolRegistryError):
+    with pytest.raises(ToolRegistryError) as caught:
         agent.plan_run(
             task.id,
-            steps=[("run_shell_command", {"cmd": "whoami"})],
+            steps=[("read_mailbox", {"folder": "inbox"})],
             expected_artifacts=[],
             test_condition=TEST_ONLY_CONDITION,
         )
 
+    assert caught.value.reason == "tool_unknown"
     assert "permission_denied" in _actions(activity_log)
     assert tasks.get(task.id).state is TaskState.AWAITING_APPROVAL
     assert agent.list_runs(task.id) == ()
+
+
+def test_a_refused_command_leaves_the_task_exactly_where_it_was(
+    agent: AgentService, task: TaskView, tasks: TaskService, activity_log: ActivityLog
+) -> None:
+    """The same ADR-0008 7 property, on the other refusal.
+
+    A different reason must not mean a different amount of damage: nothing is
+    recorded as a run, nothing moves, and the workspace stays empty.
+    """
+    with pytest.raises(ToolRegistryError) as caught:
+        agent.plan_run(
+            task.id,
+            steps=[("execute_python", {"code": "TEST-ONLY"})],
+            expected_artifacts=[],
+            test_condition=TEST_ONLY_CONDITION,
+        )
+
+    assert caught.value.reason == "execution_unavailable"
+    assert _actions(activity_log) == ["execution_unavailable"]
+    assert tasks.get(task.id).state is TaskState.AWAITING_APPROVAL
+    assert agent.list_runs(task.id) == ()
+    assert agent.workspace_files(task.id) == ()
+
+
+def test_a_started_run_cannot_be_started_again(
+    agent: AgentService, task: TaskView
+) -> None:
+    """``start_run``'s phase check, driven.
+
+    A review measured that deleting the check left the whole suite green -
+    every test started each run exactly once, so the guard had never been
+    asked a question. Starting twice is what a double-clicked button does,
+    and the second call must be a refusal rather than a second pass over a
+    plan whose steps have already run.
+    """
+    run_id = write_plan(agent, task.id)
+    first = agent.start_run(run_id)
+
+    assert first.phase is RunPhase.COMPLETED
+
+    with pytest.raises(RunError) as caught:
+        agent.start_run(run_id)
+
+    assert caught.value.reason == "run_not_planned"
+    assert agent.get_run(run_id).tool_calls_used == first.tool_calls_used
+
+
+def test_a_planned_run_that_was_paused_cannot_be_started_either(
+    agent: AgentService, task: TaskView
+) -> None:
+    """The same check from the other side: ``paused`` is resumed, never started.
+
+    Two phases rather than one, because a check written as
+    ``if view.finished`` would pass the test above and still let a paused run
+    be restarted from the top.
+    """
+    run_id = write_plan(agent, task.id)
+    agent.request_stop(run_id)
+    paused = agent.start_run(run_id)
+
+    assert paused.phase is RunPhase.PAUSED
+
+    with pytest.raises(RunError) as caught:
+        agent.start_run(run_id)
+
+    assert caught.value.reason == "run_not_planned"
+
+
+def test_a_plan_longer_than_the_tool_call_ceiling_is_refused(
+    agent: AgentService, task: TaskView
+) -> None:
+    """The ceiling's **value**, driven behaviourally rather than compared to itself.
+
+    ``test_agent_http`` asserts the published ceiling equals
+    ``CEILING.max_tool_calls``, which checks the wiring and not the number: a
+    review raised the ceiling to 9999 and the suite stayed green. Here the
+    number decides an outcome. A plan of exactly ``max_tool_calls`` steps is
+    accepted and runs to the end; one step more is refused, because a plan
+    the ceiling could never let finish is a plan this product declines to
+    record.
+
+    The number is typed out rather than read from the constant under test:
+    an oracle taken from ``CEILING`` proves only that the code agrees with
+    itself, which is exactly how a ceiling of 9999 stayed invisible.
+    """
+    assert CEILING.max_tool_calls == EXPECTED_MAX_TOOL_CALLS
+
+    at_the_ceiling = [("read_run_status", {})] * EXPECTED_MAX_TOOL_CALLS
+
+    with pytest.raises(RunError) as caught:
+        agent.plan_run(
+            task.id,
+            steps=[*at_the_ceiling, ("read_run_status", {})],
+            expected_artifacts=[],
+            test_condition=TEST_ONLY_CONDITION,
+        )
+
+    assert caught.value.reason == "plan_too_long"
+    assert agent.list_runs(task.id) == ()
+
+    # The refused plan first, because a completed run moves the task out of
+    # ``awaiting_approval`` and the next refusal would then be about the
+    # task's state rather than about the plan's length.
+    view = agent.plan_run(
+        task.id,
+        steps=at_the_ceiling,
+        expected_artifacts=[],
+        test_condition=TEST_ONLY_CONDITION,
+    )
+    finished = agent.start_run(view.id)
+
+    assert finished.phase is RunPhase.COMPLETED
+    assert finished.tool_calls_used == EXPECTED_MAX_TOOL_CALLS
+    assert len(finished.steps) == EXPECTED_MAX_TOOL_CALLS
 
 
 def test_an_out_of_scope_artifact_name_is_refused_and_recorded(

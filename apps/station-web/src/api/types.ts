@@ -928,7 +928,7 @@ export type AgentToolScopeName =
   | "read_run_state";
 
 /** The parameter types. There is deliberately no `path` and no `url`. */
-export type AgentToolParamTypeName = "text" | "file_name" | "digest" | "json_text";
+export type AgentToolParamTypeName = "text" | "file_name" | "digest";
 
 /** What the measurement established. `not_measured` is not `absent`. */
 export type AgentIsolationStateName = "present" | "absent" | "not_measured";

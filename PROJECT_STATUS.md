@@ -1455,11 +1455,80 @@ Dogrulama raporu: [docs/verification/paket-h2.md](docs/verification/paket-h2.md)
       **once** notruyordu ve guard'i sessizce no-op yapiyordu (IMP-420).
       Ayrica guard silme (3 kirmizi), reparse-point yuruyusu silme (2),
       `_assert_plan_intact` silme (1), `safe_name` yeniden adlandirma (17).
-- [x] **1974 pytest** (1769 -> 1974) + **289 Vitest** (256 -> 289) +
+- [x] **1992 pytest** (1769 -> 1992) + **289 Vitest** (256 -> 289) +
       **65 Playwright** (58 -> 65). Yeni HeroUI bileseni yok (kume 11'de),
       yeni bagimlilik yok. Asama numarasi bes giris noktasinda `7 -> 8`.
 - [x] `docs/task-modules.md`'nin eskiyen uc yuzeyi (modul tablosu iki satir,
       "uretilemeyen uc durum", butce ertelemesi) **kaydedilerek** guncellendi.
+      Ayrica `docs/architecture.md` ve `docs/agent-runtime.md`'nin H2 gercegi
+      tarafindan yalanlanan bes cumlesi duzeltildi.
+
+#### Paket H2 - PR #18 dusman inceleme turu (5 Eylul 2026)
+
+**53 mutasyon, 42 oldurulen, 11 hayatta kalan.** Hayatta kalan her mutasyon
+bir bulguya donustu; **on ucunun hepsi kapatildi.** Ayrintili tablo:
+[docs/verification/paket-h2.md](docs/verification/paket-h2.md).
+
+- [x] **P1 - reparse savunmasi KORDU.** Yuruyus **cozulmus** yol uzerinde
+      kosuyordu ve `resolve()` bagi zaten erittigi icin hicbir gercek reparse
+      point'i goremiyordu. Incelemeci `mklink /J` ile - **admin gerekmeden** -
+      olctu: workspace kokunun kendisi junction oldugunda `read_text` icerigi
+      donduruyor, `list_files` listeliyor, `ensure_workspace` itiraz
+      etmiyordu. Reddi **containment** yapiyordu (`workspace_escape`), o
+      yuzden CI'da `assert 'workspace_escape' == 'workspace_reparse_point'`
+      dustu. Yuruyus artik cozulmemis yolda ve `<data_dir>/workspace`'te
+      duruyor; mutasyon yine 2 kirmizi ama **ikisi de gercek junction diken
+      test** (eskiden ikisi de monkeypatch'li dalidi).
+- [x] **Duzeltme sirasinda ikinci kusur cikti:** `service._discard` reparse
+      yuruyusu olmadan `unlink` cagiriyordu - geciken bir yanitin temizligi
+      bag uzerinden silebilirdi. `workspace.remove_file`'a tasindi.
+- [x] **P1 - containment denetimini 1974 testin hicbiri oldurmuyordu**
+      (`if False:` -> tum suite yesil), cunku onu surdugunu iddia eden test
+      katman 1'e takiliyordu. Iki test eklendi (biri `safe_name`'i atlayarak,
+      biri root icinde disari bakan **gercek** junction'la); 0 -> 2 kirmizi.
+- [x] **P2 - IMP-420'nin duzeltmesi testsizdi.** `neutralise` silindiginde
+      tum suite yesildi ve kullanici bir argüman anahtarina yasak ifade
+      yazarak urunu 500'e surebiliyordu. 0 -> 2 kirmizi; notrlemenin **yonu**
+      (servis evet, activity hayir) AST ile sabitlendi.
+- [x] **P2 - `execution_unavailable` uyesi hicbir kod yolundan
+      uretilemiyordu** ve bu, ayni diff'in `evidence/audit.py`'ye yazdigi
+      "her uye gercek bir kod yolundan kaydedilebilir" kuralini ihlal
+      ediyordu. Gercek bir yola baglandi: registry **once** reddediyor, sonra
+      ad bir komut gibi okunuyorsa ayri ret. Mutasyon 2 kirmizi.
+- [x] **P2 - `.allowed` ve `ARBITRARY_EXECUTION_SUPPORTED` dekoratifti**;
+      tel `schemas.py`'de elle sabitlenmisti ve modul sabitiyle bagi yoktu.
+      Tureti tersine cevrildi; sabiti degistirmek 0 -> **6 kirmizi**.
+- [x] **P2 - registry degismezlik taramasi zayifti**: `_BY_ID[x] = y` ve
+      `globals()[...]` yazimini goremiyordu ve yalniz `tools.py`'yi
+      okuyordu (docstring'i "anywhere in the package" diyordu). Alti yazim
+      bicimi + tum paket; ekili mutatorle suruldu.
+- [x] **P2 - "seed taramasi workspace'i otomatik kapsiyor" YANLISTI.**
+      `ensure_workspace` o testlerin fixture zincirinde hic cagrilmiyordu,
+      yani tarama hicbir workspace dosyasi gormuyordu. Iddia geri cekilmedi,
+      **gercek yapildi**: iki tarama artik gercek bir workspace artefakti
+      okuyor ve canary ile suruldu.
+- [x] **P3'ler:** import zamani cagri yeri korunmuyordu (0 -> 1); `purpose`
+      taranmiyordu; retention yorumu kodla celisiyordu (**kod cumleye
+      uyduruldu**, cunku zincir buyudukce kuculen bir sinir kimsenin
+      sectigi bir sinir degil); `ToolParamType.JSON_TEXT` olu, kaldirildi;
+      uc guard'in (faz, `MAX_PLAN_STEPS`, tavan degeri) davranissal testi
+      eklendi - tavan artik sabitle karsilastirilmiyor, 32 adim kosulup
+      33'uncu reddedilerek suruluyor.
+- [x] **Incelemeci de iki yerde yanildi ve bu olcerek gosterildi:**
+      `ARBITRARY_EXECUTION_SUPPORTED` zaten `Literal[False]` idi;
+      `get_tool`'un dali olu degil (zaten 1 kirmizi veriyor).
+      `MAX_NAME_CHARS`'in teshisi de yanlisti - dal erisilebilirmis, ama iki
+      dal **ayni gerekceyi** donduruyordu, o yuzden test ayirt edemiyordu;
+      kendi gerekcesini aldi ve SI-288'in "asiri uzunluk" kaniti artik
+      gercekten uzunluga dair.
+- [x] **Bu paketin kendi raporunda iki yanlis iddia duzeltildi:** "`tasks/`
+      ve `modules/` hic dokunulmadi" (olcum: 201 ekleme; kastedilen "butce
+      alani eklenmedi" dogru ve testle korunuyor) ve `safe_name` mutasyonu
+      "17 kirmizi" (olcum: 18).
+- [x] **Incelemecinin olcmedikleri** raporda acikca yazildi: Playwright
+      kosulmadi, dort kapi kosulmadi, **iceri bakan gercek dosya symlink'i
+      olculemedi** (bu makinede `WinError 1314`), migration SQL'i okunmadi.
+      Bunlar orkestrator tarafindan ayrica kosuldu.
 
 ## Sonraki asama: Asama 10 - H3 Proof Workspace
 

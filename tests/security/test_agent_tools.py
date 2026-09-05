@@ -31,6 +31,7 @@ from station_api.agent import tools as tools_module
 from station_api.agent.errors import ToolArgumentError, ToolRegistryError
 from station_api.agent.tools import (
     FORBIDDEN_CAPABILITY_FRAGMENTS,
+    MAX_NAME_CHARS,
     MAX_TEXT_CHARS,
     TOOLS,
     ToolId,
@@ -115,13 +116,29 @@ def test_no_parameter_type_can_carry_an_address() -> None:
     A tool cannot be handed an address. A file is named, and the name goes
     through the workspace's own sanitiser and containment check afterwards -
     two layers, neither of which a caller reaches around.
+
+    ``json_text`` was here and is gone. It was declared by no tool, so its
+    validator branch was unreachable in production and a review measured that
+    deleting the branch changed nothing. A published parameter type is a
+    claim that some tool takes one.
     """
     assert {member.value for member in ToolParamType} == {
         "text",
         "file_name",
         "digest",
-        "json_text",
     }
+
+
+def test_every_parameter_type_is_declared_by_a_real_tool() -> None:
+    """The rule that removal enforces, stated so it cannot rot back.
+
+    A type nothing declares is a validator nothing runs and a capability a
+    reader would infer and not find. Adding a member to the enum without a
+    tool that takes it fails here.
+    """
+    declared = {param.type for record in TOOLS for param in record.params}
+
+    assert declared == set(ToolParamType), set(ToolParamType) - declared
 
 
 def test_a_tool_record_cannot_be_mutated() -> None:
@@ -171,10 +188,20 @@ def test_the_authority_a_developer_had_is_not_inherited(capability: str) -> None
 
 
 def test_no_registered_tool_crosses_the_forbidden_capability_list() -> None:
-    """The rule the import-time check applies, asserted over the real registry."""
+    """The rule the import-time check applies, asserted over the real registry.
+
+    ``purpose`` is in the haystack. ``tools.py``'s own docstring said the
+    check covered "every registered identifier **and purpose**" while both
+    the check and this test read only the id and the scope - a review read
+    both and found the gap. The purpose is the sentence the surface shows
+    beside a tool, so a record that *describes itself* as committing to git
+    is as much a crossing as one named for it.
+    """
     offenders: list[str] = []
     for record in TOOLS:
-        haystack = f"{record.id.value} {record.scope.value}".lower()
+        haystack = (
+            f"{record.id.value} {record.scope.value} {record.purpose}".lower()
+        )
         offenders.extend(
             f"{record.id.value}: {fragment}"
             for fragment in FORBIDDEN_CAPABILITY_FRAGMENTS
@@ -182,6 +209,32 @@ def test_no_registered_tool_crosses_the_forbidden_capability_list() -> None:
         )
 
     assert offenders == [], offenders
+
+
+def test_the_import_time_check_reads_the_purpose_and_not_only_the_name() -> None:
+    """Driven with a record whose *only* crossing is in its purpose.
+
+    The id and the scope are both innocent here, so the refusal can only come
+    from the purpose being scanned. Before the fix this record was accepted.
+    """
+    planted = ToolRecord(
+        id="summarise_workspace",  # type: ignore[arg-type]
+        scope=ToolScope.DETERMINISTIC_CHECK,
+        purpose="TEST-ONLY: uretilen yamayi git ile commit eder.",
+        params=(),
+        call_cost=1,
+        produces_artifact=False,
+    )
+
+    original = tools_module.TOOLS
+    try:
+        tools_module.TOOLS = (*original, planted)
+        with pytest.raises(ToolRegistryError) as caught:
+            tools_module._assert_within_the_trust_boundary()
+    finally:
+        tools_module.TOOLS = original
+
+    assert caught.value.reason == "tool_outside_trust_boundary"
 
 
 def test_the_import_time_check_actually_refuses_a_planted_tool() -> None:
@@ -211,6 +264,47 @@ def test_the_import_time_check_actually_refuses_a_planted_tool() -> None:
     assert caught.value.reason == "tool_outside_trust_boundary"
 
 
+def test_the_import_time_check_is_actually_called_at_import(
+    api_source_root: Path,
+) -> None:
+    """The guard runs because a module-level statement calls it, and that
+    statement is what this test pins.
+
+    The behavioural test above proves the function refuses a planted record;
+    it says nothing about whether anything invokes it. A review commented the
+    call out and the whole suite stayed green - so the protection was one
+    deleted line away from being a function nobody runs, in a module whose
+    docstring promises "the application refusing to start".
+
+    Read off the syntax tree, at module level only: a call nested inside a
+    function would not run at import.
+    """
+    path = api_source_root / "station_api" / "agent" / "tools.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    call_sites = [
+        node.lineno
+        for node in tree.body
+        if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "_assert_within_the_trust_boundary"
+    ]
+
+    assert len(call_sites) == 1, call_sites
+
+    # And it runs before the lookup table is built, so an application
+    # carrying a forbidden tool never gets one.
+    lookup = [
+        node.lineno
+        for node in tree.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "_BY_ID"
+    ]
+    assert lookup and call_sites[0] < lookup[0]
+
+
 def test_the_registry_is_never_written_at_runtime(api_source_root: Path) -> None:
     """The structural half of "the agent cannot add a tool to itself".
 
@@ -232,17 +326,137 @@ def test_the_registry_is_never_written_at_runtime(api_source_root: Path) -> None
     assert assignments.count("TOOLS") == 1
     assert assignments.count("_BY_ID") == 1
 
-    mutators = {"append", "extend", "insert", "update", "setdefault", "pop", "clear"}
-    offenders = [
-        f"{node.lineno}: {ast.unparse(node.func)}"
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr in mutators
-        and isinstance(node.func.value, ast.Name)
-        and node.func.value.id in {"TOOLS", "_BY_ID"}
-    ]
+    offenders: list[str] = []
+    for scanned in _registry_scope(api_source_root):
+        offenders.extend(_registry_writers(scanned, allow_module_level=scanned == path))
+
     assert offenders == [], offenders
+
+
+#: Every write a registry could take, modelled the way ``test_agent_budget``
+#: models the four writes to the ceiling. Three of these were missing until an
+#: independent review fed the scan a source it called CLEAN:
+#:
+#:     _BY_ID[record.id] = record             # subscript assignment
+#:     globals()["TOOLS"] = (*TOOLS, record)  # rebinding through globals()
+#:
+#: and ``setattr(tools, "TOOLS", ...)`` beside them. The scan also read only
+#: ``tools.py`` while its docstring said "nothing anywhere in the package",
+#: so ``service.py`` and ``routes/agent.py`` could have written the registry
+#: without anything noticing.
+_REGISTRY_NAMES = frozenset({"TOOLS", "_BY_ID"})
+
+_REGISTRY_MUTATORS = frozenset(
+    {"append", "extend", "insert", "update", "setdefault", "pop", "clear"}
+)
+
+
+def _registry_scope(api_source_root: Path) -> list[Path]:
+    """Every file that could write the registry: the whole package, and the route."""
+    package = api_source_root / "station_api" / "agent"
+    files = sorted(package.rglob("*.py"))
+    files.append(api_source_root / "station_api" / "routes" / "agent.py")
+    assert len(files) >= 8, files
+    return files
+
+
+def _registry_writers(path: Path, *, allow_module_level: bool) -> list[str]:
+    """Offending writes to ``TOOLS`` or ``_BY_ID`` in one file.
+
+    ``allow_module_level`` exempts the two literal definitions in ``tools.py``
+    itself, which the caller has already counted; everything else - a
+    subscript, an attribute, an augmented assignment, ``globals()``,
+    ``setattr`` and the container mutators - is an offence wherever it is.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    module_level = set(tree.body)
+    offenders: list[str] = []
+
+    def _report(node: ast.AST, what: str) -> None:
+        offenders.append(f"{path.name}:{getattr(node, 'lineno', 0)} {what}")
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign | ast.AnnAssign | ast.AugAssign):
+            targets = (
+                node.targets
+                if isinstance(node, ast.Assign)
+                else [node.target]
+            )
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id in _REGISTRY_NAMES:
+                    if allow_module_level and node in module_level and (
+                        not isinstance(node, ast.AugAssign)
+                    ):
+                        continue
+                    _report(node, f"rebinds {target.id}")
+                elif isinstance(target, ast.Attribute) and (
+                    target.attr in _REGISTRY_NAMES
+                ):
+                    _report(node, f"assigns .{target.attr}")
+                elif isinstance(target, ast.Subscript):
+                    inner = target.value
+                    if isinstance(inner, ast.Name) and inner.id in _REGISTRY_NAMES:
+                        _report(node, f"writes into {inner.id}")
+                    elif isinstance(inner, ast.Call) and isinstance(
+                        inner.func, ast.Name
+                    ) and inner.func.id in {"globals", "vars"}:
+                        _report(node, f"rebinds through {inner.func.id}()")
+        elif isinstance(node, ast.Call):
+            func = node.func
+            if (
+                isinstance(func, ast.Name)
+                and func.id == "setattr"
+                and len(node.args) >= 2
+                and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value in _REGISTRY_NAMES
+            ):
+                _report(node, f"setattr {node.args[1].value}")
+            elif (
+                isinstance(func, ast.Attribute)
+                and func.attr in _REGISTRY_MUTATORS
+                and isinstance(func.value, ast.Name)
+                and func.value.id in _REGISTRY_NAMES
+            ):
+                _report(node, f"{func.value.id}.{func.attr}()")
+
+    return offenders
+
+
+def test_the_registry_scan_catches_every_shape_of_write(tmp_path: Path) -> None:
+    """The scan, fed the source a review called CLEAN, plus the rest.
+
+    Every line here is a real way to add a tool at runtime, and the scan is
+    required to see all of them. Without this the previous scan happily
+    passed a module that rebuilt ``TOOLS`` through ``globals()`` and wrote
+    straight into ``_BY_ID``.
+    """
+    planted = tmp_path / "planted.py"
+    planted.write_text(
+        "TOOLS = ()\n"
+        "_BY_ID = {}\n"
+        "def add_tool(record):\n"
+        "    _BY_ID[record.id] = record\n"
+        '    globals()["TOOLS"] = (*TOOLS, record)\n'
+        '    setattr(mod, "TOOLS", ())\n'
+        "    TOOLS += (record,)\n"
+        "    mod.TOOLS = ()\n"
+        "    _BY_ID.update({})\n",
+        encoding="utf-8",
+    )
+
+    offenders = _registry_writers(planted, allow_module_level=True)
+
+    assert len(offenders) == 6, offenders
+    joined = " ".join(offenders)
+    for shape in (
+        "writes into _BY_ID",
+        "rebinds through globals()",
+        "setattr TOOLS",
+        "rebinds TOOLS",
+        "assigns .TOOLS",
+        "_BY_ID.update()",
+    ):
+        assert shape in joined, (shape, offenders)
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +503,6 @@ def test_a_missing_required_argument_is_refused() -> None:
         "\\\\server\\share\\file.txt",
         "..",
         "",
-        "a" * 200,
     ],
 )
 def test_a_file_name_parameter_refuses_anything_that_is_not_a_bare_name(
@@ -300,6 +513,11 @@ def test_a_file_name_parameter_refuses_anything_that_is_not_a_bare_name(
     Neither layer is trusted alone: this one refuses a name carrying syntax,
     and ``workspace.resolve_within`` rebuilds the name from an allow-list and
     then checks containment on the resolved path.
+
+    ``"a" * 200`` used to be in this list, and it was the weakest entry: it
+    is refused for being *long*, not for carrying syntax, and both refusals
+    answered the same reason so the test could not tell them apart. It has
+    its own test below, with its own reason.
     """
     record = get_tool(ToolId.READ_WORKSPACE_FILE)
 
@@ -307,6 +525,28 @@ def test_a_file_name_parameter_refuses_anything_that_is_not_a_bare_name(
         bind_arguments(record, {"name": hostile})
 
     assert caught.value.reason == "argument_not_a_bare_name"
+
+
+def test_an_over_long_file_name_is_refused_as_a_length_and_not_as_a_shape() -> None:
+    """The length branch, driven by its own reason.
+
+    A review found that deleting this branch left the suite green: the name
+    regex refuses the same input one line later with the same reason, so the
+    only test covering it could not see which branch had fired. The two
+    refusals now say different things, and a name that is *only* too long -
+    every character allowed, nothing but the length wrong - proves the length
+    check is the one doing the work.
+    """
+    record = get_tool(ToolId.READ_WORKSPACE_FILE)
+    only_too_long = "a" * (MAX_NAME_CHARS + 1)
+
+    assert only_too_long.strip("abcdefghijklmnopqrstuvwxyz") == ""
+
+    with pytest.raises(ToolArgumentError) as caught:
+        bind_arguments(record, {"name": only_too_long})
+
+    assert caught.value.reason == "argument_name_too_long"
+    assert str(MAX_NAME_CHARS) in str(caught.value)
 
 
 def test_a_digest_parameter_refuses_anything_that_is_not_one() -> None:

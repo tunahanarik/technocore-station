@@ -247,11 +247,13 @@ Bunların hiçbiri dışarıya istek göndermez: açılışta giden istek sayıs
 
 ## 6. Bu sürümde bilinçli olarak yapılmayanlar
 
-- **Görünür görev yüzeyi.** Görev katmanının HTTP route'u yoktur ve
-  `work-scan` / `tasks` / `activity` bölümleri `ready: false`'tur
-  (ADR-0004 §9). Yüzey H1/H2'nindir.
-- **Öneri üreticisi ve yürütücü.** `suggested`, `running` ve `paused`
-  durumları tanımlıdır fakat üretilemez (ADR-0004 §3).
+- ~~**Görünür görev yüzeyi.**~~ **Kapandı:** görev katmanının HTTP
+  route'ları H1/H2'de açıldı ve `work-scan` / `tasks` / `activity`
+  bölümlerinin üçü de artık `ready: true`. Bu madde Paket F'in
+  durumunu anlatıyordu (ADR-0004 §9).
+- ~~**Öneri üreticisi ve yürütücü.**~~ **Kapandı:** `suggested`'ı H1,
+  `running`/`paused`'ı H2'nin deterministik yürütücüsü üretilebilir yaptı;
+  `UNPRODUCIBLE_STATES` bugün boştur (ADR-0007, ADR-0008 §3).
 - **Dış paylaşım.** Dört kanıt alanının dördüncüsü daima boştur; H3'ün
   konusudur (ADR-0004 §4).
 - **Bütçe.** Bütçe alanı açılmadı ve bütçe varmış gibi davranılmıyor;

@@ -30,6 +30,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from station_api.agent.budget import BUDGET_UNITS, CEILING
+from station_api.agent.isolation import (
+    ARBITRARY_EXECUTION_SUPPORTED,
+    execution_verdict,
+)
 from station_api.agent.language import RUN_HONESTY_SENTENCE
 from station_api.agent.tools import TOOLS
 from station_api.modules.registry import ModuleId
@@ -143,11 +147,40 @@ def test_the_surface_states_that_execution_is_closed_and_why(
     assert payload["execution"]["reason"] == "execution_unavailable"
     assert payload["execution"]["detail"].strip()
 
+    # The wire is the module's own values, not a second copy of them. It used
+    # to be the second copy: ``schemas.py`` spelled ``False`` again with no
+    # link to ``isolation``, and an independent review measured that editing
+    # either one left the other - and the whole suite - untouched.
+    assert payload["execution"]["detail"] == execution_verdict().detail
+    assert payload["execution"]["reason"] == execution_verdict().reason
+
     inventory = {row["facility"]: row for row in payload["execution"]["inventory"]}
     assert inventory["docker_desktop"]["measured"] == "present"
     assert inventory["docker_desktop"]["relied_upon"] is False
     assert inventory["windows_optional_features"]["measured"] == "not_measured"
     assert all(row["relied_upon"] is False for row in inventory.values())
+
+
+def test_the_verdicts_allowed_field_is_the_module_constant(
+    client: TestClient, csrf_token: str
+) -> None:
+    """One fact, one place, and the wire follows it.
+
+    ``execution_verdict().allowed`` used to be a hard-coded ``False`` that
+    **nothing read** - both call sites take only ``.reason`` and ``.detail``,
+    so turning it into ``True`` left the entire suite green. It is now
+    ``ARBITRARY_EXECUTION_SUPPORTED``, and the route passes that same
+    constant to a response field typed ``Literal[False]``. Editing the
+    constant therefore breaks the verdict, the wire and ``mypy`` together,
+    which is what "structural" has to mean to be worth the word.
+    """
+    assert csrf_token
+    assert ARBITRARY_EXECUTION_SUPPORTED is False
+    assert execution_verdict().allowed is ARBITRARY_EXECUTION_SUPPORTED
+
+    published = client.get(SURFACE_PATH).json()["execution"]
+
+    assert published["arbitrary_execution_supported"] is ARBITRARY_EXECUTION_SUPPORTED
 
 
 def test_the_surface_publishes_the_ceiling_and_the_units_it_refuses(
@@ -349,6 +382,38 @@ def test_a_finished_run_reports_its_test_field_as_not_implemented(
 def test_an_unregistered_tool_in_a_plan_is_a_four_hundred(
     client: TestClient, csrf_token: str, task_id: str
 ) -> None:
+    """"There is no such tool" - the refusal an unknown identifier earns.
+
+    This test used to name ``run_shell_command`` here. It no longer can: a
+    name that reads as a command now gets the *other* refusal, below, and
+    keeping both cases on one identifier is how the two would have quietly
+    merged back into one answer.
+    """
+    response = client.post(
+        f"{TASKS_PATH}/{task_id}/runs",
+        json={
+            "steps": [{"tool_id": "read_mailbox", "arguments": {}}],
+            "expected_artifacts": [],
+            "test_condition": "TEST-ONLY",
+        },
+        headers={CSRF: csrf_token},
+    )
+
+    assert response.status_code == 400
+    assert "derleme zamaninda" in response.json()["detail"]
+
+
+def test_asking_for_a_command_is_refused_with_the_measured_reason(
+    client: TestClient, csrf_token: str, task_id: str
+) -> None:
+    """``execution_unavailable`` on the wire, as a 400 the user can read.
+
+    ADR-0008 1 asks for the closed capability to be a *reason with a
+    sentence* rather than an absence. On the plan route that means a step
+    naming a command comes back with the measured detail - the isolation
+    inventory's own words - and not folded into "unknown tool", which is
+    what it used to get.
+    """
     response = client.post(
         f"{TASKS_PATH}/{task_id}/runs",
         json={
@@ -360,7 +425,7 @@ def test_an_unregistered_tool_in_a_plan_is_a_four_hundred(
     )
 
     assert response.status_code == 400
-    assert "derleme zamaninda" in response.json()["detail"]
+    assert response.json()["detail"] == execution_verdict().detail
 
 
 def test_a_traversal_in_an_artifact_name_is_a_four_hundred(

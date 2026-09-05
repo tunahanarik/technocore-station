@@ -52,7 +52,6 @@ is no shell.
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from enum import StrEnum
@@ -97,18 +96,27 @@ class ToolScope(StrEnum):
 
 
 class ToolParamType(StrEnum):
-    """The parameter types. Each one has a validator and no type has a default.
+    """The parameter types. Each one has a validator, and each one is used.
 
     There is deliberately no ``PATH`` and no ``URL``: a tool cannot be handed
     an address. A :attr:`FILE_NAME` is a bare name inside one task's
     workspace, checked by :mod:`station_api.agent.workspace` a second time
     before any byte is read or written.
+
+    There was a fourth member, ``JSON_TEXT``, and it is gone. No registered
+    tool declared a parameter of that type, so its branch in :func:`_validate`
+    could not be reached in production - an independent review measured that
+    deleting the branch changed nothing. It is removed rather than left
+    standing, for the same reason an audit event nothing can record is
+    removed: a published type says "a tool may take one of these", and one
+    that no tool takes is a capability a reader would infer and not find.
+    Re-adding it is a tuple edit in :data:`TOOLS` plus a validator, which is
+    a reviewable change and not a large one.
     """
 
     TEXT = "text"
     FILE_NAME = "file_name"
     DIGEST = "digest"
-    JSON_TEXT = "json_text"
 
 
 @dataclass(frozen=True, slots=True)
@@ -352,7 +360,13 @@ def _assert_within_the_trust_boundary() -> None:
         # whose id is not a registry member, because that is exactly what a
         # planted entry looks like, and a guard that raises ``AttributeError``
         # on the shape it exists to catch has not caught anything.
-        haystack = f"{record.id!s} {record.scope!s}".lower()
+        # ``purpose`` is in the haystack because this module's own docstring
+        # promises it is - "every registered identifier **and purpose**". It
+        # was not, until a review read both. The purpose is what a user sees
+        # beside a tool on the surface, so a record that *describes itself*
+        # as committing to git is as much a boundary crossing as one named
+        # for it.
+        haystack = f"{record.id!s} {record.scope!s} {record.purpose!s}".lower()
         for fragment in FORBIDDEN_CAPABILITY_FRAGMENTS:
             if fragment in haystack:
                 raise ToolRegistryError(
@@ -412,7 +426,10 @@ def resolve_tool(raw: str) -> ToolRecord:
 #: Longest text a tool may be handed. A body is a document, not a payload.
 MAX_TEXT_CHARS = 20_000
 
-#: Longest file name accepted before the workspace sanitiser sees it.
+#: Longest file name accepted before the workspace sanitiser sees it. One
+#: shorter than :data:`_FILE_NAME_RE`'s own bound would allow, so the length
+#: refusal is the branch a too-long name actually takes and not a formality
+#: the regex reaches first.
 MAX_NAME_CHARS = 120
 
 _DIGEST_RE = re.compile(r"\A[0-9a-f]{64}\Z")
@@ -453,10 +470,16 @@ def _validate(param: ToolParam, raw: str) -> str:
         # would then be of something else - the same reason
         # ``workspace.safe_name`` refuses a rewrite rather than accepting one.
         if len(value) > MAX_NAME_CHARS:
+            # Its own reason, not the shape refusal's. Both branches used to
+            # answer ``argument_not_a_bare_name``, which meant a test could
+            # not tell which one had fired - and a review found that deleting
+            # this branch entirely left the suite green, because the regex
+            # refused the same input with the same reason one line later.
+            # Two different refusals now say two different things.
             raise ToolArgumentError(
                 f"'{param.name}' en cok {MAX_NAME_CHARS} karakter olabilir; "
                 "ad kisaltilmaz, reddedilir.",
-                reason="argument_not_a_bare_name",
+                reason="argument_name_too_long",
             )
         if not _FILE_NAME_RE.match(value) or ".." in value:
             raise ToolArgumentError(
@@ -466,31 +489,16 @@ def _validate(param: ToolParam, raw: str) -> str:
             )
         return value
 
-    if param.type is ToolParamType.DIGEST:
-        value = raw.strip()
-        if not _DIGEST_RE.match(value):
-            raise ToolArgumentError(
-                f"'{param.name}' 64 karakterlik kucuk harf hex ozet olmali.",
-                reason="argument_not_a_digest",
-            )
-        return value
-
-    # JSON_TEXT. Parsed here so a malformed document is refused before it
-    # reaches a tool, and required to be an object so a bare scalar cannot
-    # stand in for one.
-    try:
-        parsed = json.loads(raw)
-    except ValueError as exc:
+    # DIGEST. The last member; every branch above returned, and there is no
+    # fall-through case left to write, which is the point of the enum having
+    # exactly as many members as there are validators.
+    value = raw.strip()
+    if not _DIGEST_RE.match(value):
         raise ToolArgumentError(
-            f"'{param.name}' gecerli bir JSON belgesi degil.",
-            reason="argument_not_json",
-        ) from exc
-    if not isinstance(parsed, dict):
-        raise ToolArgumentError(
-            f"'{param.name}' bir JSON nesnesi olmali.",
-            reason="argument_not_a_json_object",
+            f"'{param.name}' 64 karakterlik kucuk harf hex ozet olmali.",
+            reason="argument_not_a_digest",
         )
-    return raw[:MAX_TEXT_CHARS]
+    return value
 
 
 def bind_arguments(

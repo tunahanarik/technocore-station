@@ -31,6 +31,7 @@ import pytest
 from station_api.agent import activity as activity_module
 from station_api.agent import service as service_module
 from station_api.agent.activity import ActivityAction, ActivityActor, ActivityOutcome
+from station_api.agent.errors import ToolArgumentError
 from station_api.agent.language import (
     AGENT_FORBIDDEN_PHRASES,
     FORBIDDEN_PHRASES,
@@ -240,6 +241,83 @@ def test_the_scan_would_catch_a_planted_phrase(tmp_path: Path) -> None:
     ]
 
     assert any(found), "the scan cannot see a phrase it was pointed at"
+
+
+# ---------------------------------------------------------------------------
+# IMP-420, from the other side: the guard must not be reachable by a user
+# ---------------------------------------------------------------------------
+
+
+def test_a_forbidden_phrase_a_user_typed_cannot_drive_the_product_into_a_500(
+    agent, task, monkeypatch: pytest.MonkeyPatch  # type: ignore[no-untyped-def]
+) -> None:
+    """IMP-420's fix, driven - and it had no test until an independent review said so.
+
+    The fix moved ``neutralise`` out of ``ActivityLog._clean`` (where it made
+    the guard beside it a no-op) and into ``AgentService._clean``, where a
+    user's text joins one of our sentences. Removing that call left the whole
+    suite green, so the most important repair in the package was resting on
+    nothing.
+
+    Here is what it is load-bearing for. A plan step's **argument key** is
+    user text and it is quoted back inside the refusal this product writes.
+    Typing a forbidden phrase into one must produce the shown refusal the
+    argument actually deserves - an unknown parameter - and never a
+    ``ForbiddenClaimError`` escaping as a 500, which is the product refusing
+    to speak because the user chose the wrong words.
+    """
+    step = ("read_run_status", {"kod calistirildi": "TEST-ONLY"})
+
+    with pytest.raises(ToolArgumentError) as caught:
+        agent.plan_run(
+            task.id,
+            steps=[step],
+            expected_artifacts=[],
+            test_condition="TEST-ONLY olcut",
+        )
+
+    assert caught.value.reason == "argument_unknown"
+
+    # The mutation, in the same test so the first half cannot rot into
+    # proving nothing: with the neutralising step gone, the user's own words
+    # reach our sentence and the guard - correctly - refuses it, turning a
+    # 400 the user can read into an unhandled error.
+    monkeypatch.setattr(service_module, "neutralise", lambda text: text)
+
+    with pytest.raises(ForbiddenClaimError):
+        agent.plan_run(
+            task.id,
+            steps=[step],
+            expected_artifacts=[],
+            test_condition="TEST-ONLY olcut",
+        )
+
+
+def test_the_neutralising_step_is_on_the_services_side_of_the_boundary(
+    api_source_root: Path,
+) -> None:
+    """Where ``neutralise`` is called, read off the syntax tree.
+
+    ADR-0008's split has one rule with a direction: user text is neutralised
+    **before** it joins our sentence, and our sentence is then checked. So
+    ``service.py`` must call ``neutralise`` and ``activity.py`` must not -
+    a call there would put the laundering after the guard again, which is the
+    exact shape of IMP-420.
+    """
+
+    def _calls(name: str) -> int:
+        path = api_source_root / "station_api" / "agent" / name
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        return sum(
+            1
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "neutralise"
+        )
+
+    assert _calls("service.py") >= 1, "user text stopped being neutralised"
+    assert _calls("activity.py") == 0, "the laundering moved back before the guard"
 
 
 # ---------------------------------------------------------------------------

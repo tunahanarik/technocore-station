@@ -457,19 +457,23 @@ zamanlayıcı; ve herhangi bir yol/adres parametresi.
 - **İnsan güvenlik incelemesi hâlâ ertelenmiş bir risktir** (ADR-0001 §5). Bu
   paketin savunmalarının çoğunun emsali yoktu; sıfırdan yazılmış bir traversal
   ve reparse-point savunması, gözden geçirilmiş bir tanesiyle aynı şey değildir.
-- **Junction yalnızca predikat zorlanarak sürüldü.** Gerçek bir NTFS junction
-  oluşturmak ya admin ya da `subprocess` ister; ikisi de bu pakette yasaktır.
-  Symlink, işletim sistemi izin verdiğinde gerçekten oluşturulup denendi.
-- **Aşama numarası bu pakette 7'de bırakıldı.** ADR-0008 §9 onu 8'e çekmeyi
-  istiyor, fakat beşinci giriş noktası `apps/station-web/e2e/harness/serve.py`
-  dosyasındadır ve bu paketin dokunma izni yoktur; `SI-232`/`SI-262` beş
-  noktanın da aynı sayıyı taşımasını şart koştuğu için dördünü değiştirmek
-  kapıyı kırmış olurdu. Değişiklik atomiktir ve beş dosyayı birlikte
-  düzenleyebilen bir turda yapılmalıdır.
-- **Ön yüz açılmadı.** `sections.ts`'te `tasks`/`activity` bölümlerinin
-  `ready: true` yapılması ve `App.test.tsx` verisinin güncellenmesi
-  `apps/station-web` altındadır ve bu paketin kapsamı dışındadır. Backend
-  rotaları açıktır; bölümler açılana kadar Activity Desk'in ekran karşılığı
-  yoktur.
-- **`docs/task-modules.md`** hâlâ bütçenin H2'ye ertelendiğini söylüyor. Belge
-  bu paketin dokunma listesinde değildi; güncellenmesi gerekiyor.
+- **Junction ölçümü düzeltildi.** Bu bölüm önce "gerçek bir NTFS junction
+  oluşturmak ya admin ya da `subprocess` ister" diyordu; **bu yanlıştı.**
+  Bağımsız inceleme `mklink /J` ile **admin olmadan** gerçek bir junction
+  oluşturdu ve reparse savunmasının onu görmediğini ölçtü. Symlink ise bu
+  makinede oluşturulamıyor (`WinError 1314`), o yüzden symlink tarafı
+  işletim sistemi izin verdiğinde gerçek bağla, vermediğinde zorlanmış
+  predikatla sürülüyor.
+- **Aşama numarası 8'e çekildi.** Bu bölüm önce "7'de bırakıldı" diyordu;
+  değişiklik backend turundan sonra, beş giriş noktasını
+  (`cli/__main__.py`, `launcher.py`, `routes/api.py`,
+  `e2e/harness/serve.py`, `tests/conftest.py`) ve `CURRENT_SCHEMA_STAGE`'i
+  birlikte düzenleyen bir turda **atomik olarak** yapıldı; SI-232/SI-262
+  sağlanıyor.
+- **Ön yüz açıldı.** Bu bölüm önce "açılmadı" diyordu; `tasks` ve
+  `activity` bölümleri aynı pakette `ready: true` yapıldı ve iki panel
+  (`TasksPanel.tsx`, `ActivityPanel.tsx`) eklendi. Activity Desk'in ekran
+  karşılığı vardır.
+- **`docs/task-modules.md` güncellendi.** Bu bölüm önce "hâlâ bütçenin
+  H2'ye ertelendiğini söylüyor" diyordu; belgenin eskiyen üç yüzeyi aynı
+  pakette düzeltildi.

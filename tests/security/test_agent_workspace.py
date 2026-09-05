@@ -31,21 +31,33 @@ And a fifth thing that is an absence rather than a layer: **there is no
 archive path**, so zip-slip has no surface. That is asserted in
 ``test_agent_boundary.py``, where the import scan lives.
 
-On testing links without creating them
----------------------------------------
-Creating a symbolic link on Windows needs either developer mode or a
-privilege this process may not have, and creating a junction needs a
-subprocess this package is forbidden to spawn. A conditional skip is not
-available either - ``tests/security`` may not skip. So the guard is driven
-**both** ways: a real link is attempted and asserted on when the OS allows
-it, and the predicate is forced on a real path when it does not. Either way
-the refusal is exercised on every machine, which is the property a skip would
-have thrown away.
+On testing links, and the sentence that used to be here
+--------------------------------------------------------
+This docstring used to say that creating an NTFS junction "needs a subprocess
+this package is forbidden to spawn". That was wrong twice over, and an
+independent review measured both halves: the ban on ``subprocess`` is on the
+**product source**, not on a test, and ``mklink /J`` creates a junction on
+this machine **without administrator rights**. The consequence was that layer
+3 had never once been driven by a real reparse point - both tests that killed
+it forced ``os.path.isjunction`` through ``monkeypatch`` - and a guard only
+ever shown a forced predicate had not been shown to defend anything. It did
+not: the walk ran on the ``resolve()``d path, which by definition has no
+links left in it, and a junction planted on the workspace directory was read
+straight through.
+
+So :func:`_plant_a_real_reparse_point` plants a real one - a symbolic link
+where the OS allows it, an NTFS junction where it does not - and the tests
+below assert the refusal against it. A machine that can create neither falls
+back to the forced predicate, in the same test, with no ``skip``:
+``tests/security`` may not skip, and a machine that cannot plant a link still
+has to drive the guard.
 """
 
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -92,6 +104,47 @@ HOSTILE_NAMES = (
     "rapor\r\n.txt",
     "rapor\u202e.txt",
 )
+
+
+#: A second application-generated id, for the tests that need a workspace
+#: directory ``ensure_workspace`` has not created yet.
+TEST_ONLY_OTHER_TASK_ID = "fedcba9876543210fedcba9876543210"
+
+#: ``mklink``'s host. Read from the environment rather than spelled, and with
+#: the documented default when it is unset.
+_COMSPEC = os.environ.get("COMSPEC", r"C:\Windows\System32\cmd.exe")
+
+
+def _plant_a_real_reparse_point(link: Path, target: Path) -> bool:
+    """Create a real link at ``link`` pointing at ``target``; say whether it worked.
+
+    A symbolic link first, because it is the one the standard library can
+    make. Where Windows refuses it - developer mode off, which is the common
+    case for this product's users - an NTFS junction is created with
+    ``mklink /J``, which needs no administrator right. The measurement that
+    made this function necessary is in this module's docstring.
+
+    ``subprocess`` is forbidden in the **product source**, where
+    ``test_agent_boundary.py`` reads the syntax tree to say so. A test may
+    spawn one, and several in ``tests/conformance`` already do.
+    """
+    try:
+        link.symlink_to(target, target_is_directory=target.is_dir())
+    except (OSError, NotImplementedError):
+        pass
+    else:
+        return True
+
+    if sys.platform != "win32" or not target.is_dir():
+        return False
+    result = subprocess.run(  # noqa: S603 - fixed argv, no shell, tmp_path operands
+        [_COMSPEC, "/c", "mklink", "/J", str(link), str(target)],
+        capture_output=True,
+        check=False,
+    )
+    # Asserted rather than inferred from the exit code: a reparse point the
+    # predicate does not recognise would not be driving the guard.
+    return result.returncode == 0 and os.path.isjunction(link)
 
 
 @pytest.fixture
@@ -193,21 +246,68 @@ def test_every_resolved_name_stays_inside_the_workspace(root: Path) -> None:
 
 
 def test_the_containment_check_refuses_a_path_that_leaves_the_root(
-    data_dir: Path, root: Path
+    data_dir: Path, root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The second layer, driven on its own.
+    """The second layer, driven on its own - and this test used to not do that.
 
-    Layer 1 already refuses every name that could produce this, so the only
-    way to exercise layer 2 is to reach past layer 1 - which is exactly what a
-    future refactor that loosened the name rule would do accidentally. The
-    containment check is therefore verified as its own property rather than as
-    a consequence of the sanitiser.
+    The previous version called ``read_text(root, "../escape.txt")`` and said
+    in its own docstring that the only way to exercise layer 2 is to reach
+    past layer 1. It did not reach past layer 1: ``safe_name`` refused that
+    name and containment was never consulted, so deleting the containment
+    check left the whole suite green. An independent review measured it -
+    ``if not candidate.is_relative_to(resolved_root)`` turned into
+    ``if False``, zero failures.
+
+    So layer 1 is actually neutralised here, which is the shape a refactor
+    that loosened the name rule would take, and then containment is required
+    to refuse on its own.
     """
     outside = (data_dir / "escape.txt").resolve()
-
     assert not outside.is_relative_to(root.resolve())
-    with pytest.raises(WorkspaceError):
-        read_text(root, "../escape.txt")
+
+    monkeypatch.setattr(workspace_module, "safe_name", lambda raw: raw)
+
+    with pytest.raises(WorkspaceError) as caught:
+        resolve_within(root, "../escape.txt")
+
+    assert caught.value.reason == "workspace_escape"
+
+
+def test_containment_refuses_a_real_link_that_leaves_the_root(
+    data_dir: Path, root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Layer 2 again, this time without touching layer 1 at all.
+
+    A real reparse point inside the workspace whose target is outside it is
+    the case where an *allowed* name resolves out of the root, and it needs
+    no monkeypatch to construct: ``safe_name`` is happy with ``disari``, and
+    it is ``resolve()`` that lands the path somewhere else.
+
+    Layer 3 refuses this too, and deliberately earlier - ``read_text`` walks
+    the unresolved path first. ``resolve_within`` is called directly here so
+    the containment check answers for itself.
+    """
+    outside = data_dir / "outside"
+    outside.mkdir(parents=True, exist_ok=True)
+    (outside / "gizli.txt").write_text("TEST-ONLY disarida", encoding="utf-8")
+    link = root / "disari"
+
+    if _plant_a_real_reparse_point(link, outside):
+        try:
+            with pytest.raises(WorkspaceError) as real:
+                resolve_within(root.resolve(), "disari")
+            assert real.value.reason == "workspace_escape"
+        finally:
+            link.rmdir()
+
+    # And on a machine that can plant neither, layer 1 is neutralised so the
+    # containment check is still driven. No skip: this file may not have one.
+    monkeypatch.setattr(workspace_module, "safe_name", lambda raw: raw)
+
+    with pytest.raises(WorkspaceError) as forced:
+        resolve_within(root, "../../escape.txt")
+
+    assert forced.value.reason == "workspace_escape"
 
 
 def test_two_tasks_cannot_reach_each_other(data_dir: Path) -> None:
@@ -288,6 +388,99 @@ def test_a_link_above_the_file_is_refused_too(
 
     assert caught.value.reason == "workspace_reparse_point"
     assert root.resolve() in seen
+
+
+def test_a_real_reparse_point_on_the_workspace_directory_is_refused(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The measurement that produced this test, and what it found.
+
+    A junction planted on the **task directory itself** was read straight
+    through: ``isjunction`` said ``True`` about it, ``read_text`` returned the
+    canary from the other side of it, ``list_files`` listed the other side's
+    files and ``ensure_workspace`` accepted it without a word. The cause was
+    that every call site handed the walk a ``resolve()``d path, and
+    ``resolve()`` dissolves a junction - so no component the walk looked at
+    was ever a link.
+
+    This is the test that was missing: a real reparse point, refused by the
+    reparse layer, by reason. Deleting the unresolved walk turns it red,
+    which is the property the two ``monkeypatch``ed tests beside it never had.
+    """
+    elsewhere = data_dir / "elsewhere"
+    elsewhere.mkdir(parents=True, exist_ok=True)
+    (elsewhere / "rapor.md").write_text("TEST-ONLY via-junction", encoding="utf-8")
+
+    workspace_root(data_dir).mkdir(parents=True, exist_ok=True)
+    planted = task_workspace(data_dir, TEST_ONLY_OTHER_TASK_ID)
+
+    if _plant_a_real_reparse_point(planted, elsewhere):
+        try:
+            assert planted.is_symlink() or os.path.isjunction(planted)
+
+            with pytest.raises(WorkspaceError) as read_refusal:
+                read_text(planted, "rapor.md")
+            assert read_refusal.value.reason == "workspace_reparse_point"
+
+            with pytest.raises(WorkspaceError) as list_refusal:
+                list_files(planted)
+            assert list_refusal.value.reason == "workspace_reparse_point"
+
+            with pytest.raises(WorkspaceError) as write_refusal:
+                write_text(planted, "yeni.md", "TEST-ONLY", replace_existing=False)
+            assert write_refusal.value.reason == "workspace_reparse_point"
+
+            with pytest.raises(WorkspaceError) as ensure_refusal:
+                ensure_workspace(data_dir, TEST_ONLY_OTHER_TASK_ID)
+            assert ensure_refusal.value.reason == "workspace_reparse_point"
+
+            # Nothing on the other side was touched, and nothing came back.
+            assert [item.name for item in list_files(elsewhere)] == ["rapor.md"]
+        finally:
+            planted.rmdir()
+    else:  # pragma: no cover - only on a machine that can plant neither
+        # No skip. The predicate is forced on the directory itself, which is
+        # the component the real reparse point would have occupied.
+        planted.mkdir(parents=True, exist_ok=True)
+        (planted / "rapor.md").write_text("TEST-ONLY", encoding="utf-8")
+        monkeypatch.setattr(
+            os.path, "isjunction", lambda path: Path(path) == planted
+        )
+        with pytest.raises(WorkspaceError) as forced:
+            read_text(planted, "rapor.md")
+        assert forced.value.reason == "workspace_reparse_point"
+
+
+def test_a_real_reparse_point_inside_the_workspace_is_refused(
+    root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The leaf case, driven by a real link rather than a forced predicate.
+
+    ``list_files`` was already iterating unresolved entries and could see a
+    link one level down; ``read_text`` could not, because it resolved first.
+    Both are asserted here against the same planted point.
+    """
+    elsewhere = data_dir / "baska"
+    elsewhere.mkdir(parents=True, exist_ok=True)
+    (elsewhere / "icerik.md").write_text("TEST-ONLY disarida", encoding="utf-8")
+    link = root / "baglanti"
+
+    if _plant_a_real_reparse_point(link, elsewhere):
+        try:
+            with pytest.raises(WorkspaceError) as listed:
+                list_files(root)
+            assert listed.value.reason == "workspace_reparse_point"
+
+            with pytest.raises(WorkspaceError) as read_refusal:
+                read_text(root, "baglanti")
+            assert read_refusal.value.reason == "workspace_reparse_point"
+        finally:
+            link.rmdir()
+    else:  # pragma: no cover - only on a machine that can plant neither
+        monkeypatch.setattr(os.path, "isjunction", lambda _path: True)
+        with pytest.raises(WorkspaceError) as forced:
+            list_files(root)
+        assert forced.value.reason == "workspace_reparse_point"
 
 
 def test_a_listing_refuses_to_walk_a_link(

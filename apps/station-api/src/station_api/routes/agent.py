@@ -221,8 +221,19 @@ def _ceiling() -> AgentCeilingStatus:
 
 
 def _execution() -> AgentExecutionStatus:
+    """The isolation surface, taken from the module rather than restated here.
+
+    ``arbitrary_execution_supported`` is passed explicitly, from
+    :data:`~station_api.agent.isolation.ARBITRARY_EXECUTION_SUPPORTED`, even
+    though the field's default is the same value. Leaving it to the default
+    is what made the wire a *second* hard-coded ``False`` with no link to the
+    module - two claims about one fact, either of which could have been
+    edited alone.
+    """
     verdict = isolation.execution_verdict()
     return AgentExecutionStatus(
+        arbitrary_execution_supported=isolation.ARBITRARY_EXECUTION_SUPPORTED,
+        reason=isolation.EXECUTION_UNAVAILABLE_REASON,
         detail=verdict.detail,
         inventory=[
             AgentIsolationFindingStatus(

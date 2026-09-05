@@ -412,12 +412,44 @@ class AgentService:
     def _plan_step(
         self, task_id: str, raw: tuple[str, dict[str, str]]
     ) -> PlannedStep:
-        """Resolve one step, or record a permission denial and refuse it."""
+        """Resolve one step, or record the right refusal and raise it.
+
+        Two refusals, not one, and the difference is what the user is told.
+        An unregistered identifier is "there is no such tool". An identifier
+        that *names arbitrary execution* - ``run_shell_command``,
+        ``exec_script``, anything :func:`isolation.names_arbitrary_execution`
+        recognises - is a different question, and ADR-0008 1 requires it to
+        get ``execution_unavailable`` with the measured reason rather than
+        being folded into "unknown tool".
+
+        That distinction is also what makes
+        :attr:`~station_api.evidence.audit.AuditEventName.EXECUTION_UNAVAILABLE`
+        producible. An independent review found it was not: the enum member
+        and :meth:`report_execution_unavailable` existed and **nothing called
+        either**, in a package whose own comment says a chain member nothing
+        can record is a reader's evidence for a feature that does not exist.
+        This is the code path that records it.
+        """
         tool_name, arguments = raw
         try:
             record = resolve_tool(tool_name)
             bound = bind_arguments(record, arguments)
-        except (ToolRegistryError, ToolArgumentError) as exc:
+        except ToolRegistryError as exc:
+            if isolation.names_arbitrary_execution(tool_name):
+                self.report_execution_unavailable(task_id=task_id)
+                raise ToolRegistryError(
+                    isolation.EXECUTION_UNAVAILABLE_DETAIL,
+                    reason=isolation.EXECUTION_UNAVAILABLE_REASON,
+                ) from exc
+            self._deny(
+                task_id=task_id,
+                detail=(
+                    f"Kapsam disi arac istegi reddedildi: {exc}. Gorev baska "
+                    "bir hedefe kaydirilmadi."
+                ),
+            )
+            raise
+        except ToolArgumentError as exc:
             self._deny(
                 task_id=task_id,
                 detail=(
@@ -898,6 +930,11 @@ class AgentService:
         sentence, it lands in the timeline, and it reaches the audit chain as
         a decision point rather than being a silence somebody has to infer
         from a missing button.
+
+        Called from :meth:`_plan_step`, when a plan names a tool that reads as
+        a request to run something. For a long time it was called from
+        nowhere at all, which made the chain member it writes unproducible;
+        that is measured in ``test_agent_runtime.py``.
         """
         verdict = isolation.execution_verdict()
         self._activity.record(
@@ -1113,10 +1150,9 @@ class AgentService:
         if not outcome.artifact_name:
             return
         try:
-            target = workspace.resolve_within(directory.resolve(), outcome.artifact_name)
+            workspace.remove_file(directory, outcome.artifact_name)
         except WorkspaceError:  # pragma: no cover - the name passed once already
             return
-        target.unlink(missing_ok=True)
 
 
 def _plan_digest(

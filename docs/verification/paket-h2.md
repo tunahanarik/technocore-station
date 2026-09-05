@@ -73,8 +73,13 @@ zamanı `frozen` sabiti; registry'de tavanı değiştiren araç yok; ve **hiçbi
 kod yolu yazmıyor** — dört yazımı (atama, öznitelik, artırmalı, `setattr`)
 tarayan bir AST testi ekili bir yazıcıyla sürülüp dört offender gördü.
 
-`tasks/` ve `modules/` **hiç dokunulmadı**, dolayısıyla SI-225'in "görev
-katmanında bütçe yok" iddiası **harfiyen doğru kaldı**; yalnız
+`tasks/` ve `modules/`'e **bütçe alanı eklenmedi** ve
+`test_the_task_layer_opens_no_budget_field` bunu koruyor, dolayısıyla
+SI-225'in "görev katmanında bütçe yok" iddiası doğru kaldı. **Bu paketin
+ilk raporu "`tasks/` ve `modules/` hiç dokunulmadı" diyordu; bu yanlıştı**
+— bağımsız inceleme ölçtü: `modules/registry.py`, `tasks/states.py` ve
+`tasks/views.py`'de 201 ekleme var (durum makinesi, `agent_workspace`
+kaydı, görünüm alanları). Kastedilen doğruydu, yazılan cümle yanlıştı.
 `BUDGET_DETAIL`'in "H2'ye ertelenmiştir" cümlesi artık yalan olacağı için
 güncellendi.
 
@@ -82,17 +87,50 @@ güncellendi.
 
 `<data_dir>/workspace/v1/<32-hex>`. Depoda symlink/junction/zip-slip
 emsali **yoktu**. Dört katman: ad allow-list'ten **yeniden kurulur ve
-yeniden yazılacaksa reddedilir** (kısaltılmaz); her okuma/yazımda
-`resolve()` + `is_relative_to`; dosyadan köke kadar `is_symlink()` **ve**
-`os.path.isjunction()`; tavanlar (64 dosya / 512 KiB / 4 MiB) **diskten**
-okunur. **Arşiv açma yolu hiç yok** — zip-slip yüzeyi doğmadı.
+yeniden yazılacaksa reddedilir** (kısaltılmaz); reparse yürüyüşü; her
+okuma/yazımda `resolve()` + `is_relative_to`; tavanlar (64 dosya / 512 KiB
+/ 4 MiB) **diskten** okunur. **Arşiv açma yolu hiç yok** — zip-slip yüzeyi
+doğmadı.
+
+### Bu paketin en ciddi kusuru burada bulundu ve burada kapatıldı
+
+İlk hâlinde reparse yürüyüşü **çözülmüş** yol üzerinde koşuyordu ve
+`resolve()` bağı zaten erittiği için **hiçbir gerçek reparse point'i
+göremiyordu**. Bağımsız inceleme bunu `mklink /J` ile — **admin
+gerekmeden** — ölçtü: workspace kökünün kendisi junction olduğunda
+`read_text` içeriği döndürüyor, `list_files` listeliyor, `ensure_workspace`
+itiraz etmiyordu. Guard duruyor görünüyor, hiçbir şey yakalamıyordu.
+
+Reddin kendisi vardı ama **başka bir katman** yapıyordu: dışarı bakan bağı
+containment `workspace_escape` ile reddediyordu. Bu yüzden CI'da
+`assert 'workspace_escape' == 'workspace_reparse_point'` düştü — testin
+kendisi de yanlış katmana bakıyordu.
+
+Düzeltme: yürüyüş artık **çözülmemiş** yol üzerinde, `resolve()`'dan
+**önce** koşuyor ve `<data_dir>/workspace`'te duruyor (kullanıcının veri
+dizini meşru olarak bir junction arkasında olabilir). `ensure_workspace`
+üst dizinleri `mkdir`'den **önce** denetliyor; `list_files` çözülmemiş
+dizin üzerinde yürüyor. Düzeltme sırasında ikinci bir kusur çıktı:
+`service._discard` reparse yürüyüşü olmadan `unlink` çağırıyordu, yani
+geciken bir yanıtın temizliği bağ üzerinden silebilirdi — `remove_file`'a
+taşındı.
+
+**Mutasyon yine 2 kırmızı veriyor, ama artık ikisi de gerçek bir junction
+diken test** — eskiden ikisi de `os.path.isjunction`'ı monkeypatch'leyen
+daldı, yani guard'ı gerçek bir bağla öldüren tek bir test yoktu.
+
+İkinci P1: **containment denetimini 1974 testin hiçbiri öldürmüyordu**
+(`if False:` → tüm suite yeşil), çünkü onu sürdüğünü iddia eden test
+katman 1'e takılıyordu. Artık iki test sürüyor — biri `safe_name`'i
+atlayarak, biri root içinde dışarı bakan **gerçek** bir junction'la,
+monkeypatch'siz. Mutasyon: 0 → **2 kırmızı**.
 
 Kırma denemeleri: 15 düşmanca ad (`../`, `..\`, `..%2f`, mutlak yol, UNC,
 `/etc/passwd`, `con.json`, NUL, CRLF, bidi, aşırı uzunluk), iki görev arası
 okuma, yaprakta **ve üst dizinde** bağ, listeleme sırasında bağ — hepsi
-reddedildi. Symlink işletim sistemi izin verdiğinde **gerçekten
-oluşturulup** denendi; vermediğinde predikat zorlandı, yani hiçbir makinede
-sessiz skip yok.
+reddedildi. Junction bu makinede **gerçekten oluşturulup** sürüldü; symlink
+işletim sistemi izin verdiğinde gerçek bağla, vermediğinde zorlanmış
+predikatla — yani hiçbir makinede sessiz skip yok.
 
 ## Durum makinesi: boşalan testler sessiz bırakılmadı
 
@@ -141,7 +179,7 @@ yalnız varlıkla değil. `approval_awaited` `bekliyor` render ediyor, asla
 | `ActivityLog.record`'daki guard çağrısı silindi | **3 kırmızı** |
 | `read_text`'teki reparse-point yürüyüşü silindi | **2 kırmızı** |
 | `start_run`'daki `_assert_plan_intact` silindi | **1 kırmızı** |
-| `safe_name` reddetmek yerine yeniden adlandırdı | **17 kırmızı** |
+| `safe_name` reddetmek yerine yeniden adlandırdı | **18 kırmızı** |
 
 Ayrıca ekili `subprocess`/`exec`/`os.system`, ekili `git_commit` aracı,
 dört yazımlı tavan yazıcısı, düzenlenmiş plan ve adım argümanları, çağrı
@@ -190,8 +228,42 @@ Mevcut testlerden hiçbiri silinmedi/gevşetilmedi; gerçekleri değiştiği iç
 
 ## Bağımsız inceleme sonucu
 
-(PR üzerinde doldurulacak — temiz bağlamlı reviewer subagent koşulacak; bu
-insan güvenlik incelemesi değildir, ADR-0001 §5 kalan risk.)
+Temiz bağlamlı bir reviewer subagent koşuldu. **Bu insan güvenlik
+incelemesi değildir**; ADR-0001 §5'in kalan riski yerinde duruyor.
+
+**53 mutasyon uygulandı, 42 öldürüldü, 11 hayatta kaldı.** Hayatta kalan
+her mutasyon bir bulguya dönüştü ve **on üçünün hepsi kapatıldı.**
+
+| # | Bulgu | Ölçüm | Sonuç |
+|---|---|---|---|
+| P1-1 | Reparse yürüyüşü gerçek bağı göremiyor | gerçek junction: 3 yüzey reddetmedi | çözülmemiş yolda yürüyor; mutasyon 2 kırmızı (ikisi de gerçek bağ) |
+| P1-2 | Containment'ı hiçbir test öldürmüyor | `if False:` → 0 kırmızı | 0 → **2 kırmızı** |
+| P2-3 | IMP-420'nin düzeltmesi testsiz | `neutralise` silindi → 0 kırmızı | 0 → **2 kırmızı**; yön AST ile sabitlendi |
+| P2-4 | `execution_unavailable` üretilemiyor | çağıran yok | gerçek kod yoluna bağlandı; mutasyon **2 kırmızı** |
+| P2-5 | `.allowed` ve sabit okunmuyor | `allowed=True` → 0 kırmızı | tel sabitten türetiliyor; 0 → **6 kırmızı** |
+| P2-6 | Registry taraması `_BY_ID[x]=y` ve `globals()` göremiyor | ekili mutatör: CLEAN | altı yazım biçimi + tüm paket; ekili mutatör **1 kırmızı** |
+| P3-7 | Import zamanı çağrı yeri korunmuyor | yorum satırı → 0 kırmızı | 0 → **1 kırmızı** |
+| P3-8 | `purpose` taranmıyor | docstring iddia ediyordu | taramaya eklendi; **1 kırmızı** |
+| P3-9 | Retention yorumu kodla çelişiyor | işaretli satır kotayı tüketiyordu | **kod cümleye uyduruldu**; **1 kırmızı** |
+| P3-10 | Ölü kod (üç aday) | — | `JSON_TEXT` **kaldırıldı**; `MAX_NAME_CHARS` teşhisi yanlıştı, dal erişilebilirmiş ama iki dal aynı gerekçeyi döndürdüğü için test ayırt edemiyordu — kendi gerekçesini aldı; `get_tool` dalı **bulgu değilmiş** (zaten 1 kırmızı) |
+| P3-11 | Üç guard'ı hiçbir test öldürmüyor | üçü de 0 kırmızı | faz 2, `MAX_PLAN_STEPS` 1, tavan **davranışsal** olarak 1 |
+| P2-12 | "Seed taraması workspace'i otomatik kapsıyor" | `ensure_workspace` o zincirde hiç çağrılmıyor | iki tarama **gerçekten** bir workspace artefaktı okuyor; canary ile sürüldü |
+| P3-13 | `tasks/service.py`'de iki bayat cümle | beş modül "dört" yazıyordu | düzeltildi |
+
+**İncelemeci de iki yerde yanıldı ve bu ölçülerek gösterildi:**
+`ARBITRARY_EXECUTION_SUPPORTED` zaten `Literal[False]` idi; `get_tool`'un
+dalı ölü değil.
+
+**İncelemecinin ölçmedikleri (kendi beyanı):** Playwright koşulmadı;
+`ruff`/`mypy`/`eslint`/`build` koşulmadı; **içeri bakan gerçek bir dosya
+symlink'i ölçülemedi** (bu makinede `WinError 1314`); `TasksPanel.tsx` ve
+`agent.spec.ts` satır satır okunmadı; migration `0009`'un SQL'i okunmadı;
+HeroUI kümesinin 11'de kaldığı doğrulanmadı. Bu kapılar ve sayım
+orkestratör tarafından ayrıca koşuldu.
+
+**Bu raporun kendisinde düzeltilen iki yanlış iddia:** "`tasks/` ve
+`modules/` hiç dokunulmadı" (201 ekleme var) ve `safe_name` mutasyonu
+"17 kırmızı" (ölçüm 18). İkisi de yukarıda kayda geçirildi.
 
 ## Sınırlar
 

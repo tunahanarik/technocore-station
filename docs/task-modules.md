@@ -262,9 +262,11 @@ Bu erteleme sessiz değildir:
 sınırı Paket H2'ye ertelenmişti. **Her ikisi de kapandı:** G harcama
 bağlamını getirdi, H2 bütçeyi yeni `agent/` paketinde açtı — araç çağrısı
 sayısı, duvar saati ve eşzamanlılık. Token ve para birimi **sayılmaz** ve bu
-ret telde `refused_units` olarak yayımlanır. Görev katmanı (`tasks/`,
-`modules/`) bu paketlerde **hiç dokunulmadı**, dolayısıyla yukarıdaki
-"F bütçe alanı açmaz" kararı bugün de harfiyen doğrudur.
+ret telde `refused_units` olarak yayımlanır. Görev katmanına (`tasks/`,
+`modules/`) **bütçe alanı eklenmedi** — dosyaların kendisi H2'de durum
+makinesi için değişti, ama `test_the_task_layer_opens_no_budget_field`
+bütçe biçimli hiçbir tanımlayıcıya izin vermiyor, dolayısıyla yukarıdaki
+"F bütçe alanı açmaz" kararı bugün de doğrudur.
 
 ---
 

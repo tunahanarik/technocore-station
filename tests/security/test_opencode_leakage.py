@@ -30,6 +30,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine
+from station_api.agent.workspace import ensure_workspace, write_text
 from station_api.app import create_app
 from station_api.config import Settings
 from station_api.logging_setup import (
@@ -155,18 +156,39 @@ def test_the_credential_is_absent_from_the_sqlite_database(
     assert found, "expected a database file to inspect"
 
 
+#: A workspace this test writes so that the scan below has one to read.
+TEST_ONLY_WORKSPACE_TASK_ID = "0123456789abcdef0123456789abcdef"
+
+
 @windows_only
 def test_no_artefact_anywhere_in_the_data_directory_carries_the_credential(
     configured: OpenCodeService, settings: Settings
 ) -> None:
+    """The seed scan's twin, and it had the same hole.
+
+    An agent workspace file is written first and the scan is required to have
+    read it. Without that step this walk only ever saw the credential
+    envelope and the database: nothing in these fixtures creates a workspace,
+    so the surface ``agent/workspace.py`` claimed was covered "automatically"
+    was not being read at all.
+    """
     assert configured is not None
-    inspected = 0
+    produced = write_text(
+        ensure_workspace(settings.data_dir, TEST_ONLY_WORKSPACE_TASK_ID),
+        "rapor.md",
+        "TEST-ONLY agent ciktisi",
+        replace_existing=False,
+    )
+
+    inspected: list[str] = []
     for path in settings.data_dir.rglob("*"):
         if not path.is_file():
             continue
-        inspected += 1
+        inspected.append(path.name)
         _assert_clean(path.read_bytes(), f"the file {path.name}")
-    assert inspected > 0
+
+    assert inspected
+    assert produced.name in inspected, inspected
 
 
 @windows_only

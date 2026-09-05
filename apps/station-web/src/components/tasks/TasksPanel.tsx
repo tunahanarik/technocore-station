@@ -1043,7 +1043,7 @@ export function TasksPanel() {
                     <Label>
                       {`${param.name} (${param.type}${param.required ? ", zorunlu" : ", istege bagli"})`}
                     </Label>
-                    {param.type === "json_text" || param.type === "text" ? (
+                    {param.type === "text" ? (
                       <TextArea rows={4} variant="secondary" />
                     ) : (
                       <Input autoComplete="off" variant="secondary" />

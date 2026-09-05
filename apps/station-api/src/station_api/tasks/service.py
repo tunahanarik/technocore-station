@@ -9,8 +9,10 @@ name and this module honours all three:
 * **no new HTTP client.** Nothing in :mod:`station_api.tasks` imports an HTTP
   client, opens a socket or reaches an outbound registry; the package has no
   outbound surface at all. (``OUTBOUND_CLIENT_MODULES`` was locked at three
-  when this was written and Package G opened a fourth for the OpenCode
-  connection - deliberately, in that package, and not from here.)
+  when this was written; Package G opened a fourth for the OpenCode
+  connection and Package H1 a fifth for the work scan, so the count today is
+  **five**. Each was opened deliberately, in its own package, and none of
+  them from here.)
 * **no second vault or signer.** Nothing here touches key material. The
   service stores identifiers and verdicts, never bytes that were signed.
 * **no second gate.** :mod:`station_api.tasks.gate` follows
@@ -36,9 +38,17 @@ which is the only place a starting state is chosen.
 
 What a task cannot do here
 --------------------------
-Reach ``running`` or ``paused``: those need an executor this release does not
-have, and :func:`~station_api.tasks.states.validate_transition` refuses them
-by name. Fill ``public_share``: that field belongs to Package H3
+Reach ``running`` or ``paused`` **by request**: those belong to the runner in
+:mod:`station_api.agent.service`, which records a plan, its promised
+artifacts and its success criterion before it moves a task into ``running``.
+:data:`~station_api.schemas.TaskUserTransitionName` omits both, so the route
+refuses them before this service is entered. (This paragraph used to say the
+two states "need an executor this release does not have" and that
+``validate_transition`` refuses them by name. Package H2 wrote the executor:
+:data:`~station_api.tasks.states.UNPRODUCIBLE_STATES` is empty today and that
+function refuses nothing by name. The gate on those two states is now a
+closed transition set on the surface, not an unproducible state.) Fill
+``public_share``: that field belongs to Package H3
 and :class:`~station_api.modules.fields.EvidenceRef` refuses to be constructed
 for it. Become ``ready_to_publish`` by request: that state is derived from
 three separately verified pieces of evidence, and asking for it without them

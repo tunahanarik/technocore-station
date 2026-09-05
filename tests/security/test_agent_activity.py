@@ -86,6 +86,15 @@ def test_the_chain_gained_exactly_the_five_decision_points() -> None:
     A name in this enum that nothing can ever record is a reader's evidence
     for a feature that does not exist - the rule the ``evidence_deleted``
     comment in ``audit.py`` states, applied to the members H2 added.
+
+    The claim used to be false for one of the five. An independent review
+    measured it: ``execution_unavailable`` was written by
+    ``AgentService.report_execution_unavailable``, and **nothing called that
+    method** - not the product, not a test. The rule this docstring states
+    was broken by the same diff that stated it. The member has a producing
+    code path now, and
+    ``test_asking_for_execution_records_the_fifth_decision_point`` below
+    drives it end to end rather than by calling the reporter directly.
     """
     names = {member.value for member in AuditEventName}
 
@@ -93,6 +102,78 @@ def test_the_chain_gained_exactly_the_five_decision_points() -> None:
     assert {member.value for member in DECISION_POINTS.values()} == (
         EXPECTED_CHAIN_MEMBERS
     )
+
+
+def test_asking_for_execution_records_the_fifth_decision_point(
+    agent: AgentService, task: TaskView, engine: Engine, data_dir  # type: ignore[no-untyped-def]
+) -> None:
+    """The producing path for ``execution_unavailable``, driven from a plan.
+
+    A plan step naming something that reads as a command is refused with the
+    measured reason rather than as an unknown tool, the refusal lands in the
+    timeline, and it reaches the never-pruned chain as a decision point. All
+    three, because any two of them without the third is the failure mode
+    ADR-0008 1 is about: a closed capability that looks like an absence.
+
+    Nothing is executed to produce this. The refusal happens at plan time,
+    before any run exists.
+    """
+    from station_api.agent.errors import ToolRegistryError
+    from station_api.db.models import AuditEvent
+
+    with pytest.raises(ToolRegistryError) as caught:
+        agent.plan_run(
+            task.id,
+            steps=[("run_shell_command", {"body": "TEST-ONLY"})],
+            expected_artifacts=[],
+            test_condition="TEST-ONLY olcut",
+        )
+
+    assert caught.value.reason == "execution_unavailable"
+
+    recorded = [
+        view
+        for view in agent.activity.list_events()
+        if view.action is ActivityAction.EXECUTION_UNAVAILABLE
+    ]
+    assert len(recorded) == 1
+    assert recorded[0].outcome is ActivityOutcome.REFUSED
+    assert recorded[0].detail.strip()
+    assert recorded[0].chain_referenced is True
+
+    with Session(engine) as session:
+        events = [row.event for row in session.scalars(select(AuditEvent)).all()]
+
+    assert "execution_unavailable" in events
+    assert AuditChain(engine, AuditEnvelope(data_dir)).verify().verdict is (
+        ChainVerdict.INTACT
+    )
+
+
+def test_an_unregistered_tool_that_is_not_a_command_stays_a_permission_denial(
+    agent: AgentService, task: TaskView
+) -> None:
+    """The other half of the same fork, so the two refusals cannot merge.
+
+    Without this, widening ``EXECUTION_REQUEST_FRAGMENTS`` until it matched
+    everything would silently relabel every unknown-tool refusal as
+    ``execution_unavailable`` and the test above would still pass.
+    """
+    from station_api.agent.errors import ToolRegistryError
+
+    with pytest.raises(ToolRegistryError) as caught:
+        agent.plan_run(
+            task.id,
+            steps=[("read_mailbox", {})],
+            expected_artifacts=[],
+            test_condition="TEST-ONLY olcut",
+        )
+
+    assert caught.value.reason == "tool_unknown"
+
+    actions = {view.action for view in agent.activity.list_events()}
+    assert ActivityAction.PERMISSION_DENIED in actions
+    assert ActivityAction.EXECUTION_UNAVAILABLE not in actions
 
 
 def test_the_step_by_step_actions_stay_out_of_the_chain() -> None:
@@ -241,6 +322,43 @@ def test_retention_trims_the_timeline(activity_log: ActivityLog) -> None:
         )
 
     assert activity_log.count() <= RETAINED_EVENTS
+
+
+def test_a_chain_referenced_row_does_not_consume_the_retention_bound(
+    activity_log: ActivityLog,
+) -> None:
+    """``RETAINED_EVENTS`` counts the rows retention is allowed to remove.
+
+    The module said so and the query did not: it took the newest
+    ``RETAINED_EVENTS`` rows of *any* kind, so a flagged row - which the
+    delete then refused to touch anyway - occupied a slot an ordinary row
+    could have had. The bound therefore shrank as the audit chain grew, which
+    is a retention policy nobody chose.
+
+    Ordering matters here and the previous shape hid the defect: with the
+    flagged rows *oldest* both queries agree. They are recorded **last**, so
+    they are exactly the rows the old keep-set would have taken slots for.
+    """
+    for index in range(RETAINED_EVENTS):
+        activity_log.record(
+            action=ActivityAction.TOOL_CALLED,
+            actor=ActivityActor.STATION_RUNNER,
+            outcome=ActivityOutcome.OK,
+            detail=f"TEST-ONLY adim {index}",
+        )
+
+    assert activity_log.count() == RETAINED_EVENTS
+
+    for index in range(3):
+        activity_log.record(
+            action=ActivityAction.BUDGET_EXHAUSTED,
+            actor=ActivityActor.STATION_RUNNER,
+            outcome=ActivityOutcome.REFUSED,
+            detail=f"TEST-ONLY tavan {index}",
+        )
+
+    assert activity_log.count_chain_referenced() == 3
+    assert activity_log.count() == RETAINED_EVENTS + 3
 
 
 def test_retention_never_removes_a_row_the_chain_refers_to(

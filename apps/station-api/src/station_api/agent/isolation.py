@@ -50,7 +50,48 @@ EXECUTION_UNAVAILABLE_REASON: Final = "execution_unavailable"
 
 #: Structural, not a setting: there is no code path in this package that runs
 #: a command, and no configuration value that could open one.
+#:
+#: This is the **single source** of the fact, and it earned that role by
+#: being measured without one. An independent review found that flipping
+#: :func:`execution_verdict`'s ``allowed`` to ``True`` left the entire suite
+#: green - nothing read the field - and that the wire's
+#: ``arbitrary_execution_supported`` was a second hard-coded ``False`` in
+#: :mod:`station_api.schemas` with no link to this constant at all. Three
+#: statements of one fact, any two of which could disagree.
+#:
+#: So the verdict now takes its ``allowed`` from here and the route passes
+#: this constant to the response model, whose field is still
+#: ``Literal[False]``: changing this one line turns the verdict, the wire and
+#: the type check at once, which is what a constant claiming to be structural
+#: has to do.
 ARBITRARY_EXECUTION_SUPPORTED: Literal[False] = False
+
+#: Identifier fragments that name **arbitrary execution** rather than a tool
+#: this build merely happens to lack.
+#:
+#: The distinction is the user-visible half of ADR-0008 1. Asking for a tool
+#: that is not registered is "there is no such tool"; asking for a shell is
+#: "this product does not run commands, and here is why" - a different
+#: sentence, a different reason, and a decision point in the audit chain.
+#: Without this list the second question only ever got the first answer, and
+#: :attr:`~station_api.evidence.audit.AuditEventName.EXECUTION_UNAVAILABLE`
+#: was a chain member nothing could ever produce.
+EXECUTION_REQUEST_FRAGMENTS: Final[tuple[str, ...]] = (
+    "shell",
+    "command",
+    "exec",
+    "subprocess",
+    "bash",
+    "powershell",
+    "terminal",
+    "spawn",
+    "interpreter",
+    "eval",
+    "script",
+    "sandbox",
+    "container",
+    "docker",
+)
 
 
 class IsolationFacility(StrEnum):
@@ -168,10 +209,27 @@ def execution_verdict() -> TransitionVerdict:
     this is what makes it one.
     """
     return TransitionVerdict(
-        allowed=False,
+        allowed=ARBITRARY_EXECUTION_SUPPORTED,
         reason=EXECUTION_UNAVAILABLE_REASON,
         detail=EXECUTION_UNAVAILABLE_DETAIL,
     )
+
+
+def names_arbitrary_execution(raw: str) -> bool:
+    """Does this identifier ask for a command to be run?
+
+    Asked **only** after the registry has already refused the name, so a
+    registered tool never reaches it and the list cannot narrow what the
+    product offers. What it decides is which of two refusals the user gets:
+    "no such tool", or ``execution_unavailable`` with the measured reason.
+
+    A substring test on a lowercased identifier, deliberately blunt. It is
+    the second half of :data:`FORBIDDEN_CAPABILITY_FRAGMENTS`'s bargain: the
+    allow-list is the control, and a crude deny-list beside it costs nothing
+    and answers a question the allow-list cannot.
+    """
+    candidate = raw.strip().lower()
+    return any(fragment in candidate for fragment in EXECUTION_REQUEST_FRAGMENTS)
 
 
 def measured_facilities() -> tuple[IsolationFinding, ...]:
@@ -185,6 +243,7 @@ def measured_facilities() -> tuple[IsolationFinding, ...]:
 
 __all__ = [
     "ARBITRARY_EXECUTION_SUPPORTED",
+    "EXECUTION_REQUEST_FRAGMENTS",
     "EXECUTION_UNAVAILABLE_DETAIL",
     "EXECUTION_UNAVAILABLE_REASON",
     "ISOLATION_INVENTORY",
@@ -193,4 +252,5 @@ __all__ = [
     "MeasuredState",
     "execution_verdict",
     "measured_facilities",
+    "names_arbitrary_execution",
 ]

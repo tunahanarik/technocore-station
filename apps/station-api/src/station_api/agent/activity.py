@@ -58,9 +58,17 @@ from station_api.logging_setup import redact
 from station_api.technocore.projection import safe_display
 from station_api.vault.errors import VaultError
 
-#: Rows kept by the retention pass. Chain-referenced rows are kept regardless
-#: and are not counted against this number: the policy trims the volume, it
-#: does not decide what the chain may refer to.
+#: Rows kept by the retention pass, counting **only** the rows retention is
+#: allowed to remove. Chain-referenced rows are kept regardless and are not
+#: counted against this number: the policy trims the volume, it does not
+#: decide what the chain may refer to.
+#:
+#: The second sentence used to be false. The keep query took the newest 500
+#: rows of *any* kind, so flagged rows - which the delete then refused to
+#: touch anyway - crowded out unflagged ones, and a timeline with 500 chain
+#: links would have retained nothing else. The behaviour was safe and the
+#: sentence was wrong; the query is what changed, because a retention bound
+#: that shrinks as the audit chain grows is a bound nobody chose.
 RETAINED_EVENTS = 500
 
 #: Longest sentence one row carries. A detail is a sentence, not a payload -
@@ -290,6 +298,12 @@ class ActivityLog:
         row the chain refers to, and ADR-0008 6 makes "nothing the chain
         refers to may be pruned" structural rather than aspirational.
 
+        They are excluded from the **keep query** as well, which is the half
+        that was missing. Counting them there would have made the bound mean
+        "500 rows minus however many the chain happens to name", so a busy
+        chain would have silently shortened the timeline it is meant to sit
+        beside.
+
         Rows are deleted explicitly rather than left to a cascade, for
         ``snapshot._prune``'s reason: SQLite honours ``ON DELETE CASCADE``
         only while a pragma is on, and a retention policy that depends on a
@@ -298,6 +312,7 @@ class ActivityLog:
         with Session(self._engine) as session, session.begin():
             keep = session.scalars(
                 select(ActivityEvent.id)
+                .where(ActivityEvent.chain_referenced.is_(False))
                 .order_by(ActivityEvent.recorded_at.desc(), ActivityEvent.id.desc())
                 .limit(RETAINED_EVENTS)
             ).all()

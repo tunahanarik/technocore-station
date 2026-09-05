@@ -1319,7 +1319,7 @@ AgentToolScopeName = Literal[
 
 #: The parameter types the tool registry declares. There is deliberately no
 #: ``path`` and no ``url``: a tool cannot be handed an address.
-AgentToolParamTypeName = Literal["text", "file_name", "digest", "json_text"]
+AgentToolParamTypeName = Literal["text", "file_name", "digest"]
 
 #: What the measurement established. ``not_measured`` is not ``absent``.
 AgentIsolationStateName = Literal["present", "absent", "not_measured"]
