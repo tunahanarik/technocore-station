@@ -331,12 +331,30 @@ def test_the_capability_reads_the_registry_and_the_gate_without_merging_them() -
 
 
 def test_a_planned_module_produces_a_capability_that_says_the_code_is_absent() -> None:
-    """Read off the compile-time registry, not asserted."""
-    planned = capability_for(ModuleId.AGENT_WORKSPACE, write_gate_open=True)
+    """Read off the compile-time registry, not asserted.
+
+    The example module moved. ``agent_workspace`` was the ``planned`` record
+    this test pointed at, and Package H2 opened it - the state, the owners and
+    the requirements moved together, exactly as H1 moved ``work_scan``. So the
+    test points at the record that is still planned, ``proof_workspace``, and
+    it keeps saying the thing it was written to say: a capability derived from
+    a ``planned`` record reports the code as absent rather than as pending.
+
+    When H3 opens that one too, this test does not get deleted - it gets a
+    record that is genuinely planned, or, if there is none, it becomes an
+    assertion that the registry has no planned records left. What it must
+    never become is a test that quietly points at nothing.
+    """
+    planned = capability_for(ModuleId.PROOF_WORKSPACE, write_gate_open=True)
 
     assert planned.module_available is False
     assert planned.ready is False
-    assert "H2" in planned.detail
+    assert "H3" in planned.detail
+
+    # And the module H2 opened really is open, so this test is not passing
+    # because the registry lost the distinction it is about.
+    opened = capability_for(ModuleId.AGENT_WORKSPACE, write_gate_open=True)
+    assert opened.module_available is True
 
 
 # ---------------------------------------------------------------------------

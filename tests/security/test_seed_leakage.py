@@ -18,6 +18,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine
+from station_api.agent.workspace import ensure_workspace, write_text
 from station_api.config import Settings
 from station_api.identity.service import IdentityService, IdentityServiceError
 from station_api.logging_setup import configure_logging
@@ -112,18 +113,41 @@ def test_seed_is_absent_from_the_vault_file(
         _assert_clean(path.read_bytes(), f"the vault envelope {path.name}")
 
 
+#: A workspace this test writes so that the scan below has one to read.
+TEST_ONLY_WORKSPACE_TASK_ID = "0123456789abcdef0123456789abcdef"
+
+
 def test_no_plaintext_artefact_is_left_in_the_data_directory(
     installed_identity: IdentityService, settings: Settings
 ) -> None:
-    """Nothing anywhere under the data root may carry the seed."""
+    """Nothing anywhere under the data root may carry the seed.
+
+    A real agent workspace file is written first, and the scan is required to
+    have read it. That step is not decoration. ``agent/workspace.py`` claimed
+    workspace files entered this scan "automatically rather than by somebody
+    remembering to add a path", and an independent review measured that they
+    never had: this test's fixtures create an identity and a database and
+    nothing that calls ``ensure_workspace``, so the walk had only ever seen a
+    data directory with no workspace in it. Living under the data root makes
+    a file *reachable*; only writing one makes it covered.
+    """
     assert installed_identity is not None
-    inspected = 0
+    produced = write_text(
+        ensure_workspace(settings.data_dir, TEST_ONLY_WORKSPACE_TASK_ID),
+        "rapor.md",
+        "TEST-ONLY agent ciktisi",
+        replace_existing=False,
+    )
+
+    inspected: list[str] = []
     for path in settings.data_dir.rglob("*"):
         if not path.is_file():
             continue
-        inspected += 1
+        inspected.append(path.name)
         _assert_clean(path.read_bytes(), f"the file {path.name}")
-    assert inspected > 0
+
+    assert inspected
+    assert produced.name in inspected, inspected
 
 
 def test_seed_is_absent_from_logs_and_exceptions(

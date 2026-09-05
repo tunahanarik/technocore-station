@@ -6,11 +6,36 @@ package does not re-derive it from memory; and **no code path can reach the
 states nothing produces yet**, so nobody reads the table as a list of things
 that work.
 
-Package H1 moved one name across that line, and the move is recorded rather
-than quiet: ``suggested`` became producible when its producer was written
-(ADR-0007 7). The oracles below were edited by hand on the same change and the
-reason is written beside them. ``running`` and ``paused`` still await the
-executor.
+Two packages have now moved names across that line, and each move is recorded
+rather than quiet. H1 opened ``suggested`` when it wrote a suggestion producer
+(ADR-0007 7); H2 opened ``running`` and ``paused`` when it wrote the
+deterministic tool runner (ADR-0008 3). The oracles below were edited by hand
+on each change and the reason is written beside them.
+
+The uncomfortable consequence, handled rather than ignored
+-----------------------------------------------------------
+``UNPRODUCIBLE_STATES`` is empty now. Three tests in this file used to iterate
+it, and an empty iteration is a test that passes while asserting nothing -
+which looks exactly like a test that passes while asserting something. ADR-0008
+3 refuses to leave them like that, so each was dealt with explicitly:
+
+* ``test_the_pure_function_refuses_every_edge_into_an_unbuilt_state`` became
+  :func:`test_the_refusal_mechanism_still_closes_a_state_when_one_is_closed`,
+  which **drives** the mechanism by closing a state for the duration of one
+  test rather than looping over nothing;
+* ``test_the_service_refuses_a_direct_request_for_an_unbuilt_state`` lost its
+  empty parametrisation and became
+  :func:`test_the_service_refuses_a_state_the_build_has_closed`, driven the
+  same way, plus
+  :func:`test_the_service_still_refuses_an_edge_that_is_not_in_the_table`,
+  which is the refusal a user can actually meet today;
+* ``test_the_table_still_lists_the_edges_into_unbuilt_states`` was never
+  vacuous - it names three edges - but its *name* and its docstring became
+  false, so both were rewritten and the assertions were extended to require
+  that those edges are now **permitted**.
+
+A test whose subject disappeared is deleted or rewritten. It is never left
+green and empty.
 
 Two tests carry that claim, one behavioural and one structural, because the
 first version of this file carried it with one and the one was narrower than
@@ -53,6 +78,7 @@ from sqlalchemy.orm import Session
 from station_api.db.models import TaskRecord
 from station_api.modules.fields import PUBLICATION_FIELDS, EvidenceField
 from station_api.modules.registry import ModuleId
+from station_api.tasks import states as states_module
 from station_api.tasks.service import TaskError, TaskService, TaskView
 from station_api.tasks.sources import TaskSourceId
 from station_api.tasks.states import (
@@ -89,16 +115,21 @@ CHARTER_STATE_NAMES = frozenset(
 #: the oracle the reachability walk is compared against, and an oracle read out
 #: of the constant under test proves only that the code agrees with itself.
 #:
-#: It was six under Package F and is seven under H1. That edit is the point at
-#: which this file has to be read carefully rather than trusted, so the reason
-#: is written here and not only in a commit message: ADR-0007 7 opened
+#: Six under Package F, seven under H1, nine under H2. Each edit is a point at
+#: which this file has to be read carefully rather than trusted, so the reasons
+#: are written here and not only in commit messages: ADR-0007 7 opened
 #: ``suggested`` **because H1 built its producer**
-#: (``TaskService.suggest_task``, driven by ``station_api.workscan``), which is
-#: exactly the condition Package F's own docstring set for opening it. This is
-#: a recorded opening, not a loosened assertion - and it is loosened in the
-#: weakest possible sense, because the walk below still has to *reach*
-#: ``suggested`` through the real service against a real database before this
-#: set is believed. Adding a name here without a producer turns the walk red.
+#: (``TaskService.suggest_task``, driven by ``station_api.workscan``), and
+#: ADR-0008 3 opened ``running`` and ``paused`` **because H2 built the
+#: executor** (``station_api.agent.service.AgentService``, which drives them
+#: through ``TaskService.transition`` and no other way). Each is exactly the
+#: condition Package F's own docstring set for opening them.
+#:
+#: These are recorded openings, not loosened assertions - and they are loosened
+#: in the weakest possible sense, because the walk below still has to *reach*
+#: every one of these through the real service against a real database before
+#: this set is believed. Adding a name here without a producer turns the walk
+#: red.
 #:
 #: What deliberately did not change is ``INITIAL_STATE``: see
 #: ``test_the_initial_state_is_not_suggested``, which is the assertion that
@@ -107,6 +138,8 @@ EXPECTED_PRODUCIBLE = frozenset(
     {
         TaskState.SUGGESTED,
         TaskState.AWAITING_APPROVAL,
+        TaskState.RUNNING,
+        TaskState.PAUSED,
         TaskState.BLOCKED,
         TaskState.FAILED,
         TaskState.REVIEW_NEEDED,
@@ -115,14 +148,32 @@ EXPECTED_PRODUCIBLE = frozenset(
     }
 )
 
-#: The two that need the executor this release does not have. Also typed out.
-EXPECTED_UNPRODUCIBLE = frozenset({TaskState.RUNNING, TaskState.PAUSED})
+#: Empty under H2, and still typed out as a set rather than dropped. It is the
+#: oracle for "nothing is closed"; a future package that closes a state edits
+#: this line, and a package that *forgets* to open a producer while adding a
+#: state fails the walk.
+EXPECTED_UNPRODUCIBLE: frozenset[TaskState] = frozenset()
+
+#: A state closed for the duration of one test, so the refusal machinery is
+#: driven rather than looped over. ``PAUSED`` is used because it is producible
+#: today: closing something already closed would prove nothing.
+CLOSED_FOR_THE_PROBE = TaskState.PAUSED
 
 TEST_ONLY_CONTENT = b"TEST-ONLY task content, not a real work item."
 
-#: The two packages Package F added. A state writer that moved out of
-#: ``service.py`` would be the same hole in a different file.
-PACKAGE_F_DIRS = ("modules", "tasks")
+#: The trees the state-write scan covers.
+#:
+#: Package F's two, plus the ``agent`` package H2 added. The third name is
+#: load-bearing rather than tidy: H2's executor is what *produces* ``running``
+#: and ``paused``, and it lives outside both F packages. A scan that still
+#: read only ``modules`` and ``tasks`` would have declared "one writer" while
+#: the new writer sat in a directory it never opened - SI-226 silently holed
+#: on the exact commit that made the hole reachable (ADR-0008 3).
+#:
+#: The agent package passes because it has no state writer at all: it moves a
+#: task by calling ``TaskService.transition``, and its own bookkeeping column
+#: is deliberately named ``phase`` rather than ``state``.
+STATE_WRITER_DIRS = ("modules", "tasks", "agent")
 
 #: The one function permitted to write a task's state, as
 #: ``<file>:<function>``. Anything else in the two packages is an offender.
@@ -382,9 +433,9 @@ class _StateWriteFinder(ast.NodeVisitor):
 
 
 def _state_writers(api_source_root: Path) -> list[str]:
-    """``<file>:<function>`` for every state write in the two F packages."""
+    """``<file>:<function>`` for every state write in the three scanned trees."""
     writers: list[str] = []
-    for name in PACKAGE_F_DIRS:
+    for name in STATE_WRITER_DIRS:
         for path in (api_source_root / "station_api" / name).rglob("*.py"):
             finder = _StateWriteFinder(path.name)
             finder.visit(ast.parse(path.read_text(encoding="utf-8")))
@@ -432,16 +483,29 @@ def test_terminal_states_have_no_exit() -> None:
         assert ALLOWED_TRANSITIONS[state] == frozenset()
 
 
-def test_the_table_still_lists_the_edges_into_unbuilt_states() -> None:
-    """The other half of the honesty rule.
+def test_the_executor_edges_the_table_kept_are_the_ones_h2_opened() -> None:
+    """The pay-off of Package F refusing to write a table with holes in it.
 
-    Deleting ``running`` from the table would make H2 re-invent the machine,
-    and a machine re-invented from memory is a machine that disagrees with the
-    one that came before. The edges stay; the *service* is what refuses them.
+    F wrote these edges down while nothing could traverse them, precisely so
+    H2 would not have to re-invent the machine from memory - and a machine
+    re-invented from memory is one that disagrees with the one before it. H2
+    wrote an executor and traversed exactly these edges, without editing the
+    table.
+
+    The assertions are extended rather than kept: under F the point was that
+    the edges *exist*; the point now is that they exist **and are permitted**,
+    which is a strictly stronger statement about the same three lines.
     """
     assert TaskState.RUNNING in ALLOWED_TRANSITIONS[TaskState.AWAITING_APPROVAL]
     assert TaskState.PAUSED in ALLOWED_TRANSITIONS[TaskState.RUNNING]
+    assert TaskState.RUNNING in ALLOWED_TRANSITIONS[TaskState.PAUSED]
     assert TaskState.AWAITING_APPROVAL in ALLOWED_TRANSITIONS[TaskState.SUGGESTED]
+
+    assert validate_transition(
+        TaskState.AWAITING_APPROVAL, TaskState.RUNNING
+    ).allowed
+    assert validate_transition(TaskState.RUNNING, TaskState.PAUSED).allowed
+    assert validate_transition(TaskState.PAUSED, TaskState.RUNNING).allowed
 
 
 def test_the_initial_state_is_not_suggested() -> None:
@@ -467,21 +531,53 @@ def test_the_initial_state_is_not_suggested() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_unproducible_states_are_exactly_the_two_that_await_an_executor() -> None:
+def test_every_defined_state_is_now_producible_and_nothing_is_left_closed() -> None:
+    """The inventory, after H2. Compared against the typed-out oracles.
+
+    The empty set is asserted **explicitly**, against a constant written out
+    above, rather than being the incidental result of a set difference. That
+    is the difference between "this release closes nothing" as a measured
+    claim and as an accident nobody would notice reversing.
+    """
     assert set(UNPRODUCIBLE_STATES) == EXPECTED_UNPRODUCIBLE
+    assert frozenset() == UNPRODUCIBLE_STATES
     assert set(PRODUCIBLE_STATES) == EXPECTED_PRODUCIBLE
+    assert set(PRODUCIBLE_STATES) == set(TaskState)
     assert set(TaskState) == PRODUCIBLE_STATES | UNPRODUCIBLE_STATES
     assert not PRODUCIBLE_STATES & UNPRODUCIBLE_STATES
 
 
-def test_the_pure_function_refuses_every_edge_into_an_unbuilt_state() -> None:
-    """From any state, to any of the three: refused, and told why."""
+def test_the_refusal_mechanism_still_closes_a_state_when_one_is_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The rewrite of a test H2 emptied out.
+
+    Under Package F this looped over ``UNPRODUCIBLE_STATES`` and required
+    every edge into it to be refused. H2 opened the last two names, so the
+    loop now has nothing to iterate - and an empty loop asserts nothing while
+    looking exactly like a test that does.
+
+    So the mechanism is **driven** instead of iterated: one producible state
+    is closed for the duration of this test, and every edge into it must then
+    be refused by name, with the state own sentence in the message. That is
+    the same property the old test made, restored to being about something,
+    and it is the property a tenth state would rely on the day somebody
+    defines one without a producer.
+    """
+    # Read first, with nothing closed: the edge is permitted. Without this the
+    # test would also pass against a ``validate_transition`` that refused
+    # everything, which is the way a driven mutation test goes quietly wrong.
+    assert validate_transition(TaskState.RUNNING, CLOSED_FOR_THE_PROBE).allowed
+
+    monkeypatch.setattr(
+        states_module, "UNPRODUCIBLE_STATES", frozenset({CLOSED_FOR_THE_PROBE})
+    )
+
     for current in TaskState:
-        for target in UNPRODUCIBLE_STATES:
-            verdict = validate_transition(current, target)
-            assert verdict.allowed is False, (current, target)
-            assert verdict.reason == "state_not_producible"
-            assert target.value in verdict.detail
+        verdict = states_module.validate_transition(current, CLOSED_FOR_THE_PROBE)
+        assert verdict.allowed is False, current
+        assert verdict.reason == "state_not_producible"
+        assert CLOSED_FOR_THE_PROBE.value in verdict.detail
 
 
 def test_an_edge_that_is_not_in_the_table_is_refused() -> None:
@@ -602,6 +698,9 @@ def test_the_state_write_scan_would_see_a_second_writer(tmp_path: Path) -> None:
     package = tmp_path / "station_api" / "tasks"
     package.mkdir(parents=True)
     (tmp_path / "station_api" / "modules").mkdir()
+    # H2 tree is scanned too, so the probe has to build it or the scan would
+    # walk a missing directory instead of reporting the planted writers.
+    (tmp_path / "station_api" / "agent").mkdir()
     (package / "service.py").write_text(
         "class TaskService:\n"
         "    def transition(self, task_id):\n"
@@ -620,26 +719,60 @@ def test_the_state_write_scan_would_see_a_second_writer(tmp_path: Path) -> None:
     ]
 
 
-@pytest.mark.parametrize("target", sorted(EXPECTED_UNPRODUCIBLE))
-def test_the_service_refuses_a_direct_request_for_an_unbuilt_state(
-    service: TaskService, target: TaskState
+def test_the_service_refuses_a_state_the_build_has_closed(
+    service: TaskService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The service half of the rewrite above.
+
+    This was parametrised over ``EXPECTED_UNPRODUCIBLE``, and H2 emptied that
+    set - which would have turned the whole test into a collection-time no-op
+    reported as a skip. Driven instead: one state is closed, the service is
+    asked for it through its real transition path, and the task must not move.
+    """
+    monkeypatch.setattr(
+        states_module, "UNPRODUCIBLE_STATES", frozenset({CLOSED_FOR_THE_PROBE})
+    )
     view = _open(service, with_evidence=True)
 
     with pytest.raises(TaskError) as caught:
-        service.transition(view.id, target)
+        service.transition(view.id, CLOSED_FOR_THE_PROBE)
 
     assert caught.value.reason == "state_not_producible"
     assert service.get(view.id).state is INITIAL_STATE
 
 
+def test_the_service_still_refuses_an_edge_that_is_not_in_the_table(
+    service: TaskService,
+) -> None:
+    """The refusal a user can actually meet today, asserted for real.
+
+    With nothing closed, ``state_not_producible`` is unreachable through the
+    service - so the refusal that matters is the table one. A task holding all
+    three publication proofs still cannot jump from ``awaiting_approval`` to
+    ``ready_to_publish``, because that edge does not exist.
+    """
+    view = _open(service, with_evidence=True)
+
+    with pytest.raises(TaskError) as caught:
+        service.transition(view.id, TaskState.READY_TO_PUBLISH)
+
+    assert caught.value.reason == "transition_not_allowed"
+    assert service.get(view.id).state is INITIAL_STATE
+
+
 def test_a_refused_transition_leaves_no_ledger_row(service: TaskService) -> None:
-    """Nothing happened, so nothing is recorded. Only accepted moves append."""
+    """Nothing happened, so nothing is recorded. Only accepted moves append.
+
+    The refused move used to be ``running``, which H2 opened. It is now
+    ``published`` from ``awaiting_approval`` - an edge the table does not
+    carry and never will, because publishing is reached through
+    ``ready_to_publish`` and that state is derived from evidence.
+    """
     view = _open(service, with_evidence=False)
     before = len(service.transitions(view.id))
 
     with pytest.raises(TaskError):
-        service.transition(view.id, TaskState.RUNNING)
+        service.transition(view.id, TaskState.PUBLISHED)
 
     assert len(service.transitions(view.id)) == before
 

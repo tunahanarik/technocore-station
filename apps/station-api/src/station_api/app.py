@@ -18,6 +18,8 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
+from station_api.agent.activity import ActivityLog
+from station_api.agent.service import AgentService
 from station_api.compose.nonce import NonceReserver
 from station_api.compose.service import ComposeService
 from station_api.compose.signer import MessageSigner, VaultMessageSigner
@@ -28,6 +30,7 @@ from station_api.evidence.audit_envelope import AuditEnvelope, AuditEnvelopeErro
 from station_api.evidence.service import EvidenceService
 from station_api.identity.service import IdentityService
 from station_api.opencode.service import OpenCodeService
+from station_api.routes import agent as agent_routes
 from station_api.routes import api as api_routes
 from station_api.routes import compose as compose_routes
 from station_api.routes import conformance as conformance_routes
@@ -127,7 +130,10 @@ def _mount_spa(app: FastAPI, web_dist: Path) -> None:
 
 
 def _build_evidence(
-    *, engine: Engine, settings: Settings, evidence: EvidenceService | None
+    *,
+    engine: Engine,
+    chain: AuditChain,
+    evidence: EvidenceService | None,
 ) -> EvidenceService | None:
     """Wire the evidence archive, or report that it could not be wired.
 
@@ -140,9 +146,7 @@ def _build_evidence(
     """
     if evidence is not None:
         return evidence
-    service = EvidenceService(
-        engine=engine, chain=AuditChain(engine, AuditEnvelope(settings.data_dir))
-    )
+    service = EvidenceService(engine=engine, chain=chain)
     try:
         service.start()
     except (AuditEnvelopeError, VaultError, OSError):
@@ -243,9 +247,18 @@ def create_app(
     # chain cannot be created still composes and sends, and reports that a
     # send was not archived rather than refusing to send. Refusing would trade
     # a missing record for a missing message, which is the worse of the two.
-    app.state.evidence = (
-        _build_evidence(engine=engine, settings=settings, evidence=evidence)
+    # The audit chain object is built once and shared by the evidence archive
+    # and the Activity Desk. Two chains over one table would be two things
+    # that can disagree about where the head is - the duplication ADR-0004 2
+    # rules out, applied to the one component both packages append to.
+    chain = (
+        AuditChain(engine, AuditEnvelope(settings.data_dir))
         if engine is not None
+        else None
+    )
+    app.state.evidence = (
+        _build_evidence(engine=engine, chain=chain, evidence=evidence)
+        if engine is not None and chain is not None
         else None
     )
 
@@ -284,6 +297,35 @@ def create_app(
     # like.
     app.state.tasks = TaskService(engine=engine) if engine is not None else None
 
+    # The agent runtime (ADR-0008). Built when there is a database and a task
+    # service, because it owns neither: it plans runs, calls tools from a
+    # compile-time registry and moves the task through
+    # ``TaskService.transition``, which is still the only function in this
+    # product that writes a task state.
+    #
+    # Building it starts nothing. There is no scheduler, no background task
+    # and no resume-on-launch: a run interrupted by a restart is *listed* by
+    # ``interrupted_runs`` and continues only when a person asks (SI-224).
+    #
+    # The activity log is handed the chain only when the evidence archive
+    # started, which is this application's way of saying the chain is
+    # actually openable on this machine. Where it is not, the timeline still
+    # records and simply does not claim a decision reached a chain it could
+    # not reach.
+    app.state.agent = (
+        AgentService(
+            engine=engine,
+            data_dir=settings.data_dir,
+            tasks=app.state.tasks,
+            activity=ActivityLog(
+                engine=engine,
+                chain=chain if app.state.evidence is not None else None,
+            ),
+        )
+        if engine is not None and app.state.tasks is not None
+        else None
+    )
+
     # The read-only reconciliation scan (ADR-0004 6). ``in_flight`` has been
     # written since Package D and never read back; this reads it. One SELECT,
     # no outbound request, no row changed and no send continued. Whether to
@@ -319,6 +361,7 @@ def create_app(
     app.include_router(evidence_routes.router)
     app.include_router(opencode_routes.router)
     app.include_router(workscan_routes.router)
+    app.include_router(agent_routes.router)
 
     # Registered last so it cannot shadow /api or /session.
     if web_dist is not None:

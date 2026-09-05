@@ -3,12 +3,14 @@ import { useId, useState } from "react";
 
 import type { ApiError } from "../api/client";
 import type { AppStatus } from "../api/types";
+import { ActivityPage } from "../pages/ActivityPage";
 import { ComposeVerifyPage } from "../pages/ComposeVerifyPage";
 import { EvidencePage } from "../pages/EvidencePage";
 import { IdentityPage } from "../pages/IdentityPage";
 import { OverviewPage } from "../pages/OverviewPage";
 import { SettingsHelpPage } from "../pages/SettingsHelpPage";
 import { SourcesPage } from "../pages/SourcesPage";
+import { TasksPage } from "../pages/TasksPage";
 import { WorkScanPage } from "../pages/WorkScanPage";
 import { DEFAULT_SECTION_ID, READY_SECTIONS, type SectionId } from "../sections";
 import { ErrorRegion } from "./ErrorRegion";
@@ -127,6 +129,8 @@ export function AppShell({ status, loading, connectionError, onRetryConnection }
             <OverviewPage loading={loading} onNavigate={setSelected} status={status} />
           )}
           {selected === "work-scan" && <WorkScanPage />}
+          {selected === "tasks" && <TasksPage />}
+          {selected === "activity" && <ActivityPage />}
           {selected === "identity" && <IdentityPage />}
           {selected === "compose" && <ComposeVerifyPage />}
           {selected === "sources" && <SourcesPage />}

@@ -496,11 +496,27 @@ def test_no_module_in_the_package_can_reach_the_recorded_origin(
 # ---------------------------------------------------------------------------
 
 
-def test_suggested_is_producible_and_running_still_is_not() -> None:
+def test_suggested_is_producible_and_the_initial_state_did_not_move() -> None:
+    """H1 opened ``suggested``; H2 opened the two this test used to exclude.
+
+    The old name was ``..._and_running_still_is_not``, and H2 built the
+    executor that produces ``running`` and ``paused`` (ADR-0008 3). Leaving
+    the two exclusions in place would have made this file assert something
+    false; deleting the test would have dropped the claim it exists for, which
+    is about H1 and is unchanged.
+
+    So the exclusions were replaced by the assertion they were standing in
+    for. What matters to the work scan is that ``INITIAL_STATE`` did **not**
+    move: a task the user opened and a candidate a scan proposed are still
+    born in different states, which is one of the two independent layers that
+    keep them apart (SI-277).
+    """
     assert TaskState.SUGGESTED in PRODUCIBLE_STATES
-    assert TaskState.RUNNING not in PRODUCIBLE_STATES
-    assert TaskState.PAUSED not in PRODUCIBLE_STATES
     assert INITIAL_STATE is TaskState.AWAITING_APPROVAL
+    assert INITIAL_STATE is not TaskState.SUGGESTED
+    # The scan producer is still the only way into ``suggested``, and it is a
+    # different method from the one a person uses.
+    assert TaskState.SUGGESTED not in {INITIAL_STATE}
 
 
 def test_the_scan_source_is_registered_and_bound_to_the_suggestion_producer() -> None:

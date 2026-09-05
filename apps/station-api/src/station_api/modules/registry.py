@@ -252,12 +252,108 @@ _WORK_SCAN_REQUIREMENTS: tuple[ModuleRequirement, ...] = (
     ModuleRequirement(
         key="effort_budget_enforced",
         detail=(
-            "Bir adayin calisma maliyeti olculur ve bir butce tavaniyla "
-            "karsilastirilir. Bu surumde butce yoktur; tahmin tahmin olarak "
-            "etiketlenir ve hicbir kod yolu bir tavan uygulamaz."
+            "Bir adayin calisma maliyeti olculur ve bir tavanla "
+            "karsilastirilir. Paket H2 bir calisma tavani getirdi (arac "
+            "cagrisi sayisi ve sure), fakat o tavan calismaya aittir: bir "
+            "adayin maliyeti hala olculmuyor ve hicbir kod yolu bir aday "
+            "tahminini tavanla karsilastirmiyor. Tahmin, tahmin olarak "
+            "etiketlenir."
         ),
         evidence=EvidenceField.TEST_RESULT,
+        stage="-",
+        implemented=False,
+    ),
+)
+
+
+#: What Package H2 undertook to establish for the agent working environment.
+#:
+#: Two of the seven are ``implemented=False`` and both are the honest half.
+#: ``run_test_result_recorded`` cannot be produced because running a check is
+#: exactly the capability ADR-0008 1 closes - a run records what its plan said
+#: would establish success and never a result, so the field reports
+#: ``not_implemented`` and the task cannot reach ``ready_to_publish``. It is
+#: deliberately **not** in :data:`POLICY_REFUSED_REQUIREMENTS`: the lobby
+#: greeting is refused by a policy this product intends to keep, while
+#: execution is closed by an architecture decision a later package may revisit
+#: with real isolation. Reporting the two identically would lose that
+#: difference, which is the whole reason the separate list exists.
+_AGENT_WORKSPACE_REQUIREMENTS: tuple[ModuleRequirement, ...] = (
+    ModuleRequirement(
+        key="execution_closed_and_stated",
+        detail=(
+            "Keyfi kod ve kabuk yurutmesi kapalidir ve bunun nedeni "
+            "kullaniciya gorunur bir gerekce olarak sunulur: olculen "
+            "izolasyon envanteri ve neden guvenilmedigi kayitlidir."
+        ),
+        evidence=EvidenceField.TASK_OUTCOME,
         stage="H2",
+        implemented=True,
+    ),
+    ModuleRequirement(
+        key="tool_registry_is_closed",
+        detail=(
+            "Araclar derleme zamaninda sabittir; agent kendisine arac "
+            "ekleyemez ve kayitsiz bir kimlik gosterilebilir bir ret dondurur."
+        ),
+        evidence=EvidenceField.TASK_OUTCOME,
+        stage="H2",
+        implemented=True,
+    ),
+    ModuleRequirement(
+        key="run_ceiling_enforced",
+        detail=(
+            "Her calisma bir tavan altinda kosar: arac cagrisi sayisi, duvar "
+            "saati suresi ve eszamanlilik (=1). Tavan derleme zamaninda "
+            "yazilir ve hicbir kod yolu onu degistirmez."
+        ),
+        evidence=EvidenceField.TASK_OUTCOME,
+        stage="H2",
+        implemented=True,
+    ),
+    ModuleRequirement(
+        key="workspace_is_contained",
+        detail=(
+            "Her okuma ve yazma calisma alani icinde kalir: ad yeniden "
+            "kurulur, yol cozulur ve kapsanma denetlenir, baglanti "
+            "(symlink/junction) reddedilir ve arsiv acan bir yol hic yoktur."
+        ),
+        evidence=EvidenceField.TASK_OUTCOME,
+        stage="H2",
+        implemented=True,
+    ),
+    ModuleRequirement(
+        key="activity_is_separate_from_the_chain",
+        detail=(
+            "Adim adim kayit ayri bir yalniz-ekleme tabloda kendi "
+            "retention'i ile tutulur; audit zincirine yalnizca karar "
+            "noktalari girer ve zincirin atifta bulundugu satir budanamaz."
+        ),
+        evidence=EvidenceField.TASK_OUTCOME,
+        stage="H2",
+        implemented=True,
+    ),
+    ModuleRequirement(
+        key="run_test_result_recorded",
+        detail=(
+            "Calismanin urettigi ciktinin uzerinde bir denetim kosar ve "
+            "sonucu kaydedilir. Bu surumde yurutme kapali oldugu icin hicbir "
+            "kod yolu bu kaniti uretemez: plan basari olcutunu kaydeder, "
+            "kosmaz, ve sonuc 'uygulanmadi' olarak raporlanir."
+        ),
+        evidence=EvidenceField.TEST_RESULT,
+        stage="-",
+        implemented=False,
+    ),
+    ModuleRequirement(
+        key="user_accepted_the_run_output",
+        detail=(
+            "Kullanici ciktiyi acikca kabul eder. Kabul bir kisinin "
+            "eylemidir; bu surumde onu kaydeden bir yuzey yoktur ve hicbir "
+            "otomatik yol bu alani dolduramaz."
+        ),
+        evidence=EvidenceField.USER_ACCEPTANCE,
+        stage="H3",
         implemented=False,
     ),
 )
@@ -307,10 +403,23 @@ MODULES: tuple[ModuleRecord, ...] = (
         id=ModuleId.AGENT_WORKSPACE,
         name="Agent Calisma Ortami",
         purpose="Kullanicinin baslattigi sinirli gorevlerin yurutulmesi.",
-        state=ModuleState.PLANNED,
-        owners=(),
-        requirements=(),
-        available_from="H2",
+        # Package H2 wrote the owning code, so the record stops saying it does
+        # not exist. Flipping this is the deliberate half of opening a
+        # ``planned`` module - the state, the owners and the requirements move
+        # together, and a reviewer sees one change rather than a record that
+        # quietly disagrees with the tree beside it. It is the same edit H1
+        # made for ``work_scan``, and it carries the same honest half: two of
+        # the seven requirements are ``implemented=False``.
+        state=ModuleState.AVAILABLE,
+        owners=(
+            "station_api.agent.service",
+            "station_api.agent.tools",
+            "station_api.agent.budget",
+            "station_api.agent.workspace",
+            "station_api.agent.activity",
+            "station_api.agent.isolation",
+        ),
+        requirements=_AGENT_WORKSPACE_REQUIREMENTS,
     ),
     ModuleRecord(
         id=ModuleId.PROOF_WORKSPACE,

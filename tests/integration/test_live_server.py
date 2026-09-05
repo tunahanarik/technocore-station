@@ -102,7 +102,7 @@ def test_full_session_handoff_over_the_wire(live_server: LiveServer) -> None:
 
         # These two deliberately differ, and the gap widens with every stage
         # that is not about writing. Stage 4 is the stage that opened writes
-        # and that does not move again; stage 7 is the stage this build
+        # and that does not move again; stage 8 is the stage this build
         # implements. Collapsing them would either backdate the later work or
         # claim writes arrived several releases later than they did.
         #

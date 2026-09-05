@@ -12,17 +12,40 @@ point:
 
 * ``suggested`` needed a suggestion producer. **Package H1 built one**, and the
   state was opened here on the same commit that opened it - see below.
-* ``running`` and ``paused`` need an executor. That is Package H2.
+* ``running`` and ``paused`` needed an executor. **Package H2 built one**
+  (:mod:`station_api.agent.service`), and they were opened on the commit that
+  built it.
 
-What this release can genuinely produce is the seven in
-:data:`PRODUCIBLE_STATES`. The other two stay **defined** - so the machine is
-reviewable as a whole and so H2 does not have to re-derive it - and no code
-path can reach them: :func:`validate_transition` refuses a target in
-:data:`UNPRODUCIBLE_STATES` even though the table lists the edge. Opening one
-means deleting its entry here, which is a deliberate change a reviewer sees.
+:data:`UNPRODUCIBLE_STATES` is therefore **empty** in this release, and that
+is a fact worth stating loudly rather than a field to quietly remove. Two
+packages in a row have moved a name across that line, each time by building
+the producer first, and the refusal machinery below is what made each move a
+deliberate edit rather than a drift. It is kept for exactly that reason: it
+is the mechanism that closes a state again, and the shape a tenth state would
+arrive in.
 
 That is ``CheckState.NOT_IMPLEMENTED``'s rule applied to a state machine: a
-thing that has not been built does not get to sit there looking available.
+thing that has not been built does not get to sit there looking available -
+and when it *is* built, the sentence beside it has to change too. The
+``STATE_DETAIL`` entries for ``running`` and ``paused`` said "no code path in
+this release can produce this state". H2 built the code path, so those
+sentences became false and were rewritten. A constant that keeps its old
+prose after its meaning changed is the quietest kind of lie this project can
+tell.
+
+What H2's executor is, and what it is not
+------------------------------------------
+``running`` means "the server is carrying out a **defined tool chain**": a
+plan a person wrote down, made of tools from a compile-time registry, with
+validated arguments. It does not mean a model is deciding anything (there is
+no model lane, ADR-0008 2) and it does not mean a command is being executed
+(arbitrary execution is closed, ADR-0008 1). ``paused`` means the user
+stopped it.
+
+The consequence for the far end of the machine is unchanged: the run never
+records a ``test_result`` reference, because running the test is the closed
+capability. So a finished run leaves a task in ``review_needed``, and
+``ready_to_publish`` stays out of reach exactly as SI-222 requires.
 
 How ``suggested`` was opened, and what deliberately did not move
 ----------------------------------------------------------------
@@ -77,12 +100,13 @@ STATE_DETAIL: dict[TaskState, str] = {
         "hicbir sey yurutulmez."
     ),
     TaskState.RUNNING: (
-        "Gorev yurutuluyor. Bu surumde hicbir kod yolu bu durumu uretemez; "
-        "yurutucu Paket H2'nin konusudur."
+        "Sunucu tanimli bir arac zincirini yurutuyor: adimlari onceden "
+        "yazilmis bir plan, kapali bir registry'den gelen araclar ve "
+        "dogrulanmis argumanlar. Model karari ve kabuk komutu yoktur."
     ),
     TaskState.PAUSED: (
-        "Yurutme duraklatildi. Bu surumde hicbir kod yolu bu durumu uretemez; "
-        "yurutucu Paket H2'nin konusudur."
+        "Yurutme kullanicinin istegiyle duraklatildi. Sonraki arac cagrisi "
+        "yapilmaz; devam etmek ayri bir kullanici eylemidir."
     ),
     TaskState.BLOCKED: (
         "Gorev ilerleyemiyor: bir on kosul saglanmadi. Engel kalkinca gorev "
@@ -157,11 +181,18 @@ ALLOWED_TRANSITIONS: dict[TaskState, frozenset[TaskState]] = {
 INITIAL_STATE: TaskState = TaskState.AWAITING_APPROVAL
 
 #: The states this release can genuinely reach. ``SUGGESTED`` joined the set
-#: in Package H1, when its producer was written; see the module docstring.
+#: in Package H1 when its producer was written, and ``RUNNING``/``PAUSED``
+#: joined in H2 when the deterministic tool runner was; see the module
+#: docstring. It is now every state, and it is still written out member by
+#: member rather than as ``frozenset(TaskState)``: spelling it as "all of
+#: them" would make a tenth state producible the moment somebody defined it,
+#: which is the opposite of the rule this constant exists to carry.
 PRODUCIBLE_STATES: frozenset[TaskState] = frozenset(
     {
         TaskState.SUGGESTED,
         TaskState.AWAITING_APPROVAL,
+        TaskState.RUNNING,
+        TaskState.PAUSED,
         TaskState.BLOCKED,
         TaskState.FAILED,
         TaskState.REVIEW_NEEDED,
@@ -172,6 +203,14 @@ PRODUCIBLE_STATES: frozenset[TaskState] = frozenset(
 
 #: Defined, listed in the table, and unreachable. Derived rather than written
 #: out a second time, so the two lists cannot disagree.
+#:
+#: **Empty in this release.** Every defined state has a producer. The
+#: derivation, and the refusal in :func:`validate_transition` that reads it,
+#: are kept rather than deleted: they are what a tenth state would be born
+#: refused by, and they are what closes a state again if a producer is ever
+#: withdrawn. An empty set here is a measured statement about this build, not
+#: an unused constant - and the tests that used to iterate it were rewritten
+#: rather than left to pass vacuously (SI-216).
 UNPRODUCIBLE_STATES: frozenset[TaskState] = frozenset(TaskState) - PRODUCIBLE_STATES
 
 #: Nothing leaves these.
@@ -204,7 +243,11 @@ def validate_transition(current: TaskState, target: TaskState) -> TransitionVerd
 
     Three refusals, in the order they matter:
 
-    1. the target is a state nothing in this build can produce;
+    1. the target is a state nothing in this build can produce. That set is
+       **empty** in this release, so this branch refuses nothing today; it is
+       the branch a tenth state, or a withdrawn producer, arrives through, and
+       the test for it drives the mechanism with a temporarily closed state
+       rather than iterating an empty set and calling that a pass;
     2. the edge is not in the table;
     3. the current state is terminal (a special case of 2, reported on its own
        because "this task is finished" is a different sentence from "that step

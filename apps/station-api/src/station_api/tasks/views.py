@@ -34,20 +34,38 @@ from station_api.tasks.states import (
     TaskState,
 )
 
-#: Why the three unreachable states are listed at all. Shown beside them so a
-#: reader never has to discover the gap by trying to reach one.
+#: What the unreachable-state list means now that it is empty.
+#:
+#: The field stays on the response and the sentence changed, rather than the
+#: field being removed: a client that showed three names here last release is
+#: told the set is empty, instead of being left to notice a key went away.
 UNPRODUCIBLE_DETAIL = (
-    "Bu durumlar tanimlidir ve gecis tablosunda yer alir, fakat bu surumde "
-    "hicbir kod yolu onlari uretemez: 'suggested' bir oneri ureticisi (H1), "
-    "'running' ve 'paused' bir yurutucu (H2) ister. Gecis istegi reddedilir."
+    "Bu surumde uretilemeyen durum yoktur: 'suggested' oneri ureticisiyle "
+    "(H1), 'running' ve 'paused' deterministik arac kosucusuyla (H2) acildi. "
+    "Liste bos; tanimlanacak yeni bir durum once burada reddedilmis olarak "
+    "gorunur."
 )
 
-#: The budget sentence. ADR-0004 7: F opens no budget field and does not
-#: behave as though one existed; the half-requirement is deferred visibly.
+#: The budget sentence, updated by H2 and still saying the same thing about
+#: **this** layer.
+#:
+#: ADR-0004 7 deferred the budget half of the continue decision to G and H2.
+#: H2 built it - in :mod:`station_api.agent.budget`, denominated in tool
+#: calls, wall-clock seconds and a concurrency of one - and deliberately
+#: **not here**. The task layer still has no budget field, no budget column
+#: and no budget-shaped identifier, which is what keeps SI-225 literally true
+#: rather than turning it into a sentence about where the field moved; the
+#: run is what carries a ceiling, and a task is not a run.
+#:
+#: The old wording said the half was "deferred to G and H2". Leaving that
+#: after H2 shipped would have been a deferral notice for something that
+#: exists, so it was rewritten (ADR-0008 4).
 BUDGET_DETAIL = (
-    "Bu surumde butce kavrami yoktur ve butce varmis gibi davranilmaz. "
-    "Devam kararinin butce/izin yarisi Paket G ve H2'ye ertelenmistir; onay "
-    "ve izin yarisi bu pakette karsilanir."
+    "Gorev katmaninda butce alani yoktur ve olmayacaktir. Tavan calismanin "
+    "kendisine aittir: arac cagrisi sayisi, duvar saati suresi ve "
+    "eszamanlilik (=1). Token ve para birimi sayilmaz; model yolu kapali "
+    "oldugu icin saglayicidan gelen bir kullanim degeri yoktur ve "
+    "uydurulmaz."
 )
 
 

@@ -803,3 +803,314 @@ export interface WorkScanSuggestion {
   readonly state: "suggested";
   readonly detail: string;
 }
+
+// --- Tasks, the agent runtime and the Activity Desk (Paket H2) --------------
+//
+// Hand-written mirrors of the `Task*`, `Agent*` and `Activity*` models in
+// `station_api/schemas.py`. The holes below are copied on purpose, because
+// the holes are the contract (ADR-0008):
+//
+// * there is **no boolean that says a task succeeded**. Four separate fields
+//   carry the four separate questions, and nothing in this file can sum them
+//   (ADR-0008 6, ADR-0004 4);
+// * `test_result_state` is `not_implemented` as a *type*, so no edit can make
+//   an unexecuted plan read as a tested one;
+// * `arbitrary_execution_supported` and `agent_can_raise_ceiling` are `false`
+//   as types, and `relied_upon` is `false` on every measured facility: a
+//   sandbox that exists on one machine is not a guarantee the product offers
+//   (ADR-0008 1, 4);
+// * there is no `token` and no currency anywhere. `refused_units` names what
+//   this build refuses to denominate a ceiling in, so the absence is a claim
+//   on the wire rather than something a reader has to notice (ADR-0008 4);
+// * there is no field for a model's reasoning, a prompt, a completion or a
+//   raw provider payload. The model lane is closed and the table these rows
+//   come from has no column for such a thing (ADR-0008 2, 6);
+// * there is no filesystem path in either direction: a workspace file is
+//   named, never located.
+
+/** The three-valued check state, spelled the way the write gate spells it. */
+export type TaskCheckState = "passed" | "blocked" | "not_implemented";
+
+/** The four fields a result is recorded in. Never collapsed into one boolean. */
+export type TaskEvidenceFieldName =
+  | "task_outcome"
+  | "test_result"
+  | "user_acceptance"
+  | "public_share";
+
+/** All nine states. H2 opened `running` and `paused` (ADR-0008 3). */
+export type TaskStateName =
+  | "suggested"
+  | "awaiting_approval"
+  | "running"
+  | "paused"
+  | "blocked"
+  | "failed"
+  | "review_needed"
+  | "ready_to_publish"
+  | "published";
+
+/**
+ * The transitions a **person** may ask for.
+ *
+ * `running` and `paused` are absent: they belong to the runner and are
+ * reached through the run routes, which write a plan down first.
+ * `ready_to_publish` is absent because it is derived from evidence and
+ * cannot be asked for (SI-222).
+ */
+export type TaskUserTransitionName =
+  | "awaiting_approval"
+  | "blocked"
+  | "failed"
+  | "review_needed"
+  | "published";
+
+/** One of the four fields, reported on its own. Never summed with another. */
+export interface TaskFieldStatus {
+  readonly evidence_field: TaskEvidenceFieldName;
+  readonly state: TaskCheckState;
+  readonly detail: string;
+  readonly ref_id: string;
+}
+
+/** One task, its state, and the four fields kept apart. */
+export interface TaskStatusResponse {
+  readonly id: string;
+  readonly module_id: string;
+  readonly source_id: string;
+  readonly content_sha256: string;
+  readonly source_version_id: string;
+  readonly title: string;
+  readonly state: TaskStateName;
+  readonly state_detail: string;
+  readonly created_at: string;
+  readonly updated_at: string;
+  readonly evidence_fields: readonly TaskFieldStatus[];
+  /** Derived from three separately verified fields. Never asked for. */
+  readonly ready_to_publish: boolean;
+  readonly blocking_fields: readonly string[];
+  readonly public_share_available: false;
+  readonly public_share_detail: string;
+  /** There is no budget in the task layer, and the type says so (SI-225). */
+  readonly budget_available: false;
+  readonly budget_detail: string;
+}
+
+export interface TaskListResponse {
+  readonly tasks: readonly TaskStatusResponse[];
+  readonly task_count: number;
+  readonly producible_states: readonly TaskStateName[];
+  /** Empty since H2. The field stayed and the sentence changed, so a reader
+   * who saw three names here last release is told the set is now empty. */
+  readonly unproducible_states: readonly TaskStateName[];
+  readonly unproducible_detail: string;
+}
+
+/** Where a run is. The four endings are distinct values, on purpose. */
+export type AgentRunPhaseName =
+  | "planned"
+  | "running"
+  | "paused"
+  | "completed"
+  | "cancelled"
+  | "tool_error"
+  | "budget_exhausted"
+  | "artifact_missing";
+
+/** What became of one planned step. */
+export type AgentStepPhaseName = "planned" | "ran" | "refused" | "failed" | "skipped";
+
+/** The permission a tool needs. None of them leaves this machine. */
+export type AgentToolScopeName =
+  | "read_approved_input"
+  | "write_workspace"
+  | "deterministic_check"
+  | "read_run_state";
+
+/** The parameter types. There is deliberately no `path` and no `url`. */
+export type AgentToolParamTypeName = "text" | "file_name" | "digest";
+
+/** What the measurement established. `not_measured` is not `absent`. */
+export type AgentIsolationStateName = "present" | "absent" | "not_measured";
+
+/** Who acted. There is no `model` actor, because there is no model lane. */
+export type ActivityActorName = "user" | "station_runner";
+
+export type ActivityOutcomeName = "ok" | "refused" | "failed" | "pending";
+
+/**
+ * The kinds of moment the timeline distinguishes.
+ *
+ * Fourteen values rather than one `step_done`: "planned", "a tool was
+ * called", "an artifact was produced", "a check was recorded" and "waiting
+ * for approval" answer different questions, and a timeline that folded them
+ * into one badge could no longer say whether anything was actually checked
+ * (ADR-0008 6).
+ */
+export type ActivityActionName =
+  | "run_planned"
+  | "run_started"
+  | "tool_called"
+  | "artifact_produced"
+  | "check_recorded"
+  | "approval_awaited"
+  | "run_stopped"
+  | "run_resumed"
+  | "run_finished"
+  | "run_failed"
+  | "permission_denied"
+  | "budget_exhausted"
+  | "execution_unavailable"
+  | "activity_deleted";
+
+export interface AgentToolParamStatus {
+  readonly name: string;
+  readonly type: AgentToolParamTypeName;
+  readonly required: boolean;
+  readonly detail: string;
+}
+
+/** One registered tool, with everything a person needs to approve it. */
+export interface AgentToolStatus {
+  readonly id: string;
+  readonly scope: AgentToolScopeName;
+  readonly purpose: string;
+  readonly params: readonly AgentToolParamStatus[];
+  readonly call_cost: number;
+  readonly produces_artifact: boolean;
+}
+
+/** The run ceiling, in the only three units this build can measure. */
+export interface AgentCeilingStatus {
+  readonly max_tool_calls: number;
+  readonly max_wall_clock_seconds: number;
+  readonly max_concurrency: 1;
+  readonly units: readonly string[];
+  /** Units this product refuses to denominate a ceiling in, and why. */
+  readonly refused_units: readonly string[];
+  readonly refused_units_detail: string;
+  readonly detail: string;
+  /** Structural: the ceiling is a compile-time constant nothing writes. */
+  readonly agent_can_raise_ceiling: false;
+}
+
+/** One measured facility, and - separately - whether it is relied upon. */
+export interface AgentIsolationFindingStatus {
+  readonly facility: string;
+  readonly measured: AgentIsolationStateName;
+  readonly measured_at: string;
+  readonly detail: string;
+  readonly relied_upon: false;
+}
+
+/** Why arbitrary code and shell execution are closed, as a reason. */
+export interface AgentExecutionStatus {
+  readonly arbitrary_execution_supported: false;
+  readonly reason: "execution_unavailable";
+  readonly detail: string;
+  readonly inventory: readonly AgentIsolationFindingStatus[];
+}
+
+/** One planned tool call and what became of it. */
+export interface AgentRunStepStatus {
+  readonly ordinal: number;
+  readonly tool_id: string;
+  readonly scope: AgentToolScopeName;
+  readonly arguments_sha256: string;
+  readonly phase: AgentStepPhaseName;
+  readonly started_at: string | null;
+  readonly finished_at: string | null;
+  /** The name of the file this step produced, never its path. */
+  readonly artifact_name: string;
+  readonly artifact_sha256: string;
+  readonly detail: string;
+}
+
+/** One workspace file: its name, its size and its digest. No path. */
+export interface AgentWorkspaceFileStatus {
+  readonly name: string;
+  readonly byte_count: number;
+  readonly sha256: string;
+}
+
+/** One run, with its plan, its usage and its ending kept apart. */
+export interface AgentRunStatus {
+  readonly id: string;
+  readonly task_id: string;
+  readonly phase: AgentRunPhaseName;
+  readonly created_at: string;
+  readonly started_at: string | null;
+  readonly finished_at: string | null;
+  readonly stop_requested: boolean;
+  readonly plan_sha256: string;
+  /** The check the plan says would establish success. Recorded, never run. */
+  readonly test_condition: string;
+  /** `not_implemented` as a type: a run that produced files has still not
+   * been tested, and the task cannot become `ready_to_publish` (SI-222). */
+  readonly test_result_state: "not_implemented";
+  readonly test_result_detail: string;
+  readonly expected_artifacts: readonly string[];
+  readonly steps: readonly AgentRunStepStatus[];
+  readonly tool_calls_used: number;
+  readonly elapsed_ms: number;
+  readonly max_tool_calls: number;
+  readonly max_wall_clock_seconds: number;
+  readonly concurrency: 1;
+  readonly detail: string;
+}
+
+/** The whole agent surface, read-only. Contacts nobody and runs nothing. */
+export interface AgentSurfaceResponse {
+  readonly execution: AgentExecutionStatus;
+  readonly ceiling: AgentCeilingStatus;
+  readonly tools: readonly AgentToolStatus[];
+  readonly honesty: string;
+  readonly stop_statement: string;
+  /** Runs a restart left in `running`. Listed, never resumed (SI-224). */
+  readonly interrupted_runs: readonly AgentRunStatus[];
+  readonly resumed_any: false;
+}
+
+/** One task's runs and the files its workspace currently holds. */
+export interface AgentTaskRunsResponse {
+  readonly task: TaskStatusResponse;
+  readonly runs: readonly AgentRunStatus[];
+  readonly workspace_files: readonly AgentWorkspaceFileStatus[];
+  readonly honesty: string;
+}
+
+/** One timeline row. No reasoning trace, no prompt, no provider payload. */
+export interface ActivityEventStatus {
+  readonly id: string;
+  readonly recorded_at: string;
+  readonly run_id: string;
+  readonly task_id: string;
+  readonly actor: ActivityActorName;
+  readonly action: ActivityActionName;
+  readonly outcome: ActivityOutcomeName;
+  readonly duration_ms: number;
+  readonly artifact_sha256: string;
+  readonly check_sha256: string;
+  readonly detail: string;
+  /** True when an audit link names this row. Those rows are never pruned
+   * and never deleted, which is what lets the timeline have a retention
+   * policy while the chain keeps not having one. */
+  readonly chain_referenced: boolean;
+}
+
+export interface ActivityListResponse {
+  readonly events: readonly ActivityEventStatus[];
+  readonly event_count: number;
+  readonly chain_referenced_count: number;
+  readonly retained_events: number;
+  readonly detail: string;
+}
+
+/** What a deletion did, as two counts that are never summed. */
+export interface ActivityDeleteResponse {
+  readonly deleted: number;
+  readonly kept_because_chain_referenced: number;
+  /** The deletion is itself an audit event (ADR-0008 6). */
+  readonly recorded_in_audit_chain: true;
+  readonly detail: string;
+}

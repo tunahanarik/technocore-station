@@ -2,7 +2,8 @@
 
 > Paket C çıktısı; Paket D ile "Oluştur ve Doğrula" bölümü (§5), Paket E ile
 > "Kanıtlar" bölümü (§7), Paket G ile "Ayarlar ve Yardım" bölümü (§8), Paket
-> H1 ile "Is Tara" bölümü (§12) dolduruldu.
+> H1 ile "Is Tara" bölümü (§12), Paket H2 ile "Gorevler" (§13) ve "Aktivite"
+> (§14) bölümleri dolduruldu.
 > Sol menülü dashboard kabuğundaki **her** etkileşimin sözleşmesi: önkoşul,
 > çağrılan işlev, loading/success/error/timeout/iptal davranışı ve otomatik
 > test kimliği.
@@ -35,6 +36,7 @@ Her istek `AbortSignal.timeout(ms)` ile sınırlıdır:
 | `captureEvidenceLine` (`POST /api/evidence/capture`) | 90 000 ms | Yakalama yerel bir okuma değildir: backend odanın resmî export'unu açar ve **12 MiB tavanına kadar** satır satır tarar. Backend'in kendi bütçesi connect 5 sn + read 30 sn'dir, ama o read süresi **chunk başınadır**, tarama tamamına değil — yavaş bir bağlantı otuz saniyede bir kez bile takılmadan route'u dakikalarca meşgul edebilir. Daha kısa bir istemci süresi, ilerleyen bir taramayı bırakıp sonucu `timeout` diye gösterir ve backend'in **altı yakalama durumundan hangisine** vardığını hiç öğrenemezdik; oysa "okuyamadım" ile "satır orada değil" ayrı bulgulardır ve bir istemci kronometresi ikisini birleştiremez |
 | `exportEvidence` (`POST /api/evidence/export`, elle `fetch`) | 15 000 ms | Varsayılan; dışa aktarım yerel veritabanından üretilir, dışarı çıkmaz |
 | `storeOpenCodeCredential` (`POST /api/opencode/credential`) | 20 000 ms | **Dışarı hiç çıkmaz**: route bir DPAPI zarfını yerel diske yazar (mkstemp → fsync → ACL → atomik replace → ACL) ve sonra yerel durumu okur. Varsayılan 15 sn yerel bir *okuma* için ölçülmüştür; burada bloklayan route sunucu threadpool'unda kuyruğa girer, iki Windows ACL çağrısı ve bir fsync bekler. Asıl gerekçe kısa sürenin maliyeti: replace ortasında bırakılan bir yazma `timeout` (yerel servis hakkında bir iddia) diye raporlanır, oysa zarf pekâlâ yerine oturmuş olabilir — ve kullanıcının bunu öğrenmesinin tek yolu **anahtarı yeniden yazmaktır**. Uygulamadaki diğer her istek bedelsiz tekrarlanır; bu tekrarlanmaz |
+| `startTaskRun` / `resumeTaskRun` (`POST /api/tasks/{id}/runs/{run}/start` ve `/resume`) | 150 000 ms | **Dışarı hiç çıkmaz**, ama sunucu isteği açık tutar: arkada zamanlayıcı ve arka plan görevi olmadığı için (SI-272) çalışma isteğin kendi içinde yürütülür. Sunucunun kendi duvar saati tavanı 120 saniyedir (`AgentCeilingStatus.max_wall_clock_seconds`), sonra çalışmayı kendisi durdurup `budget_exhausted` fazıyla cevap verir; 150 sn bunun üstünde, son özet geçişi ve yanıt yazımı için payla durur. Daha kısa bir süre, sunucunun hâlâ yürüttüğü bir çalışmayı bırakıp `timeout` — yerel servis hakkında bir iddia — raporlar ve asıl cevap olan **adım adım kaydı** atardı |
 | `refreshOpenCodeCatalog` (`POST /api/opencode/catalog/refresh`) | 90 000 ms | Sunucunun kendi bütçesi **iki sınırlı deneme**, her biri connect 5 sn + read 30 sn, aralarında en fazla 5 sn backoff: `fetch_error` diyebilmesi için yaklaşık 75 saniye. Daha kısa bir istemci süresi ilerleyen bir yenilemeyi bırakıp `timeout` derdi ve kullanıcının asıl sorduğu şeyi — katalog durumunu — atardı. Bu istek **hiçbir kimlik bilgisi taşımaz**; katalogun anahtarsız yanıt vermesi zaten §8'deki "denetim rozet üretmez" kararının gerekçesidir |
 
 ### 1.2 `ApiError` sınıflandırması (`kind`)
@@ -560,27 +562,43 @@ Beşi de bir gözden geçirme alışkanlığı değil, koddaki bir yapı:
 ## 9. Bölüm kayıt defteri
 
 `src/sections.ts` dokuz bölümü kaydeder; `ready: false` olanlar nav'da HİÇ
-görünmez:
+görünmez. **Paket H2 ile dokuzun dokuzu da açıldı:**
 
 | Bölüm | `ready` | Açılacağı paket |
 |---|---|---|
 | Genel Bakis | evet | — |
 | Is Tara | evet | — (H1 ile açıldı, ADR-0007 §9; sözleşmesi §12) |
-| Gorevler | hayır | F / H2 |
-| Aktivite | hayır | H2 |
+| Gorevler | evet | — (H2 ile açıldı, ADR-0008 §8; sözleşmesi §13) |
+| Aktivite | evet | — (H2 ile açıldı, ADR-0008 §8; sözleşmesi §14) |
 | Kimlik ve Guvenlik | evet | — |
 | Olustur ve Dogrula | evet | — |
 | Kaynaklar | evet | — |
 | Kanitlar | evet | — (kayıt defteri E ile doldu) |
 | Ayarlar ve Yardim | evet | — |
 
+İki bölüm **birlikte** açıldı ve bu bir tercih değil bir zorunluluktu: Activity
+Desk'in her satırı bir görev ve bir çalışma kimliği taşır, dolayısıyla
+"Gorevler" kapalıyken açılmış bir zaman çizelgesi, sahibine gidilemeyen
+olayların listesi olurdu (ADR-0008 §8).
+
 Test: `App.test.tsx::never shows a section that is not ready`. Bu testin
-**kendisi** H1'de değişmedi; yalnız beslediği iki veri sabiti güncellendi
-(`VISIBLE_SECTIONS` sıralı `toEqual` ile, `HIDDEN_SECTIONS` artık
-`["Gorevler", "Aktivite"]`). E2E tarafında aynı liste `e2e/fixtures.ts`
-içindeki `SECTION_LABELS`'tır ve erişilebilirlik, CSP ve klavye geçişleri bu
-liste üzerinden döndüğü için yeni bölüm otomatik olarak üçünün de kapsamına
-girdi.
+**kendisi** ne H1'de ne H2'de değişti; beslediği veri sabitleri güncellendi.
+Fakat H2 `HIDDEN_SECTIONS`'ı **boşalttı**, ve bu boşalma sessiz bırakılmadı —
+boş bir döngü, geçen bir test gibi görünüp hiçbir şey kanıtlamaz:
+
+- `HIDDEN_SECTIONS` artık elle yazılmış bir liste değil, **`SECTIONS`'tan
+  türetiliyor** (`SECTIONS.filter((s) => !s.ready)`). Böylece döngü bugün
+  gerçekten boş, ve yarın `ready: false` bir bölüm kaydedilirse kimse
+  hatırlamadan yeniden kapsama girer;
+- boşluğun kendisi ayrı ve **açık bir iddia** olarak yazıldı:
+  `App.test.tsx::registers no unready section any more, so the hidden list is
+  empty by measurement` — `HIDDEN_SECTIONS` boş, `SECTIONS`'ın etiketleri
+  `VISIBLE_SECTIONS`'a eşit ve her kayıt `ready`.
+
+E2E tarafında aynı liste `e2e/fixtures.ts` içindeki `SECTION_LABELS`'tır ve
+erişilebilirlik, CSP ve klavye geçişleri bu liste üzerinden döndüğü için iki
+yeni bölüm otomatik olarak üçünün de kapsamına girdi. Klavye sıra testine
+(`App.test.tsx` ve `e2e/tests/keyboard.spec.ts`) iki yeni durak eklendi.
 
 ## 10. Bilinen sınırlar
 
@@ -697,6 +715,14 @@ sekiz öğenin hepsi görünür olmak zorunda (ADR-0007 §8) ve katlanabilir bir
 bileşen tam da gizlenmemesi gereken alanları (riskler, izinler, tahminin
 dayanağı) gizlemenin en kolay yolu olurdu. Böylece CSP inline-style hash
 riski (A1-R1) yeniden değerlendirilmedi ve tarayıcı QA borcu artmadı.
+
+**Paket H2 de hiçbir bileşen eklemedi; küme 11'de kaldı.** Görev yüzeyi ve
+Activity Desk `Card` + `Alert` + `Separator` + `Button` + `Checkbox` +
+`TextField`/`Label`/`Input`/`TextArea` ve `StatusPill` üzerinden `Chip` ile
+kuruldu. Bir `Table` istenmedi: her çalışma satırının altında plan özeti, dört
+alan, adım listesi, dört onay ve üç kontrol vardır ve bunlar bir hücreye
+sığmaz. Böylece CSP inline-style hash riski (A1-R1) yeniden değerlendirilmedi
+ve tarayıcı QA borcu artmadı.
 
 **Paket E hiçbir bileşen eklemedi; küme 11'de kaldı.** Kanıt defteri
 `Card` + `Alert` + `Separator` + `Button` + `Checkbox` ve `StatusPill`
@@ -832,3 +858,240 @@ tamamına** uygular: "dogrulanmis itibar", "itibar puani", "uygunluk puani",
 - Üçüncü taraf bir skor, sıralama veya uygunluk göstergesi.
 - Tarayıcı depolaması: seçilen odalar, seçilen aday ve tarama sonucu yalnız
   React state'tedir (SI-24).
+
+## 13. Gorevler (Paket H2)
+
+Bölüm `src/pages/TasksPage.tsx` → `components/tasks/TasksPanel.tsx`. Akış tek
+yönlüdür ve her adımı kullanıcı başlatır:
+
+> görevi seç → durumu ve dört alanı oku → plan yaz (çalıştırmaz) → dört onay →
+> çalıştır → durdur / devam et
+
+### 13.1 Kontrol tablosu
+
+| Kontrol | Çağrı | Zaman aşımı | Pending etiketi | Hata |
+|---|---|---|---|---|
+| (mount) | `fetchAgentSurface` `GET /api/tasks/surface` + `fetchTasks` `GET /api/tasks` | 15 sn (varsayılan) | "Gorev yuzeyi okunuyor..." | `ErrorRegion` + "Yeniden dene" |
+| Görev seçimi (radio) | `fetchTaskRuns` `GET /api/tasks/{id}/runs` | 15 sn | (radio devre dışı) | `ErrorRegion`, retry yok |
+| Durum düğmeleri (5) | `transitionTask` `POST /transition` | 15 sn | (düğmeler devre dışı) | `ErrorRegion`, retry yok |
+| Plani kaydet (calistirmaz) | `planTaskRun` `POST /runs` | 15 sn | "Kaydediliyor..." | `ErrorRegion`, retry yok |
+| Onayli plani calistir | `startTaskRun` `POST /runs/{id}/start` | **150 sn** | "Calistiriliyor..." | `ErrorRegion`, retry yok |
+| Durdur | `stopTaskRun` `POST /runs/{id}/stop` | 15 sn | "Durduruluyor..." | `ErrorRegion`, retry yok |
+| Devam et | `resumeTaskRun` `POST /runs/{id}/resume` | **150 sn** | "Surduruluyor..." | `ErrorRegion`, retry yok |
+
+Başlatma ve devam etme zaman aşımı uzundur çünkü **sunucu isteği açık tutar**:
+arkada zamanlayıcı ve arka plan görevi yoktur (SI-272), çalışma isteğin kendi
+içinde yürütülür. Sunucunun kendi duvar saati tavanı 120 saniyedir
+(`AgentCeilingStatus.max_wall_clock_seconds`); 150 000 ms bunun üstünde
+durur. Daha kısa bir süre, sunucunun hâlâ yürüttüğü bir çalışmayı yarıda
+bırakıp `timeout` — yani **yerel servis hakkında** bir iddia — raporlar ve asıl
+cevap olan adım adım kaydı çöpe atar.
+
+Çift tıklama koruması yedi çağrının yedisinde de aynı: tek bir `busy` durumu
+tutulur, `busy !== null` iken hiçbir eylem başlamaz ve düğmeler `isDisabled`
+olur (§1.4). Test: `TasksPanel.test.tsx::does not start a second run while the
+first start is in flight`.
+
+### 13.2 Dürüstlük yüzeyi
+
+Bu paketin asıl işi budur. Hepsi **koşulsuz** ve sonuç beklemeden ekrandadır:
+
+| Ne | Nerede | Test kimliği |
+|---|---|---|
+| `execution_unavailable` nedeni, makine kodu olarak | "Yurutme durumu" `Alert` başlığının altında | `tasks-execution-reason` |
+| Backend'in kendi gerekçe cümlesi (izolasyon ürünün kurulumunun parçası değil) | aynı `Alert` | `tasks-execution-detail` |
+| Ölçülen envanter: Docker **var** ve `dayanildi mi: hayir`; `not_measured` ≠ `absent` | aynı bölüm, satır satır | `tasks-execution-inventory` |
+| "Çalıştırılmamış kod test edilmiş sayılmaz" | aynı bölüm | `tasks-untested` |
+| Model yolunun kapalı olduğu ve **model çıktısı diye bir şey olmadığı** | aynı bölüm | `tasks-model-lane` |
+| Backend'in çalışma dürüstlük cümlesi (`RUN_HONESTY_SENTENCE`) | aynı bölüm | `tasks-honesty` |
+| Test sonucunun `not_implemented` olduğu | seçili çalışma kartı | `tasks-test-result-state` |
+| Neden yayıma hazır sayılamayacağı, backend'in cümlesiyle | aynı kart | `tasks-test-result-detail` |
+| "Yayima hazir degil" + bekleyen alanlar | görev ayrıntısı | `tasks-publish-state` |
+| Bütçe birimleri ve tavan | "Butce ve tavan" | `tasks-budget-units` |
+| **Reddedilen birimler** (`token`, `currency`) ve gerekçesi | aynı bölüm | `tasks-budget-refused-units`, `tasks-budget-refused-detail` |
+| "Agent kendi butcesini yukseltemez" | aynı bölüm, `StatusPill` | (metin) |
+| Güven sınırı: erişemedikleri ve yapamadıkları, **liste hâlinde** | "Guven siniri" | `tasks-trust-boundary` |
+| Kesilen çalışmaların yalnız listelendiği, açılışta otomatik devam olmadığı | "Kesilen calismalar" | `tasks-interrupted` |
+| Durdurmanın ne yaptığı (`STOP_HONESTY_SENTENCE`) | her çalışma kartı, **düğmeye basılmadan önce** | `tasks-stop-statement-<run>` |
+| Devamın onaylı kapsamda kaldığı ve çökme sonrası otomatik devam olmadığı | her çalışma kartı | `tasks-resume-statement-<run>` |
+
+**"Yayima hazir" rozeti yoktur.** Test bütün belgeyi tarar: metni sadece
+`yayima hazir` / `hazir` / `ready_to_publish` olan tek bir öğe bile
+bulunmamalıdır (`TasksPanel.test.tsx::reports the test result as
+not_implemented and shows no publish-ready badge`, ve aynısı Playwright
+tarafında `agent.spec.ts` içinde gerçek DOM üzerinden).
+
+`ready_to_publish` alanı yine de **çizilir** — ama bir rozet olarak değil,
+"Yayima hazir degil. Bekleyen alanlar: …" cümlesi olarak. Alanın kendisi
+backend'de üç ayrı doğrulamadan türetilir ve istenemez (SI-222).
+
+### 13.3 Dört alan asla tek bir boolean'a inmez
+
+Görev ayrıntısında dört alan dört ayrı `li` içinde, her biri kendi durumu ve
+kendi gerekçesiyle çizilir: `tasks-field-task_outcome`,
+`tasks-field-test_result`, `tasks-field-user_acceptance`,
+`tasks-field-public_share`. Test yalnız "hepsi var" demiyor; **hiçbirinin
+diğerini içermediğini** de ölçüyor, yani ayrım yapısal.
+
+Durum etiketleri: `dogrulandi` / `engelli` / `uygulanmadi`. Üçüncüsü bir boşluk
+değil bir değerdir: yapılmamış bir gereksinim asla geçmiş sayılmaz ve bir ürün
+eksiği bir kullanıcı hatası gibi gösterilmez.
+
+### 13.4 Onay akışı
+
+Bir plan **dört ayrı onay** ister ve dördü de işaretlenmeden "Onayli plani
+calistir" düğmesi `isDisabled` kalır:
+
+1. plan (adımlar, sözü verilen çıktılar, başarı ölçütü),
+2. veri paylaşımı (yalnız onaylanmış girdi okunur, hiçbir şey dışarı gitmez),
+3. çalışma alanı (dosyalar yalnız bu görevin alanında oluşur),
+4. bütçe (tavan aşılırsa çalışma durur).
+
+**Onaylar bir oturuma değil bir plana aittir.** Kod bunu bir hatırlatmayla
+değil yapısal olarak sağlıyor: onay durumu bir `run id` ile anahtarlanır, ve
+farklı bir plan **yeni bir çalışmadır** (backend plan düzenlemeye izin vermez,
+ADR-0008 §5.1). Dolayısıyla yeniden planlamak onayları "sıfırlamaz" — yeni
+çalışma zaten onaysız doğar. Test:
+`TasksPanel.test.tsx::says a change of scope needs a new approval, and a new
+plan is unapproved`.
+
+Kapsam içindeki küçük ve güvenli dosya işlemleri için adım adım yeniden onay
+istenmez; bu, ekranda `tasks-scope-change-<run>` satırında yazılıdır.
+
+### 13.5 Durdur, devam ve çökme sonrası
+
+- **Durdur** yalnız `running` fazında etkindir ve sonraki araç çağrısını
+  engeller. Başlamış bir çağrı kendi adımını bitirir; geç dönen sonuç
+  kaydedilmez ve ürettiği dosya çalışma alanından kaldırılır — bu, adımın
+  `atlandi` fazı ve backend'in kendi cümlesiyle ekranda görünür. Test:
+  `TasksPanel.test.tsx::stops a run, and shows that the late result produced no
+  side effect`.
+- **Devam et** yalnız `paused` fazında ve **yalnız dört onay verilmişken**
+  etkindir; onaylı kapsama yeni adım eklemez.
+- **Çökme sonrası otomatik devam yoktur.** `interrupted_runs` yalnızca
+  listelenir (`resumed_any` tipi zaten `false`), ve ekran bunu boş listede bile
+  yazar — bir uyarının yalnızca kötü bir şey olduğunda görünmesi, o uyarıyı
+  kimsenin okumadığı bir uyarı yapardı.
+
+### 13.6 Plan yazmak çalıştırmak değildir
+
+Plan bestecisi kayıtlı araç registry'sinden bir araç seçtirir, aracın
+**tiplenmiş parametrelerini** alan alan sorar, adımı taslağa ekler; sonra söz
+verilen çıktılar ve başarı ölçütü yazılır. "Plani kaydet (calistirmaz)"
+yalnızca `POST /runs` yapar. Çalıştırmak ayrı bir istektir — besteci'nin iki
+onay kalıbının aynısı (ADR-0002 §2).
+
+Registry'de `path` ve `url` tipinde parametre yoktur: bir araca adres
+verilemez. Ekranda gösterilen parametre tipleri bunu doğrudan gösterir
+(`text`, `file_name`, `digest`, `json_text`).
+
+### 13.7 Bu bölümde bilerek olmayanlar
+
+- Kod veya kabuk çalıştıran bir kontrol; böyle bir uç nokta da yok.
+- Bir sonucu "test edildi" veya "kabul edildi" yapan bir kontrol. Kanıt
+  alanları onları gerçekten üretenden yazılır, bir POST gövdesinden değil.
+- `running` / `paused` durumuna doğrudan geçiren bir düğme: onlara ancak plan
+  yazıldıktan sonra çalışma işlemleriyle gidilir.
+- Plan düzenleme: farklı bir plan yeni bir çalışmadır.
+- Zamanlayıcı, otomatik yenileme, ilerleme çubuğu.
+- Tarayıcı depolaması: seçilen görev, taslak plan ve onaylar yalnız React
+  state'tedir (SI-24). İki test ölçer: çalışma anında `setItem` çağrılmaz, ve
+  bölümün kaynak dosyalarında depolama API'si ile
+  `setInterval`/`setTimeout`/`requestAnimationFrame` **hiç geçmez**.
+
+---
+
+## 14. Aktivite (Paket H2)
+
+Bölüm `src/pages/ActivityPage.tsx` → `components/activity/ActivityPanel.tsx`.
+
+### 14.1 Kontrol tablosu
+
+| Kontrol | Çağrı | Zaman aşımı | Pending etiketi | Hata |
+|---|---|---|---|---|
+| (mount) | `fetchActivity("")` `GET /api/activity` | 15 sn | "Aktivite akisi okunuyor..." | `ErrorRegion` + "Yeniden dene" |
+| Akisi oku | `fetchActivity(runId)` `GET /api/activity?run_id=…` | 15 sn | "Okunuyor..." | `ErrorRegion` + "Yeniden dene" |
+| Filtreyi kaldir | `fetchActivity("")` | 15 sn | "Okunuyor..." | aynı |
+| Kapsamdaki kayitlari sil | `deleteActivity(runId)` `POST /api/activity/delete` | 15 sn | "Siliniyor..." | `ErrorRegion`, retry yok |
+
+`run_id` bu uç noktanın kabul ettiği **tek** daraltmadır ve bir sütunla eşitlik
+için karşılaştırılır; bir yola, bir ada veya bir adrese dönüşmez.
+
+### 14.2 Beş olay türü beş etikettir
+
+Zaman çizelgesi on dört olay türünü ayırır ve hiçbirini ortak bir "adım"
+rozetine indirmez. Beşi bu paketin asıl sınavıdır:
+
+| Olay | Etiket | Test kimliği |
+|---|---|---|
+| `run_planned` | "Planlandi" | `activity-action-run_planned` |
+| `tool_called` | "Arac cagrisi yapildi" | `activity-action-tool_called` |
+| `artifact_produced` | "Cikti olusturuldu" | `activity-action-artifact_produced` |
+| `check_recorded` | "Denetim kaydedildi" | `activity-action-check_recorded` |
+| `approval_awaited` | "Onay bekleniyor" | `activity-action-approval_awaited` |
+
+Test yalnız "beşi de var" demiyor: beş etiketin **birbirinden farklı** olduğunu
+(`new Set(labels).size === 5`) ölçüyor, çünkü hepsi "adim" yazsaydı "hepsi
+var" iddiası yine geçerdi.
+
+"Arac cagrisi yapildi" ifadesi seçilidir: "kod çalıştırıldı" ve "komut
+çalıştırıldı" backend'in yasaklı ifade listesindedir ve bu sürümde yalan
+olurdu. Aynı sebeple `check_recorded` "test geçti" değil "Denetim
+kaydedildi"dir.
+
+`approval_awaited` olayının sonucu `pending`'dir, `ok` değil; ekranda da
+"bekliyor" rozetiyle çizilir ve "tamam" rozetiyle **çizilmez**.
+
+### 14.3 Satırın taşıdıkları
+
+UTC anı **ve** okuyanın yerel saati (ikisi birden, biri diğerinin yerine
+geçmeden), çalışma ve görev kimliği, aktör (`Kullanici` / `Station
+kosucusu` — `model` diye bir aktör yoktur), süre (ms), çıktı ve denetim
+özetleri, ve güvenli hata/olay özeti.
+
+Özet metni `<pre>` içinde, düz metin olarak, **tıklanamaz** biçimde gösterilir:
+HTML olarak render edilmez, otomatik bağlantıya çevrilmez ve satırda hiç `<a>`
+yoktur (SI-54). Vitest ve Playwright ayrı ayrı ölçer.
+
+### 14.4 Sahte ilerleme yoktur
+
+Ekranda ilerleme çubuğu, yüzde ve sürekli dönen bir animasyon yoktur; test
+`role="progressbar"`, `<progress>` ve `animate-`/`spinner` sınıflarını gerçek
+DOM üzerinde sayar ve sıfır bekler. Görünen her satır backend'in kaydettiği bir
+olaydır; iki olay arasında bir ilerleme uydurulmaz. Cümlenin kendisi de
+ekrandadır (`activity-no-progress`).
+
+**Akış kendiliğinden yenilenmez.** Zamanlayıcı, long-poll ve otomatik yenileme
+yoktur; yeni satırları görmek için "Akisi oku" gerekir (SI-272). İki testle
+sabitlenir: çalışma anında hiçbir `setInterval` kurulmaz, ve bölümün kaynak
+dosyaları taranıp zamanlayıcı ve depolama API'lerinin hiç geçmediği doğrulanır.
+
+### 14.5 Modelin muhakemesi yazılmaz
+
+`activity-no-model` satırı bunu bir temizleme olarak değil, bir **yokluk**
+olarak yazar: bu satırların geldiği tabloda öyle bir sütun yoktur ve üretecek
+bir model yolu da yoktur. Şemada `prompt`, `completion`, `reasoning` veya ham
+sağlayıcı yanıtı için alan bulunmaz.
+
+### 14.6 İki katman ve silme
+
+- Saklama sınırı (`retained_events = 500`), toplam olay sayısı ve **zincirin
+  atıfta bulunduğu satır sayısı** ayrı ayrı gösterilir (`activity-retention`).
+- Zincirin atıfta bulunduğu satırlar **silinemez ve budanamaz**; bu kural silme
+  düğmesinden önce ekranda yazar (`activity-delete-rule`) ve satırın kendisinde
+  "Zincir bu satira atifta bulunuyor" rozetiyle görünür.
+- Silme **açık bir onay** ister (checkbox) ve sonucu **iki ayrı sayı** olarak
+  raporlar: silinen satır ve zincir yüzünden korunan satır. İkisi asla
+  toplanmaz — "on iki silindi" ile "üçü zincir atıfta bulunduğu için kaldı"
+  farklı sorulara cevaptır ve tek bir toplam, çizelgenin neden boşalmadığını
+  açıklayan yarıyı gizlerdi.
+- Silme işleminin kendisi audit zincirine bir olay olarak yazılır
+  (`recorded_in_audit_chain` tipi `true`), ve ekran bunu söyler.
+
+### 14.7 Bu bölümde bilerek olmayanlar
+
+- Otomatik yenileme, zamanlayıcı, long-poll, ilerleme göstergesi.
+- Modelin muhakemesi, istem/yanıt metni, ham sağlayıcı payload'ı.
+- Bir olayı "başarılı iş" diye özetleyen tek bir rozet.
+- Zincirin atıfta bulunduğu bir satırı silen bir yol.
+- Tarayıcı depolaması: filtre ve akış yalnız React state'tedir (SI-24).

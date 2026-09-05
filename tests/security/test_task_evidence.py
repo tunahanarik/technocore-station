@@ -877,11 +877,19 @@ def test_a_scan_with_no_database_is_an_empty_report_rather_than_a_crash() -> Non
 
 
 def test_the_task_layer_opens_no_budget_field(api_source_root: Path) -> None:
-    """No budget column, no budget attribute, no budget arithmetic.
+    """No budget column, no budget attribute, no budget arithmetic - **here**.
 
-    The requirement's budget half is deferred to G/H2 and recorded visibly
-    (``docs/task-modules.md``, ``PROJECT_STATUS.md``). What must not happen is
-    a field that looks like one and is never enforced.
+    Package H2 built a ceiling, and this test is what decided *where*.
+    ``station_api.agent.budget`` owns it, denominated in tool calls,
+    wall-clock seconds and a concurrency of one; the task layer keeps none of
+    it, so SI-225 stays literally true rather than becoming a sentence about
+    where the field moved (ADR-0008 4).
+
+    The scan is unchanged and deliberately so. It is stricter than it needs to
+    be - it refuses the *word* in an identifier, not just a column - and that
+    strictness is what makes "the run carries a ceiling, a task does not" a
+    structural boundary rather than a naming convention. What must not happen
+    is a field on a task that looks like a limit and enforces nothing.
     """
     from station_api.db.models import TaskEvidenceOutcome, TaskRecord
 
@@ -912,16 +920,32 @@ def test_the_task_layer_opens_no_budget_field(api_source_root: Path) -> None:
     assert isinstance(BUDGET_DETAIL, str)
 
 
-def test_the_deferred_budget_is_stated_rather_than_dropped(
+def test_the_task_layer_states_where_the_ceiling_lives_rather_than_implying_none(
     service: TaskService,
 ) -> None:
-    """Visible, the way ``note_lane_available`` is visible on the composer."""
+    """Visible, the way ``note_lane_available`` is visible on the composer.
+
+    The assertion on the sentence moved with the fact it describes. Under
+    Package F the sentence said the budget half was "deferred to G and H2",
+    and that was true; H2 built it, so leaving the deferral notice in place
+    would have been a product telling a user to wait for something that had
+    already shipped somewhere else (ADR-0008 4).
+
+    What did **not** move is ``budget_available``. It is still
+    ``Literal[False]`` on the task, because a task still carries no ceiling -
+    the run does. So this test now pins two separate claims where it used to
+    pin one: the task has no ceiling, and the user is told where the ceiling
+    actually is instead of being left to conclude there is none.
+    """
     view = _open(service)
     payload = to_task_status(view, service.gate(view.id))
 
     assert payload.budget_available is False
     assert payload.budget_detail == BUDGET_DETAIL
-    assert "Paket G ve H2'ye ertelenmistir" in payload.budget_detail
+    assert "Gorev katmaninda butce alani yoktur" in payload.budget_detail
+    assert "arac cagrisi sayisi" in payload.budget_detail
+    # The units this product refuses to count are named, not merely absent.
+    assert "Token ve para birimi sayilmaz" in payload.budget_detail
     assert payload.public_share_available is False
 
 
