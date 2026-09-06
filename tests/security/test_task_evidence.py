@@ -112,15 +112,236 @@ TEST_ONLY_EVIDENCE_ID = "0123456789abcdef0123456789abcdef"
 
 #: The trees the "no budget field" scan covers.
 #:
-#: Package F's two, plus the ``proof`` package H3 added. The third name is
-#: load-bearing rather than tidy: ADR-0009 5 records that a new package is
-#: outside every boundary scan until somebody widens one, and a proof
-#: workspace is exactly where a field called ``estimated_cost`` would look
-#: natural. A scan that still read only ``modules`` and ``tasks`` would have
-#: declared "the task layer opens no budget field" while the newest code was
-#: free to open one - SI-225 silently holed on the commit that made the hole
-#: reachable, which is H2's ``PACKAGE_F_DIRS`` lesson repeated.
-BUDGET_SCANNED_DIRS = ("modules", "tasks", "proof")
+#: This was three names - ``modules``, ``tasks``, ``proof`` - and the comment
+#: that used to sit here said, correctly, that H3 had to add the third because
+#: "a new package is outside every boundary scan until somebody widens one".
+#: It then left the scan in exactly the state it was describing. ADR-0012
+#: opened the model lane and added ``planner`` and ``opencode``; both were
+#: outside this rule the moment they existed, and **it was measured**: a file
+#: carrying ``estimated_budget = 10`` and ``run.budget_left``, planted in
+#: ``station_api/planner``, turned nothing in this file red.
+#:
+#: So the tuple stopped being the thing anybody trusts. It is now the
+#: *complement* of :data:`PACKAGES_OUTSIDE_THE_BUDGET_SCAN`, and
+#: :func:`test_every_package_is_scanned_or_is_a_written_down_budget_exception`
+#: walks ``apps/station-api/src/station_api`` rather than reading this tuple.
+#: A nineteenth package cannot be forgotten: it is either added here or
+#: written down there with the reason a budget-shaped name in it is not the
+#: defect SI-225 is about. That is the shape ``test_task_states.py`` settled
+#: on for ``STATE_WRITER_DIRS``, used here for the same reason.
+#:
+#: Written out rather than derived from the exception dict, deliberately: a
+#: tuple computed from the exceptions would agree with them by construction,
+#: and the walk would be comparing the tree against itself.
+BUDGET_SCANNED_DIRS = (
+    "cli",
+    "compose",
+    "conformance",
+    "db",
+    "identity",
+    "modules",
+    "opencode",
+    "planner",
+    "proof",
+    "recovery",
+    "security",
+    "tasks",
+    "technocore",
+    "vault",
+)
+
+#: Every loose module directly under ``station_api``, written out.
+#:
+#: The tuple above stopped being a short list of the trees somebody thought
+#: of, and the comment on it explains why at length. It then left the scan
+#: unit as the *package*, so the fourteen ``.py`` files sitting directly in
+#: ``station_api`` were outside SI-225 entirely - and **it was measured**: a
+#: loose module carrying ``estimated_budget = 10`` and ``run.budget_left``
+#: left every assertion in this file green.
+#:
+#: There is no whole-module equivalent of
+#: :data:`PACKAGES_OUTSIDE_THE_BUDGET_SCAN`, deliberately. A module is one
+#: file, and exempting a file would hand it every budget-shaped name at once.
+#: What a module gets instead is :data:`BUDGET_NAMES_ONE_MODULE_MAY_USE` -
+#: named allowances, the shape ``opencode`` and ``planner`` already have.
+#:
+#: Written out rather than globbed, for the same reason as the tuple above:
+#: :func:`test_every_loose_module_is_scanned_and_every_scanned_module_exists`
+#: walks the tree and compares it against this, and a tuple derived from
+#: ``glob`` would agree with whatever it found.
+BUDGET_SCANNED_MODULES = (
+    "__init__.py",
+    "__main__.py",
+    "app.py",
+    "config.py",
+    "dependencies.py",
+    "digests.py",
+    "downloads.py",
+    "launcher.py",
+    "logging_setup.py",
+    "resources.py",
+    "schemas.py",
+    "seed_import.py",
+    "single_instance.py",
+    "strict_json.py",
+)
+
+#: Budget-shaped names one loose module may use, and only that module.
+#:
+#: ``schemas.py`` is the file the ``routes`` exemption above has always been
+#: about - it says, in so many words, that ``budget_available`` and
+#: ``budget_detail`` "are response members declared in ``schemas.py``". The
+#: reason was written for the package that serialises them and the file that
+#: declares them was outside the scan, which is the tenth instance of this
+#: repository's signature defect in miniature: the exemption named the right
+#: file and covered the wrong one.
+#:
+#: Scoped to the three names rather than to the module, so a fourth
+#: budget-shaped member - ``budget_left``, ``budget_remaining``, anything that
+#: could carry a number - is red in the same file. Each is a declared absence
+#: whose *value* is checked by
+#: :func:`test_the_declared_absences_are_still_absences`, which is what keeps
+#: a permitted name from quietly becoming a permitted field.
+BUDGET_NAMES_ONE_MODULE_MAY_USE: dict[str, dict[str, str]] = {
+    "schemas.py": {
+        "budget_available": (
+            "``Literal[False]`` on the write-gate and spending-context "
+            "responses. SI-225's second half requires the user to be told "
+            "where the ceiling is instead of being left to conclude there is "
+            "none, and the annotation is what stops the answer from becoming "
+            "a number later."
+        ),
+        "budget_detail": (
+            "The sentence beside it, carrying ``BUDGET_DETAIL`` - the one "
+            "name ``_ALLOWED_BUDGET_NAMES`` permits everywhere. A string "
+            "saying where the ceiling lives; nothing reads a limit out of it."
+        ),
+        "budget_state": (
+            "``Literal['not_implemented']`` on the scanned-candidate "
+            "response, the wire half of ``workscan.candidates.BUDGET_STATE``. "
+            "A declared absence in the three-valued verdict, so a missing "
+            "budget never serialises as an approved one."
+        ),
+    },
+}
+
+#: Every other package under ``station_api``, one by one, with the reason a
+#: budget-shaped name there is not the field SI-225 forbids.
+#:
+#: A **counted list, not a pattern**, and both directions are failures: a
+#: package that is neither scanned nor written down is the growth case, and a
+#: package written down here that is now scanned, or that has stopped
+#: existing, is the staleness case.
+#:
+#: Every reason below reduces to the same sentence - *the ceiling lives in
+#: ``station_api.agent.budget`` and this package names it rather than opening
+#: one* - so the sentence is pinned mechanically as well as written down, by
+#: :func:`test_the_ceiling_is_named_by_exactly_the_modules_written_down_here`.
+PACKAGES_OUTSIDE_THE_BUDGET_SCAN: dict[str, str] = {
+    "agent": (
+        "Where the ceiling lives, on purpose (ADR-0008 4, IMP-410). "
+        "``budget.py`` declares ``CEILING`` and ``BUDGET_UNITS``, and the "
+        "runner reads them before every tool call. Scanning it would report "
+        "the one ceiling this product has as a violation, and the way that "
+        "gets fixed under time pressure is by loosening the assertion."
+    ),
+    "evidence": (
+        "The audit trail. ``audit.py`` carries ``AuditEventName."
+        "BUDGET_EXHAUSTED``, which is the *name of a refusal that already "
+        "happened* - the agent hit the ceiling and the event says so. A "
+        "record of a refusal is the opposite of a field that pretends a "
+        "budget exists, and a product that could not name the refusal would "
+        "have to report it as something else."
+    ),
+    "routes": (
+        "The wire. ``budget_available``, ``budget_detail`` and "
+        "``BUDGET_UNITS`` cross the HTTP surface because SI-225's second half "
+        "requires it: the user is told *where* the ceiling is instead of "
+        "being left to conclude there is none. These are response members "
+        "declared in ``schemas.py``, not columns; the stored half is pinned "
+        "by the column assertion in "
+        "``test_the_task_layer_opens_no_budget_field``, which reads "
+        "``TaskRecord`` and ``TaskEvidenceOutcome`` directly and is not "
+        "scoped to any directory."
+    ),
+    "workscan": (
+        "The same wire sentence, one layer earlier. ``candidates.py`` puts "
+        "``budget_state`` and ``budget_detail`` on a scanned candidate so a "
+        "room's work item carries the same honest answer a task does, and "
+        "``BUDGET_STATE`` is ``CheckState.NOT_IMPLEMENTED`` - a declared "
+        "absence, checked as a value by "
+        "``test_the_declared_absences_are_still_absences``. It reads no "
+        "number from anywhere: it does not import the ceiling at all, which "
+        "is why it is absent from "
+        ":data:`MODULES_THAT_NAME_THE_CEILING` below."
+    ),
+}
+
+#: Budget-shaped names one scanned package may use, and only that package.
+#:
+#: The alternative was to leave ``planner`` and ``opencode`` outside the scan
+#: entirely, which is the defect this file is being repaired for. The
+#: alternative after that was to add these names to
+#: :data:`_ALLOWED_BUDGET_NAMES`, which would have granted them to ``tasks``
+#: and ``modules`` as well - a real weakening of the oldest half of the rule
+#: to widen the newest. Scoping the allowance to the package that earns it
+#: gives up neither.
+#:
+#: Every entry is checked in both directions by
+#: :func:`test_every_package_budget_allowance_is_used_and_is_scoped`: a name
+#: allowed here that the package does not use is a stale allowance, and it is
+#: reported rather than sitting open for whoever needs it next.
+BUDGET_NAMES_ONE_PACKAGE_MAY_USE: dict[str, dict[str, str]] = {
+    "opencode": {
+        "BUDGET_AVAILABLE": (
+            "``quota.py``'s ``Final[Literal[False]]``. It is the same kind of "
+            "thing ``BUDGET_DETAIL`` is - a constant declaring that there is "
+            "no budget here - and its type makes it unable to become one. "
+            "``test_the_declared_absences_are_still_absences`` reads the "
+            "value rather than the name."
+        ),
+    },
+    "planner": {
+        "budget": (
+            "The module, bound by ``from station_api.agent import budget``. "
+            "The model lane checks the *same* ``budget.check`` the runner "
+            "uses, before it builds a request, so a refusal costs nothing "
+            "(ADR-0012 3). Importing the one ceiling is the opposite of "
+            "declaring a second one, and "
+            "``test_the_ceiling_is_named_by_exactly_the_modules_written_down"
+            "_here`` pins that this name can only be that module."
+        ),
+        "BUDGET_EXHAUSTED": (
+            "``ProposalOutcome.BUDGET_EXHAUSTED``, a string a turn ends with "
+            "when the model-call ceiling is reached and nothing was sent. An "
+            "outcome name, like the audit event ``evidence`` carries; it "
+            "holds no number and nothing reads a limit out of it."
+        ),
+    },
+}
+
+#: The one module a budget-shaped name in a scanned package may point at, and
+#: every module in the tree that imports it. Written out so the reasons above
+#: cannot go stale quietly: each of them says "this package names the ceiling
+#: rather than opening one", and a fourth importer - or a scanned package that
+#: started importing it without an allowance - fails here before anybody
+#: re-reads the prose. This is the ``TaskRecord`` pin from
+#: ``test_task_states.py``, applied to the ceiling instead of the column.
+#:
+#: Three, not four, and the difference is the point of writing it down. The
+#: first draft of this tuple listed ``workscan/service.py`` because a coarser
+#: probe matched ``station_api.agent`` and that package imports
+#: ``agent.workspace``. The pin failed on its first run and the *reason above*
+#: was wrong, not the tuple: ``workscan`` declares its own
+#: ``not_implemented`` verdict and its own sentence and reads no ceiling at
+#: all. An exemption whose justification nothing checks is how a list of
+#: reasons decays into a list of names, and this is that check working.
+THE_CEILING_MODULE = "station_api.agent.budget"
+MODULES_THAT_NAME_THE_CEILING = (
+    "agent/service.py",
+    "planner/service.py",
+    "routes/agent.py",
+)
 
 
 @pytest.fixture
@@ -1080,28 +1301,118 @@ _ALLOWED_BUDGET_NAMES = frozenset({"BUDGET_DETAIL"})
 
 
 def _budget_scanned_files(root: Path) -> list[Path]:
-    """Every file the budget scan opens, so "it scanned nothing" is visible."""
+    """Every file the budget scan opens, so "it scanned nothing" is visible.
+
+    Two kinds of scan unit, because the tree has two: packages, and the loose
+    modules that sit beside them. ``is_file`` rather than a bare append so a
+    throwaway tree holding only packages still scans cleanly - the tuple is
+    checked against the real tree by
+    :func:`test_every_loose_module_is_scanned_and_every_scanned_module_exists`.
+    """
     found: list[Path] = []
     for directory in BUDGET_SCANNED_DIRS:
         found.extend((root / "station_api" / directory).rglob("*.py"))
+    found.extend(
+        root / "station_api" / name
+        for name in BUDGET_SCANNED_MODULES
+        if (root / "station_api" / name).is_file()
+    )
     return sorted(found)
 
 
+def _package_of(root: Path, path: Path) -> str:
+    """The scan unit one scanned file belongs to.
+
+    A package name for a file inside one, and the file's own name for a loose
+    module: ``station_api/tasks/service.py`` is ``tasks``,
+    ``station_api/schemas.py`` is ``schemas.py``. One helper for both, because
+    an allowance is looked up the same way whichever kind of unit granted it.
+    """
+    return path.relative_to(root / "station_api").parts[0]
+
+
 def _budget_offenders(root: Path) -> list[str]:
-    """Every budget-shaped identifier in the scanned trees."""
+    """Every budget-shaped identifier in the scanned trees.
+
+    ``_ALLOWED_BUDGET_NAMES`` applies everywhere;
+    :data:`BUDGET_NAMES_ONE_PACKAGE_MAY_USE` and
+    :data:`BUDGET_NAMES_ONE_MODULE_MAY_USE` add to it for one package or one
+    module only, so widening the scan onto the model lane did not hand the
+    same names to the task layer, and widening it onto the loose modules did
+    not hand ``schemas.py``'s wire members to anybody else.
+    """
     offenders: list[str] = []
     for path in _budget_scanned_files(root):
+        scope = _package_of(root, path)
+        allowed = (
+            _ALLOWED_BUDGET_NAMES
+            | set(BUDGET_NAMES_ONE_PACKAGE_MAY_USE.get(scope, ()))
+            | set(BUDGET_NAMES_ONE_MODULE_MAY_USE.get(scope, ()))
+        )
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.Name)
                 and "budget" in node.id.lower()
-                and node.id not in _ALLOWED_BUDGET_NAMES
+                and node.id not in allowed
             ):
                 offenders.append(f"{path.name}: {node.id}")
-            if isinstance(node, ast.Attribute) and "budget" in node.attr.lower():
+            if (
+                isinstance(node, ast.Attribute)
+                and "budget" in node.attr.lower()
+                and node.attr not in allowed
+            ):
                 offenders.append(f"{path.name}: .{node.attr}")
     return offenders
+
+
+def _packages(api_source_root: Path) -> set[str]:
+    """Every Python package directly under ``station_api``.
+
+    Read off the tree rather than listed, because the whole point of the
+    guard below is that a list is what went wrong. Same helper, same reason,
+    as ``test_task_states.py``'s.
+    """
+    root = api_source_root / "station_api"
+    return {
+        entry.name
+        for entry in root.iterdir()
+        if entry.is_dir() and (entry / "__init__.py").is_file()
+    }
+
+
+def _loose_modules(api_source_root: Path) -> set[str]:
+    """Every ``.py`` file directly under ``station_api``.
+
+    Read off the tree rather than listed, for the reason :func:`_packages`
+    gives: a guard built out of the list cannot see what the list omits.
+    """
+    root = api_source_root / "station_api"
+    return {entry.name for entry in root.glob("*.py") if entry.is_file()}
+
+
+def _modules_importing(api_source_root: Path, module: str) -> list[str]:
+    """Every module under ``station_api`` that imports ``module``, by name."""
+    naming: list[str] = []
+    root = api_source_root / "station_api"
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        imported: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                package, _, member = module.rpartition(".")
+                if node.module == package and any(
+                    alias.name == member for alias in node.names
+                ):
+                    imported.append(module)
+                imported.append(node.module or "")
+        if any(
+            name == module or name.startswith(f"{module}.") for name in imported
+        ):
+            naming.append(str(path.relative_to(root)).replace("\\", "/"))
+    return naming
 
 
 def test_the_task_layer_opens_no_budget_field(api_source_root: Path) -> None:
@@ -1119,11 +1430,27 @@ def test_the_task_layer_opens_no_budget_field(api_source_root: Path) -> None:
     naming convention. What must not happen is a field on a task that looks
     like a limit and enforces nothing.
 
-    What Package H3 changed is the **reach**: :data:`BUDGET_SCANNED_DIRS` now
-    covers ``proof`` as well (ADR-0009 5). The rule was scoped to two
-    directories, so the newest package was exempt from it by construction, and
-    the exemption would have been invisible - a passing test over the wrong
-    tree looks exactly like a passing test.
+    What changed after H3 is the **reach**, and it changed because the H3
+    version of this paragraph described the defect and then shipped it. It
+    said, correctly, that a rule scoped to two directories left the newest
+    package exempt by construction and that the exemption would be invisible.
+    It then widened the tuple by one name and left the next package to
+    discover the same thing. ADR-0012 added two - ``planner`` and
+    ``opencode`` - and the hole was measured rather than argued: a file
+    carrying ``estimated_budget = 10`` and ``run.budget_left``, planted in
+    ``station_api/planner``, left every assertion in this file green.
+
+    So :data:`BUDGET_SCANNED_DIRS` is no longer a short list of the trees
+    somebody thought of. It is every package under ``station_api`` except the
+    four in :data:`PACKAGES_OUTSIDE_THE_BUDGET_SCAN`, each of which says what
+    it does that puts it outside SI-225 - and
+    :func:`test_every_package_is_scanned_or_is_a_written_down_budget_exception`
+    walks the repository to check the pair, rather than reading the tuple this
+    test reads.
+
+    The column half of this test was never scoped to a directory and still is
+    not: it reads ``TaskRecord`` and ``TaskEvidenceOutcome`` and refuses five
+    word fragments in any column name, whatever package declares them.
     """
     from station_api.db.models import TaskEvidenceOutcome, TaskRecord
 
@@ -1167,6 +1494,294 @@ def test_the_budget_scan_reaches_the_proof_package_and_would_fire_there(
     assert any("proof" in str(path) for path in _budget_scanned_files(tmp_path))
 
 
+@pytest.mark.parametrize("package", BUDGET_SCANNED_DIRS)
+def test_a_planted_budget_field_is_reported_from_every_scanned_package(
+    package: str, tmp_path: Path
+) -> None:
+    """The scan, driven once per directory it claims to cover.
+
+    The test above plants in every directory at once and counts, which proves
+    the total and hides which name produced which offender. It also cannot
+    tell a misspelled entry from a clean package: ``rglob`` on a directory
+    that does not exist returns nothing rather than raising, so a name typed
+    wrongly here widens the scan by exactly zero files and every assertion in
+    this file stays green.
+
+    So each name gets its own planted field, in its own throwaway tree, and
+    has to come back. Parametrised over the tuple rather than written out, so
+    a fifteenth directory is driven the day somebody adds it.
+    """
+    for name in BUDGET_SCANNED_DIRS:
+        (tmp_path / "station_api" / name).mkdir(parents=True, exist_ok=True)
+    (tmp_path / "station_api" / package / "planted.py").write_text(
+        "estimated_budget = 10\n", encoding="utf-8"
+    )
+
+    assert _budget_offenders(tmp_path) == ["planted.py: estimated_budget"]
+
+
+def test_every_scanned_budget_directory_is_a_real_package(
+    api_source_root: Path,
+) -> None:
+    """The tuple, checked against the tree it names.
+
+    Half of the failure above: a directory in the tuple that is not a package
+    in the repository is a scan of nothing, reported as a scan.
+    """
+    missing = sorted(set(BUDGET_SCANNED_DIRS) - _packages(api_source_root))
+
+    assert not missing, (
+        "BUDGET_SCANNED_DIRS names directories that are not packages under "
+        f"station_api; the scan opens nothing for them: {missing}"
+    )
+
+
+def test_every_package_is_scanned_or_is_a_written_down_budget_exception(
+    api_source_root: Path,
+) -> None:
+    """The guard that does not read the list it is guarding.
+
+    Every other test in this section iterates :data:`BUDGET_SCANNED_DIRS`, so
+    every one of them is blind in exactly the way that let ``planner`` and
+    ``opencode`` sit outside SI-225 for a whole release. A guard built out of
+    the list cannot see what the list omits, and the plant tests above are
+    that guard: they prove the tuple works and prove nothing at all about what
+    the tuple leaves out.
+
+    This one walks ``apps/station-api/src/station_api`` instead. Every package
+    there is scanned, or it is named in
+    :data:`PACKAGES_OUTSIDE_THE_BUDGET_SCAN` with the reason - and both
+    directions are failures, which is what keeps the pair honest as the tree
+    changes:
+
+    * a package that is neither scanned nor written down is the growth case,
+      and it is this defect refusing to happen for the tenth time;
+    * a package written down as an exception that is now scanned, or that no
+      longer exists, is the staleness case - an exemption nobody re-read, which
+      is how a list of reasons decays into a list of names.
+    """
+    packages = _packages(api_source_root)
+    scanned = set(BUDGET_SCANNED_DIRS)
+    exempt = set(PACKAGES_OUTSIDE_THE_BUDGET_SCAN)
+
+    unexplained = sorted(packages - scanned - exempt)
+    assert not unexplained, (
+        "these packages are outside the budget-field scan and nobody wrote "
+        f"down why: {unexplained}. Add them to BUDGET_SCANNED_DIRS, or to "
+        "PACKAGES_OUTSIDE_THE_BUDGET_SCAN with the reason a budget-shaped "
+        "name there is not the field SI-225 forbids."
+    )
+
+    also_scanned = sorted(exempt & scanned)
+    assert not also_scanned, (
+        "these packages are listed as exceptions but are also scanned; drop "
+        f"them from PACKAGES_OUTSIDE_THE_BUDGET_SCAN: {also_scanned}"
+    )
+
+    gone = sorted(exempt - packages)
+    assert not gone, (
+        "these packages are written down as exceptions but no longer exist; "
+        f"drop them from PACKAGES_OUTSIDE_THE_BUDGET_SCAN: {gone}"
+    )
+
+
+def test_every_package_budget_allowance_is_used_and_is_scoped(
+    api_source_root: Path,
+) -> None:
+    """The per-package allowances, checked in both directions.
+
+    An allowance nobody uses is an allowance sitting open for whoever needs
+    one next, and it reads as a rule while being a permission. So each name
+    has to be found in the package it was granted to, and each package it was
+    granted to has to be one the scan actually opens - an allowance for an
+    exempt package would be a permission inside a directory nothing reads.
+    """
+    for package, names in BUDGET_NAMES_ONE_PACKAGE_MAY_USE.items():
+        assert package in BUDGET_SCANNED_DIRS, (
+            f"{package} has budget-name allowances but is not scanned; an "
+            "allowance in an unscanned package permits nothing and hides "
+            "that it permits nothing"
+        )
+        found: set[str] = set()
+        for path in (api_source_root / "station_api" / package).rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Name):
+                    found.add(node.id)
+                elif isinstance(node, ast.Attribute):
+                    found.add(node.attr)
+        stale = sorted(set(names) - found)
+        assert not stale, (
+            f"{package} no longer uses these allowed budget names, so the "
+            f"allowance is open for nothing: {stale}"
+        )
+        for reason in names.values():
+            assert reason.strip()
+
+
+def test_every_loose_module_is_scanned_and_every_scanned_module_exists(
+    api_source_root: Path,
+) -> None:
+    """The tenth instance, closed on this side too.
+
+    The guard above walks the tree for *directories* and was written because a
+    list cannot see what it omits. It left the same defect one level up: the
+    scan unit was the package, so the fourteen loose ``.py`` files beside them
+    were outside SI-225 altogether, and the file recorded that in a comment
+    rather than checking it. ``schemas.py`` - the file the ``routes``
+    exemption is literally about - was one of them.
+
+    Both directions, for the same reasons the package guard gives:
+
+    * a loose module the tuple does not name is the growth case;
+    * a name in the tuple with no file behind it is the staleness case, and it
+      is quieter here than for packages: :func:`_budget_scanned_files` uses
+      ``is_file`` exactly as ``rglob`` swallows a missing directory, so a
+      misspelling widens the scan by zero files and reports nothing.
+
+    The last assertion is the one that makes the other two mean something: the
+    scan's own file list has to contain every module the tuple names, so a
+    tuple that is right and a scan that opens nothing cannot both pass.
+    """
+    modules = _loose_modules(api_source_root)
+    scanned = set(BUDGET_SCANNED_MODULES)
+
+    unexplained = sorted(modules - scanned)
+    assert not unexplained, (
+        "these loose modules sit directly under station_api and are outside "
+        f"the budget-field scan: {unexplained}. Add them to "
+        "BUDGET_SCANNED_MODULES, and if a budget-shaped name there is not the "
+        "field SI-225 forbids, permit that exact name in "
+        "BUDGET_NAMES_ONE_MODULE_MAY_USE with the reason."
+    )
+
+    gone = sorted(scanned - modules)
+    assert not gone, (
+        "BUDGET_SCANNED_MODULES names modules that no longer exist; the scan "
+        f"opens nothing for them: {gone}"
+    )
+
+    opened = {
+        path.name
+        for path in _budget_scanned_files(api_source_root)
+        if path.parent == api_source_root / "station_api"
+    }
+    assert opened == scanned, sorted(scanned - opened)
+
+
+@pytest.mark.parametrize("module", BUDGET_SCANNED_MODULES)
+def test_a_planted_budget_field_is_reported_from_every_scanned_loose_module(
+    module: str, tmp_path: Path
+) -> None:
+    """The scan, driven once per loose module it claims to cover.
+
+    The package version of this test is what proved
+    :data:`BUDGET_SCANNED_DIRS` was real rather than decorative. This is the
+    same measurement for the fourteen files that version could not see.
+
+    ``estimated_budget`` is outside every allowance ``schemas.py`` holds, so
+    a permission that had widened into a module-shaped exemption fails here
+    rather than passing quietly.
+    """
+    root = tmp_path / "station_api"
+    root.mkdir(parents=True)
+    for name in BUDGET_SCANNED_MODULES:
+        (root / name).write_text("value = 1\n", encoding="utf-8")
+    (root / module).write_text("estimated_budget = 10\n", encoding="utf-8")
+
+    assert _budget_offenders(tmp_path) == [f"{module}: estimated_budget"]
+
+
+def test_every_loose_module_budget_allowance_is_used_and_is_scoped(
+    api_source_root: Path,
+) -> None:
+    """The module allowances, checked the way the package ones are.
+
+    An allowance nobody uses is a permission sitting open for whoever needs
+    one next. So each name has to be found in the module it was granted to,
+    each module has to be one the scan opens, and each reason has to be
+    written down.
+    """
+    for module, names in BUDGET_NAMES_ONE_MODULE_MAY_USE.items():
+        assert module in BUDGET_SCANNED_MODULES, (
+            f"{module} has budget-name allowances but is not scanned; an "
+            "allowance in an unscanned module permits nothing and hides that "
+            "it permits nothing"
+        )
+        path = api_source_root / "station_api" / module
+        assert path.is_file(), module
+        found: set[str] = set()
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                found.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                found.add(node.attr)
+        stale = sorted(set(names) - found)
+        assert not stale, (
+            f"{module} no longer uses these allowed budget names, so the "
+            f"allowance is open for nothing: {stale}"
+        )
+        for reason in names.values():
+            assert reason.strip()
+
+
+def test_the_ceiling_is_named_by_exactly_the_modules_written_down_here(
+    api_source_root: Path,
+) -> None:
+    """The reasons above, held up by something other than the prose.
+
+    Every entry in :data:`PACKAGES_OUTSIDE_THE_BUDGET_SCAN`, and the
+    ``planner`` allowance, reduces to one sentence: *the ceiling lives in*
+    ``station_api.agent.budget`` *and this package names it rather than
+    opening one*. A sentence cannot stop being true loudly, so the mechanical
+    version is asserted here - the module that declares ``CEILING`` is
+    imported by exactly three modules in the whole tree, and every one of them
+    is either the ceiling's own package or written down above.
+
+    A fourth importer, or a scanned package that started importing it without
+    an allowance, fails here long before anybody re-reads the paragraphs.
+
+    Read off the syntax tree rather than by searching the text, for the reason
+    ``test_task_states.py`` gives about ``TaskRecord``: a *comment* naming the
+    module is not a reference to it, and a test that cannot tell the
+    difference teaches people to stop writing the comments.
+    """
+    naming = _modules_importing(api_source_root, THE_CEILING_MODULE)
+
+    assert naming == list(MODULES_THAT_NAME_THE_CEILING)
+
+    accounted = set(PACKAGES_OUTSIDE_THE_BUDGET_SCAN) | set(
+        BUDGET_NAMES_ONE_PACKAGE_MAY_USE
+    )
+    for module in MODULES_THAT_NAME_THE_CEILING:
+        package = module.split("/")[0]
+        assert package in accounted, (
+            f"{module} imports the ceiling but {package} is neither a written "
+            "down budget exception nor a package with an allowance"
+        )
+
+
+def test_the_declared_absences_are_still_absences() -> None:
+    """The three constants the scan lets through, read as values.
+
+    ``BUDGET_DETAIL``, ``opencode.quota.BUDGET_AVAILABLE`` and
+    ``workscan.candidates.BUDGET_STATE`` are permitted or exempted **by
+    name**, and a name is a weak thing to permit: ``BUDGET_AVAILABLE = True``
+    would pass the scan unchanged, and so would a ``BUDGET_STATE`` quietly
+    promoted to ``PASSED``. Each is therefore checked for what it is rather
+    than what it is called - a sentence, a ``False`` its own annotation
+    forbids from becoming anything else, and the three-valued verdict's
+    "nothing was built here".
+    """
+    from station_api.opencode import quota
+    from station_api.workscan.candidates import BUDGET_STATE
+
+    assert quota.BUDGET_AVAILABLE is False
+    assert BUDGET_STATE is CheckState.NOT_IMPLEMENTED
+    assert isinstance(BUDGET_DETAIL, str) and BUDGET_DETAIL.strip()
+
+
 def test_the_task_layer_states_where_the_ceiling_lives_rather_than_implying_none(
     service: TaskService,
 ) -> None:
@@ -1191,8 +1806,16 @@ def test_the_task_layer_states_where_the_ceiling_lives_rather_than_implying_none
     assert payload.budget_detail == BUDGET_DETAIL
     assert "Gorev katmaninda butce alani yoktur" in payload.budget_detail
     assert "arac cagrisi sayisi" in payload.budget_detail
-    # The units this product refuses to count are named, not merely absent.
-    assert "Token ve para birimi sayilmaz" in payload.budget_detail
+    # H4 made the model call a fourth counted unit (ADR-0012 3). The sentence
+    # listed three, which read as a ceiling that does not cover the lane the
+    # same release opened, so the unit is pinned here rather than left to the
+    # next person who compares this text with ``budget.BUDGET_UNITS``.
+    assert "model cagrisi sayisi" in payload.budget_detail
+    # The units this product refuses are named, not merely absent - and the
+    # refusal is now "not as a ceiling" rather than "not at all". The provider
+    # reports usage and cost, both are recorded, and neither bounds a run.
+    assert "Token ve para birimi tavan olarak sayilmaz" in payload.budget_detail
+    assert "tavan yapilmaz" in payload.budget_detail
     # ``public_share_available`` moved from ``Literal[False]`` to a derived
     # boolean when Package H3 made the field fillable (ADR-0009 1). The
     # assertion moved with the fact rather than being deleted.

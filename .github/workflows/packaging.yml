@@ -140,7 +140,7 @@ jobs:
         # bundle on disk, so this is the only place they are ever exercised
         # in their loaded state.
         run: >
-          uv run --directory apps/station-api pytest -q -p no:warnings
+          uv run --directory apps/station-api pytest -p no:warnings
           ../../tests/security/test_frontend_bundle.py
           ../../tests/security/test_packaging_boundary.py
 

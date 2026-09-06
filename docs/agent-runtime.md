@@ -5,9 +5,15 @@ neden böyle olduğunu kaydeder. Bağlayıcı kararlar
 [`decisions/0008-paket-h2-kapsam-kararlari-2026-09-05.md`](decisions/0008-paket-h2-kapsam-kararlari-2026-09-05.md)
 dosyasındadır; burada onların uygulanmış hâli anlatılır.
 
-Tek cümlelik özet: **agent, bir kişinin önceden yazdığı planı, kapalı bir
-registry'den gelen araçlarla, bir tavan altında yürütür. Model çağrısı yoktur,
-kabuk komutu yoktur, keyfi kod yürütmesi yoktur.**
+Tek cümlelik özet: **agent, önceden yazılmış ve bir kişi tarafından
+onaylanmış bir planı, kapalı bir registry'den gelen araçlarla, bir tavan
+altında yürütür. Kabuk komutu yoktur, keyfi kod yürütmesi yoktur.**
+
+> **H4 güncellemesi.** Bu belge "model çağrısı yoktur" diyordu; ADR-0012
+> sözleşmeyi ölçtükten sonra bu cümle yanlış oldu ve düzeltildi. Model
+> çağrısı **vardır** ve planı **model önerebilir** — fakat modelin önerdiği
+> plan, bir kişinin yazdığı planla **aynı** onay akışından geçer ve onaysız
+> çalışmaz. Yürütmeyle ilgili hiçbir değişmez gevşemedi.
 
 ---
 
@@ -86,21 +92,38 @@ bir örnek üzerinde sürülerek doğrulanmıştır
 | `opencode/registry.py` | sağlayıcı uçları + model tablosu |
 | **`agent/tools.py`** | **araç şeması** |
 
-### 2.1 Neden bu uydurma değil
+### 2.1 Neden bu uydurma değildi, ve şimdi neden uydurma değil
 
-Bir sağlayıcının aracı **çağırmak** için kullanacağı tel formatı
-yayımlanmamıştır ve ADR-0005 §1.2 yayımlanmamış bir sözleşmeyi uydurmayı
-yasaklar. Bu yüzden `tool_calls_supported` `Literal[False]` **kalır**,
-`post_completion` prodüksiyonda **çağrılmaz** ve `OUTBOUND_CLIENT_MODULES`
-**beşte** kalır.
+**H2'de:** bir sağlayıcının aracı **çağırmak** için kullanacağı tel formatı
+yayımlanmamıştı ve ADR-0005 §1.2 yayımlanmamış bir sözleşmeyi uydurmayı
+yasaklar. Bu yüzden `tool_calls_supported` `Literal[False]` idi ve
+`post_completion` prodüksiyonda **çağrılmıyordu**. Aracın **kendi şeması**
+ise Station'ındı: adı, tipli parametreleri, izin kapsamı ve tavana maliyeti.
+Hiçbir dış sözleşme iddia edilmiyordu.
 
-Aracın **kendi şeması** ise Station'ındır: adı, tipli parametreleri, izin
-kapsamı ve tavana maliyeti. Hiçbir dış sözleşme iddia etmez.
+**H4'te değişen tek şey olgudur, kural değil.** ADR-0012 sözleşmeyi
+kullanıcının kendi anahtarıyla `chat/completions` ucunda **ölçtü**: istek
+`tools` + `tool_choice` taşıyor, yanıt `finish_reason: "tool_calls"` ve bir
+`tool_calls` dizisi dönüyor, `function.arguments` bir **JSON dizesi**.
+Dolayısıyla:
 
-Sonuç: "model çıktısı doğrudan yürütülmez" boş bir vaat değil, **yapısal bir
-gerçektir** — bu sürümde model çıktısı diye bir şey yoktur. Bir "adım", bir
-kişinin yazdığı, kayıtlı bir araç kimliği ve tipleri denetlenmiş
-argümanlardır.
+* `tool_calls_supported` artık `False` değildir ve **ölçülen** gerçeği
+  söyler. `streaming_supported` **`False` kalır**: akış biçimi ölçülmedi,
+  tahmin de edilmez;
+* `post_completion` **çağrılır** — yalnız `station_api.planner` üzerinden,
+  yalnız kullanıcının isteğiyle, ve model çağrısı sayısı tavanı altında;
+* `OUTBOUND_CLIENT_MODULES` **beşte kalır**. Yeni bir HTTP istemcisi
+  açılmadı; mevcut `opencode/client.py` kullanılıyor.
+
+"Model çıktısı doğrudan yürütülmez" hâlâ **yapısal bir gerçektir** — ama
+artık "model çıktısı diye bir şey yok" diyerek değil. Model bir `tool_calls`
+dizisi önerir; her `function.name` **kapalı registry'de aranır**, her
+argüman **tipli doğrulamadan** geçer, biri bile uymazsa **öneri bütünüyle**
+düşer, ve geriye kalan şey `planned` fazında **kaydedilmiş bir plandır**.
+O planı bir kişi başlatır. Modelin kendi planına onay verebileceği bir kod
+yolu yoktur ve `test_planner_boundary.py` bunu sözdizim ağacından okur.
+
+Ayrıntı: [`model-planning.md`](model-planning.md).
 
 ### 2.2 Sekiz araç
 
@@ -151,20 +174,29 @@ parametre tipi **yoktur**: bir araca adres verilemez.
 | Birim | Değer |
 |---|---|
 | `tool_call_count` | en çok 32 |
+| `model_call_count` | en çok 8 |
 | `wall_clock_seconds` | en çok 120 |
 | `concurrency` | **1** (`Literal[1]`) |
 
-**Token ve para birimi yoktur** — ve bu bir eksiklik değil, gerekçeli bir
-rettir: model yolu kapalı olduğu için sağlayıcıdan gelen bir kullanım değeri
-yoktur, SI-250 de gelmiyorsa sıfır uydurmayı zaten yasaklar. Ölçülemeyen bir
-birimle ifade edilen tavan, birine sayı lazım olduğu ilk anda "sınırsız"a
-yuvarlanır. Reddedilen birimler `refused_units` alanında **adıyla** yayımlanır.
+Birim listesi H4'te **üç değil dört** oldu: model çağrısı sayılabilir hâle
+geldiği anda tavanın bir birimi oldu (ADR-0012 §3).
+
+**Token ve para birimi tavan değildir** — ve bu bir eksiklik değil, gerekçeli
+bir rettir. Gerekçesi de değişti: eskiden "model yolu kapalı, ölçülecek bir
+şey yok" idi; sağlayıcı artık `usage` ve `cost` gönderiyor, ikisi de
+**kaydediliyor**, ve hiçbiri tavan olarak **okunmuyor** — çünkü karşı tarafın
+bildirdiği bir sayıyla ifade edilen tavan, karşı tarafın koyduğu tavandır.
+SI-250 gelmeyen bir değer için sıfır uydurmayı zaten yasaklar. Reddedilen
+birimler `refused_units` alanında **adıyla** yayımlanır.
 
 ### 3.1 Neden `agent/`, `tasks/` değil
 
-`test_the_task_layer_opens_no_budget_field`, `station_api/tasks` ve
-`station_api/modules` ağaçlarında `budget|cost|spend|quota|credit` içeren
-**hiçbir tanımlayıcıya** izin vermez. SI-225'in "görev katmanında bütçe yok"
+`test_the_task_layer_opens_no_budget_field`, `station_api` altındaki
+paketlerin tamamında — tavanın evi `agent` ve teli taşıyan üç paket dışında,
+ki dördü de gerekçesiyle yazılıdır — `budget|cost|spend|quota|credit` içeren
+**hiçbir tanımlayıcıya** izin vermez. Kural H4'te `tasks`+`modules`+`proof`
+üçlüsünden çıkarıldı: üç adlık bir liste, ADR-0012'nin eklediği `planner` ve
+`opencode` paketlerini kapsamıyordu ve kapsamadığını da söylemiyordu. SI-225'in "görev katmanında bütçe yok"
 iddiasının **harfiyen** doğru kalması istendiği için tavan bu pakete girdi;
 görev katmanında bir tane bile alan yoktur. `budget_available` hâlâ
 `Literal[False]`'tır — bir görev tavan taşımaz, **bir çalışma taşır**.

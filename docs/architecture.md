@@ -26,11 +26,24 @@ Uygulanan paketler ve hangi aşamada geldikleri:
 | `station_api/evidence/` | 5 | Kanıt kayıtları, yakalama, HMAC audit zinciri, dışa aktarım |
 | `station_api/modules/` | 6 | **Derleme zamanı modül registry'si** ve dört alanlı kanıt sözlüğü |
 | `station_api/tasks/` | 6 | Görev kayıtları, dokuz durumlu makine, salt-okuma uzlaştırma |
+| `station_api/opencode/` | 7 (G) | Sağlayıcı bağlantısı: kapalı uç/model registry'si, katalog, kimlik bilgisi deposu, protokol adaptörleri |
+| `station_api/workscan/` | 8 (H1) | İş taraması ve aday üretimi |
+| `station_api/agent/` | 9 (H2) | Çalışma alanı, kapalı araç registry'si, koşu tavanı, aktivite; H4'te kabul koşulları registry'si |
+| `station_api/proof/` | 10 (H3) | Kanıt paketi, artifact gövdeleri, tek kullanımlık paylaşım onayı |
+| `station_api/planner/` | H4 | Model plan önerisi. `agent` ve `opencode`'u içe alan, ikisinin de içe **almadığı** üçüncü paket |
+
+Tablo aşama 6'da bitiyordu ve beş paket eksikti; sayı taşımayan bir mimari
+belgesi bayatlamaz ama **paket listesi** bayatlar.
 
 **Secret sınırı:** `station_api/vault/` paketini yalnız `identity` servisi,
-`compose/signer.py`, `evidence` zarfı ve CLI import eder. Gelecekteki bir
-LLM/model adaptörü bu paketi import edemez; sınır paket sınırıdır. Paket F'in
-iki yeni paketi de bu sınıra **dokunmaz** ve bir test bunu doğrular.
+`compose/signer.py`, `evidence` zarfı ve CLI import eder; sınır paket
+sınırıdır. Bu paragraf eskiden "**gelecekteki** bir LLM/model adaptörü bu
+paketi import edemez" diyordu. Adaptör artık gelecekte değil: `opencode/` ve
+`planner/` mevcut, ve kural bir öngörü değil **ölçülen** bir olgu —
+`test_planner_boundary.py::test_the_planner_reaches_no_signer_vault_or_credential_store`
+planner ağacının `vault.service`, `vault.dpapi`, `vault.passphrase` ve
+`vault.paths`'e ulaşmadığını sözdizim ağacından doğrular. Paket F'in iki yeni
+paketi de bu sınıra **dokunmaz** ve bir test bunu doğrular.
 
 ---
 
@@ -234,16 +247,23 @@ sertleştirme başlıklarını taşır.
   `audit_chain_metadata`, `task_record`, `task_evidence_outcome`,
   `task_state_transition`, `opencode_catalog_check`,
   `opencode_credential_metadata`, `opencode_model_snapshot`, `agent_run`,
-  `agent_run_step`, `activity_event`.
+  `agent_run_step`, `activity_event`, `model_call_ledger`.
   Bu liste Paket J'de **sayılarak** düzeltildi: `0001`…`0007` başlığı ile on
   dört ad taşıyordu, `0008` ve `0009`'un altı tablosu hiç eklenmemişti.
 - **Hiçbir tabloda seed veya secret alanı yoktur.** Görev tablolarında bu
   denetim `key` parçasını da kapsar.
-- `0007`, `0008` ve `0009` yalnız ekleme yapar: hiçbir mevcut tablo adı,
-  sütun veya kayıt kimliği değişmedi
+- `0007`, `0008`, `0009`, `0010` ve `0011` yalnız ekleme yapar: hiçbir mevcut
+  tablo adı, sütun veya kayıt kimliği değişmedi
   (`test_module_registry.py::test_migration_0007_changed_no_existing_table`,
   `::test_migration_0008_changed_no_existing_table`,
-  `test_agent_boundary.py::test_migration_0009_changed_no_existing_table`).
+  `test_agent_boundary.py::test_migration_0009_changed_no_existing_table`,
+  `::test_migration_0010_only_added_a_column`,
+  `::test_migration_0011_added_one_table_and_touched_nothing_else`).
+- `model_call_ledger` görev başına harcanan model turu sayısını tutar
+  (ADR-0013). `task_record`'da **değildir** — SI-225 görev katmanının bütçe
+  alanı açmadığını söyler — ve `activity_event`'ten **türetilmez**: o tablonun
+  saklama politikası ve kullanıcının çağırdığı bir silmesi var, yani ondan
+  okunan bir tavan günlüğü temizlemekle temizlenirdi.
 
 ### Başlangıçta ne olur, ne olmaz
 

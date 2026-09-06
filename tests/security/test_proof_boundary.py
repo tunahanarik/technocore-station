@@ -116,6 +116,34 @@ WRITE_NAMES = (
 SCHEDULING_IMPORTS = ("asyncio", "threading", "sched", "concurrent", "signal")
 SCHEDULING_NAMES = ("create_task", "Timer", "Thread", "Process", "call_later")
 
+#: Building or walking a path. Banned even though this package now **reads**
+#: artifact bodies, and banned *because* it does.
+#:
+#: The reading goes through :func:`station_api.agent.workspace.read_text`,
+#: which is where the reparse-point walk over the unresolved path, the
+#: allow-list rebuild of the name, the containment check and the per-file
+#: ceiling live. A second reader here - a ``Path`` joined and opened, a
+#: directory iterated, a path resolved - would be a way into a workspace with
+#: none of that in front of it, and it would look completely ordinary in a
+#: diff. ``read_text`` itself cannot be banned by name (``Path.read_text`` and
+#: the workspace's own function are the same word to a syntax tree), so the
+#: rule is written on the verbs that would have to appear *around* it.
+DIRECT_FILESYSTEM_NAMES = (
+    "read_bytes",
+    "iterdir",
+    "scandir",
+    "listdir",
+    "glob",
+    "rglob",
+    "walk",
+    "resolve",
+    "is_symlink",
+    "isjunction",
+    "is_dir",
+    "is_file",
+    "stat",
+)
+
 #: The secret boundary. None of these may be imported at all: no signer, no
 #: vault, no recovery file, no seed import, no provider credential.
 SECRET_IMPORTS = (
@@ -202,7 +230,16 @@ def test_the_boundary_scan_opens_the_package_and_its_route(
     scanned = _scanned(api_source_root)
     names = {path.name for path in scanned}
 
-    assert {"service.py", "bundle.py", "approvals.py", "language.py"} <= names
+    assert {
+        "service.py",
+        "bundle.py",
+        "approvals.py",
+        "language.py",
+        # The module that reads artifact bodies. It is the one file here that
+        # touches a workspace at all, so a scan that did not open it would be
+        # missing the only place these rules could be broken.
+        "artifacts.py",
+    } <= names
     assert scanned[-1].name == "proof.py"
     assert scanned[-1].is_file(), "the route file the scan claims to read is missing"
 
@@ -245,6 +282,35 @@ def test_the_package_writes_no_file_and_creates_no_link(
     paths = _scanned(api_source_root)
 
     assert _used_names(paths, LINK_NAMES) == []
+    assert _used_names(paths, WRITE_NAMES) == []
+
+
+def test_a_workspace_is_reached_only_through_the_agent_packages_reader(
+    api_source_root: Path,
+) -> None:
+    """The rule that had to be written the day bodies started being carried.
+
+    Before that, "the proof package touches no filesystem" was true and the
+    ban on write verbs was the whole story. It reads now - a bundle that
+    described a person's report instead of containing it was the defect - and
+    the honest question stopped being *whether* it reads and became *through
+    what*.
+
+    Two halves. The import has to be the agent package's workspace module,
+    which is where containment, the reparse-point walk and the ceilings are;
+    and no path-building or path-walking verb may appear anywhere in the
+    package, because a second reader assembled here would bypass every one of
+    them and would read as unremarkable code.
+    """
+    paths = _scanned(api_source_root)
+    imported: set[str] = set()
+    for path in paths:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        imported |= {name for name in _imported_names(tree) if name}
+
+    assert "station_api.agent.workspace" in imported
+    assert _used_names(paths, DIRECT_FILESYSTEM_NAMES) == []
+    # Still nothing writes, which is what makes the read the *only* contact.
     assert _used_names(paths, WRITE_NAMES) == []
 
 
@@ -369,6 +435,13 @@ def test_the_module_has_no_archive_or_link_creating_helper(
             SCHEDULING_NAMES,
             None,
         ),
+        (
+            "second-reader",
+            "from pathlib import Path\n"
+            "body = (Path('root') / 'rapor.json').resolve().read_bytes()\n",
+            DIRECT_FILESYSTEM_NAMES,
+            None,
+        ),
     ],
 )
 def test_the_name_scans_would_catch_a_planted_call(
@@ -447,14 +520,31 @@ def test_the_import_scans_leave_the_packages_real_imports_alone(
 
 
 def test_no_new_migration_was_added_by_this_package() -> None:
-    """H3 adds no table, so the chain head is still the one H2 added.
+    """H3 adds no table, and this asserts *that* rather than a head number.
 
     Stated rather than left implicit: an acceptance and a share approval are
     the two things this package records, and one goes into a column that has
     existed since migration ``0007`` while the other never leaves process
-    memory. A package that quietly added a table would have moved the head,
-    and ``test_agent_boundary`` pins it at ``0009``.
+    memory. A package that quietly added a table would have added a revision
+    file.
+
+    The assertion used to read ``get_heads() == ["0009"]``, which said "H3
+    added nothing" only for as long as *nobody else* added anything either -
+    and H4 then added ``0010`` for the acceptance column, which is a change in
+    the agent package and has nothing to do with this one. Naming the
+    revisions H3 could have written keeps the claim about H3: a proof-shaped
+    revision appearing here is a failure whatever the head happens to be, and
+    the head itself is pinned by ``test_agent_boundary`` and
+    ``test_database``, which is where a schema-stage decision belongs.
     """
     from station_api.db.migrations_runner import script_directory
 
-    assert list(script_directory().get_heads()) == ["0009"]
+    revisions = {
+        script.revision: (script.doc or "").lower()
+        for script in script_directory().walk_revisions()
+    }
+
+    assert len(list(script_directory().get_heads())) == 1, "the chain forked"
+    for revision, doc in revisions.items():
+        for word in ("proof", "bundle", "share", "approval", "acceptance_record"):
+            assert word not in doc, f"{revision} looks like a proof migration: {word}"

@@ -45,7 +45,12 @@ from station_api.opencode.errors import (
     ModelNotSelectableError,
     OpenCodeConfigurationError,
 )
-from station_api.opencode.events import DEFERRAL_SENTENCE
+from station_api.opencode.events import (
+    DEFERRAL_SENTENCE,
+    STREAMING_SUPPORTED,
+    TOOL_CALLS_SUPPORTED,
+)
+from station_api.opencode.planner import TOOL_CALL_PROVENANCE
 from station_api.opencode.registry import Protocol
 from station_api.opencode.service import (
     CatalogView,
@@ -166,8 +171,18 @@ def _to_response(view: ConnectionView) -> OpenCodeStatusResponse:
         spending=_spending(),
         protocol_context=OpenCodeProtocolContext(
             protocols=[protocol.value for protocol in Protocol],
+            # Passed explicitly from the constants rather than left to the
+            # field defaults. A default here would make the wire a *second*
+            # hard-coded answer with no link to the module that decides it -
+            # two claims about one fact, either of which could be edited
+            # alone. ``AgentExecutionStatus`` got the same repair in H2.
+            streaming_supported=STREAMING_SUPPORTED,
+            tool_calls_supported=TOOL_CALLS_SUPPORTED,
             deferral=DEFERRAL_SENTENCE,
             shape_provenance=SHAPE_PROVENANCE,
+            tool_call_provenance=(
+                TOOL_CALL_PROVENANCE if TOOL_CALLS_SUPPORTED else ""
+            ),
         ),
     )
 

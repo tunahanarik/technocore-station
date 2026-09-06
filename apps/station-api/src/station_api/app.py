@@ -30,6 +30,7 @@ from station_api.evidence.audit_envelope import AuditEnvelope, AuditEnvelopeErro
 from station_api.evidence.service import EvidenceService
 from station_api.identity.service import IdentityService
 from station_api.opencode.service import OpenCodeService
+from station_api.planner.service import ModelPlannerService
 from station_api.proof.service import ProofService
 from station_api.resources import PackagedLayoutError, is_frozen, shipped_web_dist
 from station_api.routes import agent as agent_routes
@@ -39,6 +40,7 @@ from station_api.routes import conformance as conformance_routes
 from station_api.routes import evidence as evidence_routes
 from station_api.routes import identity as identity_routes
 from station_api.routes import opencode as opencode_routes
+from station_api.routes import planner as planner_routes
 from station_api.routes import proof as proof_routes
 from station_api.routes import session as session_routes
 from station_api.routes import technocore as technocore_routes
@@ -378,6 +380,11 @@ def create_app(
         ProofService(
             tasks=app.state.tasks,
             agent=app.state.agent,
+            # The same root the agent writes under. The proof service reads
+            # artifact bodies through ``agent.workspace``'s own containment and
+            # reparse-point checks; this is the root those checks are applied
+            # under, not a second file lane.
+            data_dir=settings.data_dir,
             evidence=app.state.evidence,
         )
         if app.state.tasks is not None and app.state.agent is not None
@@ -407,7 +414,39 @@ def create_app(
     # or starts a timer at launch - there is no timer in the package at all -
     # and a test counts the outbound attempts during ``create_app`` rather
     # than taking this comment's word for it.
-    app.state.workscan = workscan or WorkScanService(tasks=app.state.tasks)
+    # ``data_dir`` is the agent's own workspace root, not a second file lane.
+    # A suggestion writes the request's full text into the new task's
+    # workspace so a model can read it through the tool that already exists;
+    # every guard on that surface - the name allow-list, containment, the
+    # reparse walk and the three ceilings - applies unchanged, and the secret
+    # scans that walk this root already cover the file.
+    app.state.workscan = workscan or WorkScanService(
+        tasks=app.state.tasks, data_dir=settings.data_dir
+    )
+
+    # The model planning lane (Package H4). Built when the agent runtime, the
+    # task service and the OpenCode connection are all there, because it owns
+    # none of them: it asks the model for a turn, looks every proposed call up
+    # in the agent's own compile-time registry, and records the result through
+    # the same ``plan_run`` a person's typed plan goes through.
+    #
+    # Building it contacts nobody. There is no request at launch, no timer and
+    # no background task: a turn happens inside the request that asked for it,
+    # and the ceiling on how many turns one task may spend is the compile-time
+    # one in ``agent/budget.py``.
+    #
+    # The sessions it keeps live in process memory and are lost on restart,
+    # which is deliberate rather than unfinished: a stored conversation is the
+    # thing somebody would resume, and SI-224 says a restart resumes nothing.
+    app.state.model_planner = (
+        ModelPlannerService(
+            agent=app.state.agent,
+            tasks=app.state.tasks,
+            opencode=app.state.opencode,
+        )
+        if app.state.agent is not None and app.state.tasks is not None
+        else None
+    )
 
     app.include_router(session_routes.router)
     app.include_router(api_routes.router)
@@ -421,6 +460,7 @@ def create_app(
     app.include_router(workscan_routes.router)
     app.include_router(agent_routes.router)
     app.include_router(proof_routes.router)
+    app.include_router(planner_routes.router)
 
     # Registered last so it cannot shadow /api or /session.
     resolved_dist = shipped_web_dist() if web_dist is SHIPPED_WEB_DIST else web_dist

@@ -64,12 +64,20 @@ UNPRODUCIBLE_DETAIL = (
 #: The old wording said the half was "deferred to G and H2". Leaving that
 #: after H2 shipped would have been a deferral notice for something that
 #: exists, so it was rewritten (ADR-0008 4).
+#:
+#: It was rewritten a second time for the same reason. The sentence listed
+#: three units and gave "the model lane is closed" as the reason token and
+#: currency are refused. H4 made the model call a **fourth** counted unit, and
+#: ADR-0012 3 replaced that reason with a stronger one: the provider does send
+#: ``usage`` and ``cost`` now, both are recorded, and neither is read as a
+#: ceiling - because a ceiling stated in a number the other side reports is
+#: the other side's ceiling.
 BUDGET_DETAIL = (
     "Gorev katmaninda butce alani yoktur ve olmayacaktir. Tavan calismanin "
-    "kendisine aittir: arac cagrisi sayisi, duvar saati suresi ve "
-    "eszamanlilik (=1). Token ve para birimi sayilmaz; model yolu kapali "
-    "oldugu icin saglayicidan gelen bir kullanim degeri yoktur ve "
-    "uydurulmaz."
+    "kendisine aittir: arac cagrisi sayisi, model cagrisi sayisi, duvar saati "
+    "suresi ve eszamanlilik (=1). Token ve para birimi tavan olarak "
+    "sayilmaz: saglayicinin bildirdigi kullanim ve maliyet kaydedilir, fakat "
+    "karsi tarafin bildirdigi bir sayi tavan yapilmaz."
 )
 
 

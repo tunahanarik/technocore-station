@@ -1,12 +1,27 @@
-"""The run ceiling: three measurable units, written at compile time, never written to.
+"""The run ceiling: four measurable units, written at compile time, never written to.
 
-ADR-0008 4. The units are **tool-call count**, **wall-clock seconds** and
-**concurrency (=1)**. There is no token count and no currency, and their
-absence is structural rather than an omission: the model lane is closed
-(ADR-0008 2), so there is no usage figure to read, and SI-250 already forbids
-inventing a zero when the provider did not send one. A ceiling denominated in
-something the product cannot measure is a ceiling that gets rounded to
-"unlimited" the first time anybody needs a number.
+ADR-0008 4. The units are **tool-call count**, **model-call count**,
+**wall-clock seconds** and **concurrency (=1)**.
+
+There is still no token count and no currency, and the reason is now stronger
+than it was rather than weaker. The model lane is open (Package H4), the
+provider does send a ``usage`` object and it does send a ``cost`` member - and
+neither becomes a ceiling here. ``usage`` is a count of somebody else's
+tokenisation, ``cost`` is a string this build cannot verify, and a limit
+expressed in either is a limit whose enforcement depends on the party being
+limited. SI-250 says a figure the provider did not send is never invented;
+this says a figure the provider *did* send is still not a control. Both are
+recorded, beside the call they came from, and neither is read by
+:func:`check`.
+
+**Model-call count** is the unit that was added instead, and it is added
+because it is the one this process can count on its own: Station makes the
+request, so Station knows how many it made, and the number means the same
+thing to the user as it does to the code. That is the whole test a unit has to
+pass to be here.
+
+A ceiling denominated in something the product cannot measure is a ceiling
+that gets rounded to "unlimited" the first time anybody needs a number.
 
 Why this lives in ``agent/`` and not in ``tasks/``
 --------------------------------------------------
@@ -50,20 +65,24 @@ from typing import Final, Literal
 #: assert that a fourth - a token, a currency - never appears.
 BUDGET_UNITS: Final[tuple[str, ...]] = (
     "tool_call_count",
+    "model_call_count",
     "wall_clock_seconds",
     "concurrency",
 )
 
 #: Units this product refuses to denominate a ceiling in, and the reason
-#: travels with them: neither is measurable in a build whose model lane is
-#: closed, and a ceiling in an unmeasurable unit is not a ceiling.
+#: travels with them. It used to be "neither is measurable here"; the model
+#: lane is open now and the provider reports both, so the reason is the
+#: sharper one: a ceiling enforced in a number the counterparty supplies is a
+#: ceiling the counterparty sets.
 REFUSED_UNITS: Final[tuple[str, ...]] = ("token", "currency")
 
 REFUSED_UNITS_DETAIL = (
-    "Bu surumde token ve para birimi sayilmaz: model yolu kapalidir, "
-    "dolayisiyla saglayicidan gelen bir kullanim degeri yoktur ve "
-    "uydurulmaz. Tavan yalnizca arac cagrisi sayisi, duvar saati suresi ve "
-    "eszamanlilik (=1) ile ifade edilir."
+    "Token ve para birimi tavan olarak kullanilmaz. Saglayici bir kullanim "
+    "ve maliyet degeri bildirdiginde bu deger cagrinin yaninda oldugu gibi "
+    "kaydedilir; ne uydurulur ne de sinir olarak okunur. Sinir, Station'in "
+    "kendi sayabildigi birimlerle ifade edilir: arac cagrisi sayisi, model "
+    "cagrisi sayisi, duvar saati suresi ve eszamanlilik (=1)."
 )
 
 
@@ -72,6 +91,11 @@ class RunCeiling:
     """One run's limits. Constructed once, at import, and only read after."""
 
     max_tool_calls: int
+    #: Most model turns one task's planning session may spend. Deliberately
+    #: small: every turn produces a plan a person has to read before it can
+    #: run, so a large number here would be a promise of work nobody has time
+    #: to approve.
+    max_model_calls: int
     max_wall_clock_seconds: int
     #: Typed as a literal so widening it is a type error at every call site
     #: rather than a runtime surprise at one of them - the ``SCAN_METHOD``
@@ -84,6 +108,7 @@ class RunCeiling:
 #: limit is decided, and there is no second one.
 CEILING: Final[RunCeiling] = RunCeiling(
     max_tool_calls=32,
+    max_model_calls=8,
     max_wall_clock_seconds=120,
     max_concurrency=1,
 )
@@ -94,6 +119,11 @@ class RunUsage:
     """What a run has spent so far, in the units above and no others."""
 
     tool_calls: int
+    #: Model turns spent by this task's planning session. No default: a
+    #: caller has to state it, so the runner's "I made no model call" and the
+    #: planner's count are both deliberate rather than one of them being
+    #: whatever the constructor happened to fill in.
+    model_calls: int
     elapsed_seconds: float
 
     @property
@@ -113,6 +143,7 @@ class BudgetVerdict:
 
 #: The machine-readable reasons, named once.
 TOOL_CALLS_EXHAUSTED = "tool_calls_exhausted"
+MODEL_CALLS_EXHAUSTED = "model_calls_exhausted"
 WALL_CLOCK_EXHAUSTED = "wall_clock_exhausted"
 
 
@@ -142,6 +173,16 @@ def check(usage: RunUsage, *, ceiling: RunCeiling | None = None) -> BudgetVerdic
                 "yapilmaz."
             ),
         )
+    if usage.model_calls >= ceiling.max_model_calls:
+        return BudgetVerdict(
+            allowed=False,
+            reason=MODEL_CALLS_EXHAUSTED,
+            detail=(
+                f"Model cagrisi tavanina ulasildi ({usage.model_calls}/"
+                f"{ceiling.max_model_calls}). Bu gorev icin yeni bir model "
+                "cagrisi yapilmaz; kaydedilmis bir plan elle surdurulebilir."
+            ),
+        )
     if usage.elapsed_seconds >= ceiling.max_wall_clock_seconds:
         return BudgetVerdict(
             allowed=False,
@@ -160,6 +201,7 @@ def describe_ceiling(ceiling: RunCeiling | None = None) -> str:
     ceiling = CEILING if ceiling is None else ceiling
     return (
         f"Tavan: en cok {ceiling.max_tool_calls} arac cagrisi, en cok "
+        f"{ceiling.max_model_calls} model cagrisi, en cok "
         f"{ceiling.max_wall_clock_seconds} saniye, eszamanlilik "
         f"{ceiling.max_concurrency}. Tavan derleme zamaninda yazilir; hicbir "
         "kod yolu onu degistirmez ve arac registry'sinde onu degistiren bir "
@@ -170,6 +212,7 @@ def describe_ceiling(ceiling: RunCeiling | None = None) -> str:
 __all__ = [
     "BUDGET_UNITS",
     "CEILING",
+    "MODEL_CALLS_EXHAUSTED",
     "REFUSED_UNITS",
     "REFUSED_UNITS_DETAIL",
     "TOOL_CALLS_EXHAUSTED",

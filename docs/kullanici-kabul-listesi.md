@@ -5,10 +5,11 @@
 > Kılavuz: [`kullanim-kilavuzu.md`](kullanim-kilavuzu.md) ·
 > Kaynak raporlar: [`verification/`](verification/)
 
-Bu liste **otomatik testlerin ölçemediği** şeyler içindir. Her maddenin
-yanında hangi doğrulama raporunun onu "ölçülmedi" veya "kalan risk" diye
-kaydettiği yazılıdır; yani bu liste bir dilek listesi değil, on bir raporun
-kendi beyanlarının toplamıdır.
+Bu liste **otomatik testlerin ölçemediği** şeyler içindir. Her bölümün
+başında hangi doğrulama raporunun o maddeleri "ölçülmedi" veya "kalan risk"
+diye kaydettiği yazılıdır; yani bu liste bir dilek listesi değil,
+[`verification/`](verification/) altındaki raporların kendi beyanlarının
+toplamıdır.
 
 **Durum: `CODE_COMPLETE_USER_ACCEPTANCE_PENDING`.** Kod tamamdır; kabul
 kullanıcının kendi işidir ve bu belge onun sırasıdır.
@@ -23,9 +24,21 @@ kullanıcının kendi işidir ve bu belge onun sırasıdır.
   anahtarı taşımaz.
 - **F bölümü ayrıdır ve isteğe bağlıdır.** Oraya, gerçekten istemedikçe
   girmeyin.
+- **Bir maddenin para harcayıp harcamadığı maddenin başında yazılıdır.**
+  Yalnız H5'te böyle maddeler vardır ve orada tek tek işaretlidir.
 
-**Bu listede hiçbir gerçek gönderim, gerçek harcama veya `lobby` hedefi
+**Bu listede hiçbir gerçek Technocore gönderimi ve hiçbir `lobby` hedefi
 yoktur.** F bölümü bile bir ön koşul listesidir, bir yordam değil.
+
+**Gerçek harcama tek bir yerdedir ve adıyla yazılıdır.** H5'teki model
+turları, hesap sahibinin kendi anahtarıyla **ölçülü (metered) bir uca** giden
+gerçek HTTP istekleridir
+([`ADR-0012 §0`](decisions/0012-model-yolu-sozlesme-dogrulamasi-2026-09-06.md)
+o ucu ölçerken "metered uç" diye kaydeder) ve faturası sizindir. Bu depodaki
+hiçbir otomatik test böyle bir istek yapmaz — hepsi mock taşıyıcı kullanır —
+yani o isteği yapan taraf sizsiniz. H5'te **bir tur harcayan tek bir madde**
+vardır ve adıyla işaretlidir; kalanlar ya hiçbir şey harcamaz ya da o turun
+sonucunu okur. Harcamayanlar bilerek önce gelir.
 
 ---
 
@@ -136,6 +149,20 @@ yürütüldü.
 | E3 | İnen dosyayı açın | İçinde public DID ve imzalar vardır; **seed, private key veya recovery secret'ı yoktur** |
 | E4 | Aynı işlemi **yavaş bir diskte veya çok sayıda kayıtla** deneyin ve süreyi not edin | Ölçülmemiş olan budur: indirme yakalama deadline'ı gerçek bir yavaş akışta hiç sınanmadı. Takılırsa **bu bilinen boşluğun ilk gerçek ölçümüdür** |
 | E5 | Kanıt çalışma alanında bir paket için tek kullanımlık onay hazırlayın, sonra paketi **yeniden okuyun** | Bekleyen onay **düşer** ve ekran bunu söyler |
+| E6 | Dosya üreten bir plan çalıştırın (H3-1), sonra dosya listesinin üstündeki iki sayıyı okuyun | "Govdesi pakete alinan dosya: n / m" yazar, ve altındaki cümle bu iki sayının **paketin kendi özet satırından değil**, listedeki dosyalar ile adıyla yazılmış dışlama gerekçelerinden türetildiğini söyler |
+| E7 | Tek kullanımlık onayı hazırlayın ve paket yerine **"&lt;dosya&gt; dosyasini indir"** düğmesine basın | Dosyanın **kendisi** iner — düz metin, ek olarak, tarayıcıda çalıştırılabilecek bir biçimde değil. Ekranda görünen özet **sunucunun yanıt başlığında gönderdiği** özettir, o ekranın hesapladığı bir sayı değil |
+| E8 | Aynı onayla ikinci bir teslim deneyin | Olmaz. Paketi indirmek ile tek bir dosyayı indirmek **aynı onayı harcayan iki seçenektir**; ikincisi için yeniden onay hazırlamanız gerekir ve bu şart düğmelerden **önce** yazılıdır |
+| E9 | Bir planla, gövdesine **64 karakterlik onaltılık bir dizi** (örneğin bir SHA-256 özeti) yapıştırdığınız bir dosya yazdırın, sonra paketi okuyun | Dosya listede **adıyla, bayt sayısıyla ve özetiyle kalır**, ama gövdesi pakete alınmaz; gerekçe **kuralın adıyla** yazılıdır ve eşleşen değer hiçbir yere yazılmaz. O dosya için "dosyasini indir" düğmesi de çıkmaz. Dışlama dosyayı değil, yalnız içeriğin pakete alınmasını engeller |
+| E10 | Bir dosyanın metnine, bu ürünün kendi cümlelerinde kullanmadığı bir ifade yazdırın (örneğin `test gecti`), sonra paketi **Markdown** olarak indirin ve o dosyanın bölümüne bakın | Gövde **değiştirilmeden** aktarılır ve üstünde, metinde böyle bir ifadenin geçtiği **adıyla** yazar. İfade silinmez, maskelenmez ve dosya reddedilmez: maskelemek özetin altındaki baytları değiştirirdi, ve bir veri metni size kendi kanıtınızı reddettiremez |
+
+> **E6–E10'un kaynağı ayrıdır** ([`paket-h4.md` §5](verification/paket-h4.md),
+> [`review-fixes.md` "Ölçülmeyenler"](verification/review-fixes.md)):
+> paketin gövde taşıyan hâli ve tek dosya teslimi bu turda geldi, ve o turun
+> kendi raporu **manuel tarayıcı ve görsel kabulün yapılmadığını**, hepsinin
+> kullanıcıya ait olduğunu yazıyor. E9 ve E10 birbirinin zıddı değil, aynı
+> kuralın iki yarısıdır: **gizli değer taraması bir rettir**, dil kaydı ise
+> bir **rapordur** — biri gövdeyi dışarıda bırakır, öteki gövdeye
+> dokunmadan yanına not düşer.
 
 > **F bölümü bilerek en sondadır** ve harf sırasını bozar: gerçek gönderim
 > ayrı ve isteğe bağlı bir bölümdür, listenin ortasında sıradan bir adım
@@ -156,7 +183,7 @@ edilmiyor**.
 |---|---|---|
 | G1 | Ayarlar → OpenCode paneli; model kataloğunu açın ve **yalnız Tab ile** listeyi baştan sona gezin | Odak sırası görsel sırayla aynıdır; hiçbir satır atlanmaz, hiçbir yerde odak listenin dışına kaçmaz |
 | G2 | Aynı listeyi bir ekran okuyucuyla gezin | Her satır kendi adını ve durumunu okur |
-| G3 | Panelin "Sözleşme notları" bloğunu okuyun | Üç uyarıyı da görürsünüz: kimlik doğrulama başlığı doğrulanmadı, akış/araç çağrısı yok, anahtarın bağlı olması dosya paylaşımı demek değil |
+| G3 | Panelin "Sözleşme notları" bloğunu okuyun | Üç notu da görürsünüz: kimlik doğrulama başlığı doğrulanmadı; **akış yok, araç çağrısı ölçüldü** (ve neyin ölçüldüğü yazıyor); anahtarın bağlı olması dosya paylaşımı demek değil |
 | G4 | Bir anahtar kaydedin, sonra sayfayı yenileyin | Anahtar **hiçbir yerde geri gösterilmez** — maskeli olarak bile |
 
 > **G-lint (kabul edilecek bir gerçek, düzeltilecek bir madde değil):**
@@ -217,6 +244,111 @@ değil.
 | H3-4 | Tarayıcı konsolunu açıp paneli kullanın | **Sıfır CSP reddi** ve sıfır sayfa hatası. Boş durumda ölçülen budur; dolu durumda ölçülmedi |
 | H3-5 | "Eksikler" bölümünü okuyun | Eksikler **adıyla** yazılıdır; bir paket bir sonuç değil, toplanmış malzemedir |
 
+> **H4, H5 ve H6 sona eklendi, araya sokulmadı.** İçerik olarak H4 taramanın
+> (H1), H5 ile H6 ise görev yüzeyinin (H2, H3) devamıdır; sonda durmalarının
+> tek sebebi, var olan madde numaralarının **kaymamasıdır**. Bir kabul
+> listesinde madde numarası bir adrestir: birinin not aldığı "H2-4 kırmızı"
+> cümlesi, listeye bir satır eklendi diye başka bir maddeyi göstermeye
+> başlamamalıdır.
+
+### H4. Oda listesi ve keşif günlüğü — canlı, yabancı yazımı veri
+
+Kaynak: [`paket-h1.md` "Kalan riskler"](verification/paket-h1.md) ·
+[`review-fixes.md` "Ölçülmeyenler"](verification/review-fixes.md) — **hiçbir
+otomatik test gerçek bir Technocore odası okumadı**; bütün oda belgeleri
+sahtedir. Yani bu bölümdeki her şeyde canlı veriye bakan ilk taraf sizsiniz.
+
+H1 taramanın **süresini** ve iptal yokluğunu sorar; bu bölüm taramadan
+**önceki** iki yüzeyi sorar: neyi tarayacağınızı seçtiğiniz oda listesi ve
+servisin kendi keşif günlüğü. Maddeler bilerek **hangi odaların
+listelendiğinden bağımsızdır** — liste canlıdır ve yarın başka odalar taşır;
+buradaki her beklenti listenin içeriğine değil, listenin **biçimine** bakar.
+
+| # | Yapın | Görmeyi beklediğiniz |
+|---|---|---|
+| H4-1 | Is Tara → "Oda listesini oku"; listenin üstündeki tek satırlık künyeyi okuyun | Dört şey yan yanadır: servisin bildirdiği **toplam**, burada **tutulan** sayı, listenin **kırpılıp kırpılmadığı** ve okunan belgenin **özeti**. Toplam ile tutulan farklıysa bunu satırın kendisi söyler; hiçbir yerde "hepsi bu" denmez |
+| H4-2 | Aynı satırın altındaki bayatlık cümlesini okuyun | Üç şey ayrı ayrı yazılıdır: ölçülen **okuma anı**, sunucunun kendi saniye **beyanı**, ve o beyanın **nereden okunduğu**. Station "taze" veya "bayat" diye bir hüküm **vermez**; öyle bir eşik uydurulmadı |
+| H4-3 | Listedeki herhangi bir odanın kutusuna bakın | Oda **adı** ve **başlığı** uyarı çerçeveli ayrı bir kutudadır, üstünde bu iki alanı bir yabancının yazdığı yazar, ve ikisi de biçimlendirilmemiş metin olarak durur — bağlantı yok, markup yok. Servisin kendi ölçümleri **başka** bir kutudadır ve ikisi hiçbir odada tek bir satırda birleşmez |
+| H4-4 | Onuncudan sonra bir oda daha seçmeye çalışın | Kutular kapanır; tek bir taramada en çok on oda okunacağı ve kalanları ayrı bir taramayla seçebileceğiniz yazılır |
+| H4-5 | Uygulamayı yeni açtıysanız — yani B9'daki gibi `manifest_current` henüz `never_checked` iken — "Kesif gunlugunu oku"ya basın | Reddedilir ve ret **önce resmî kaynak denetimini çalıştırmanızı** söyler: keşif günlüğü de bir odadır ve doğrulanmamış bir konvansiyonla adlandırılmaz |
+| H4-6 | B8'i yapıp aynı düğmeye tekrar basın | Her satır ya seçilebilir bir oda adıdır ya da **olduğu gibi** gösterilen, seçilemez bir satırdır ve neden okunamadığı yanında yazar. Satır biçimi yayımlanmadığı için Station bir ad **uydurmaz**; okuyamadığını size ham hâliyle gösterir |
+| H4-7 | Günlük boş geldiyse cümlesini okuyun | "Yeni oda açılmadı" der. Okunamayan bir günlük **hiçbir zaman** boş günlük olarak gösterilmez: okunamayan bir okuma bir rettir |
+| H4-8 | Oda listesinde `lobby` veya `meta` görürseniz onu seçip tarayın. **Görmezseniz bu maddeyi "listede yoktu" diye not edin** | Reddedilir; ret "Okunamayan odalar" başlığı altında **odanın adıyla** yazılır ve o odaya hiçbir istek gitmez. Bu iki ad bu ürünün reddettiği tek iki addır ve ret **ada** bağlıdır, listeye değil — maddenin listeden bağımsız olmasının sebebi budur |
+| H4-9 | Listeyi okuduktan sonra ekranı bir süre öylece bırakın | Hiçbir şey kendiliğinden yenilenmez. Liste, günlük ve tarama yalnız siz bir düğmeye bastığınızda okunur; beklemek yeni bir satır getirmez |
+
+> **H4-8'in keşif günlüğündeki karşılığı bilerek farklıdır:** reddedilen bir
+> oda günlükte **ne adıyla ne de satırıyla** görünür — yalnız okunamayan bir
+> satır olarak, gerekçesiyle durur. Bir adın, o adı ekrandan uzak tutmak için
+> var olan denetimin **içinden geçerek** ekrana gelmesi istenmedi. Yani
+> günlükte o odayı seçebileceğiniz bir kutu hiç oluşmaz; listede ise oluşur
+> ve tarama anında reddedilir. İki yüzeyde iki farklı davranış görmeniz
+> beklenen sonuçtur.
+
+### H5. Modelden plan önerisi — **bu bölümün bir kısmı gerçek para harcar**
+
+Kaynak: [`paket-h4.md` §5](verification/paket-h4.md) ·
+[`review-fixes.md` "Ölçülmeyenler"](verification/review-fixes.md) — **gerçek
+bir sağlayıcı isteği hiçbir testte yapılmadı**; her model turu mock taşıyıcı
+üzerinden koştu ve kimlik bilgisi depodaki sentetik `TEST-ONLY` sabitidir.
+Aynı rapor manuel tarayıcı kabulünün yapılmadığını da yazıyor.
+
+**Önce parayı konuşalım.** Bir model turu, kaydettiğiniz anahtarla **ölçülü
+(metered) bir uca** giden gerçek bir HTTP isteğidir
+([`ADR-0012 §0`](decisions/0012-model-yolu-sozlesme-dogrulamasi-2026-09-06.md)).
+Aşağıda her maddenin başında **bir tur harcayıp harcamadığı** yazılıdır.
+Harcamayanlar önce gelir; onlarla, hiçbir şey ödemeden bu yüzeyin
+söylediklerinin doğru olup olmadığını görebilirsiniz.
+
+Bir uyarı daha, ve bu maliyetten önce gelir: **kaybolan bir yanıt da
+harcanmış olabilir.** İstek çıktıysa ve cevabı gelmediyse ürün bunu ayrı bir
+sonuç olarak söyler ve **kendiliğinden yeniden denemez** — yeniden deneme,
+"belki ödendi"yi "kesin ödendi"ye çevirir.
+
+| # | Yapın | Görmeyi beklediğiniz |
+|---|---|---|
+| H5-1 | **(harcamaz)** Bir görev açın, "Modelden plan onerisi" bölümündeki uyarı bloğunu ve tur kuralını **düğmeye basmadan** okuyun | Dört şey düğmelerden **önce** yazılıdır: önerinin elle yazılmış bir planla aynı dört onaydan geçtiği; modelin kendi planını onaylayamayacağı ve bir çalışmayı başlatamayacağı; listede olmayan bir araç adının öneriyi **bütünüyle** reddettireceği; ve araçlara yol veya adres verilemeyeceği |
+| H5-2 | **(harcamaz)** "Hangi model secili, oku"ya basın | Kimseye bağlanılmaz. Seçili model, kimlik bilgisinin kayıtlı olup olmadığı ve **neyin ölçüldüğü** yazılır. Basmadan önce ekran zaten "okunmadı" der ve bir model adı **göstermez**: bir tur yanıtı model kimliği taşımaz ve bu ekran bir ad uydurmaz |
+| H5-3 | **(harcamaz; hiçbir istek gitmez)** Anahtarı **kaydetmeden** ya da bir model **seçmeden** "Modelden plan oner (calistirmaz)"a basın | Bir sonuç çıkar, eksiği **adıyla** söyler ve **"Harcanan model turu" sayacı 0'da kalır**: istek hiç kurulmadı. Station sizin yerinize model seçmez |
+| H5-4 | **(harcamaz; hiçbir istek gitmez)** Ayarlar → OpenCode'da model listesinde her satırın protokol ailesi yazılıdır; `chat/completions` **dışında** bir aileden seçilebilir bir model seçin ve aynı düğmeye basın | Yine bir ret çıkar ve bu kez modeli **adıyla** reddeder: araç çağrısı biçimi yalnız bir protokol ailesi için ölçüldü ve ötekiler için bir şey iddia edilmez. Sayaç yine 0'dadır. Ölçülmemiş bir sözleşmeye istek göndermemenin ekrandaki hâli budur |
+| H5-5 | **(bir tur harcar — gerçek para)** `chat/completions` ailesinden bir model seçiliyken ve anahtar kayıtlıyken aynı düğmeye basın | Sonuçlardan biri çıkar ve **hiçbiri "çalıştı" değildir**: en iyisi "plan önerildi ve kaydedildi (hiçbir şey çalıştırılmadı)". Sayaç bir artar. Sonuç ne olursa olsun hiçbir adım koşmaz |
+| H5-6 | **(ek tur harcamaz)** Sonuç "plan önerildi" ise "Calismalar" listesine bakın | Öneri orada `planned` fazında ve **dört onayı da işaretsiz** durur. "Onayli plani calistir" etkin değildir; başlatmak sizin ayrı işleminizdir. Ekran ayrıca modelin bir çalışmayı başlatamayacağını yazar |
+| H5-7 | **(ek tur harcamaz)** Sonuç bir plan üretmediyse sonucun etiketini ve altındaki cümleyi okuyun | Turun **nasıl** bittiği ayrı ayrı adlandırılır: modelin araç çağırmayı bırakması, yanıtın çıktı tavanında **kesilmesi** ve nedeni okunamayan bir bitiş aynı cümleyle anlatılmaz. Yalnız birincisi oturumu kapatır; öteki ikisi "oturum kapanmadı, yeniden isteyebilirsiniz" der — ve kesilme için her isteğin bir tur harcadığı da yazılıdır |
+| H5-8 | **(ek tur harcamaz)** Sonucun altındaki sağlayıcı beyanı satırını okuyun | Kullanım ve maliyet **sağlayıcının kendi bildirimi** olarak, olduğu gibi yazılıdır ve satır bunun bizim ölçümümüz olmadığını, tavan olarak kullanılmadığını söyler. Tavan Station'ın kendi sayabildiği birimdedir ve yanında durur: "Harcanan model turu: n / 8" |
+| H5-9 | **(harcamaz)** Aynı ekranda modelin muhakemesini arayın | Yoktur, ve ekran **neden** olmadığını söyler: alan okunur, kullanılmaz, saklanmaz, loglanmaz ve gösterilmez. Gizlenmiş bir blok, açılır bir panel veya "daha fazla göster" yoktur |
+| H5-10 | **(harcamaz)** "Oturumu unut ve bastan basla"ya basın, sonra "Calismalar" listesine ve Kanitlar'a bakın | Yalnız bellekteki konuşma düşer. **Kaydedilmiş planlar, çalışma alanı ve kanıtlar olduğu gibi durur**; unutmak hiçbir kaydı silmez |
+| H5-11 | **(harcamaz)** Aynı düğmeye bastıktan sonra **"Harcanan model turu"** satırına bakın | Sayı **düşmez**: unutmadan önce kaç turunuz harcanmışsa o kadar yazar. Düğmenin altındaki kural cümlesi de bunu söyler ve tavanın sıfırlanmadığını yazar |
+| H5-12 | **(harcamaz)** Bir tur harcadığınız görevde uygulamayı **kapatıp yeniden açın**, aynı görevi açıp "Harcanan model turu" satırına bakın | Sayı yine düşmez. Konuşma gitti — model sizi hatırlamıyor — ama **harcama göreve yazılıdır**. Bu, bu listenin en ucuz maddesi ve en pahalı garantisidir: tavanın tek harcama kontrolünüz olduğu bir üründe, yeniden başlatmayla temizlenen bir tavan tavan değildir ([ADR-0013](decisions/0013-model-cagrisi-tavani-goreve-yazilir-2026-09-06.md)) |
+| H5-13 | **(harcamaz)** Tavanı dolmuş bir görevde bir sıfırlama düğmesi, menüsü veya ayarı arayın | **Yoktur ve bilerek yoktur.** Dolan bir görevin turları geri gelmez; yapabilecekleriniz kaydedilmiş bir planı elle sürdürmek veya **yeni bir görev açmaktır** — tavan görev başına sayıldığı için yeni görev kendi sekiz turuyla başlar. Bunun bir bedel olduğunu ürünün kendisi de söyler |
+
+> **Ölçülmemiş olan** ([`paket-h4.md` §5](verification/paket-h4.md)): bu
+> yüzeyin bütün testleri mock bir taşıyıcıya karşı koşar. Gerçek bir
+> sağlayıcının gerçek bir turda ne döndüreceği — hangi aracı seçeceği, kaç
+> adım önereceği, cevabının tavanda kesilip kesilmeyeceği — **hiçbir testin
+> ölçebileceği bir şey değildir**. H5-5'te gördüğünüz sonuç, o sonucun bu
+> ürüne ne yaptırdığından ayrı bir şeydir; bu bölüm ikincisini sorar.
+
+### H6. Kabul koşulları, test sonucu ve yayın hazırlığı
+
+Kaynak: [`paket-h4.md` §3, §5](verification/paket-h4.md) ·
+[`proof-workspace.md` §10](proof-workspace.md) — kabul koşulları ve
+`ready_to_publish` yolu bu turda geldi ve turun kendi raporu **manuel kabulün
+yapılmadığını** yazıyor.
+
+Bu bölüm **hiçbir model turu gerektirmez ve hiçbir şey harcamaz**: elle
+yazılmış bir plan da kabul koşulu taşıyabilir, ve buradaki her madde öyle bir
+planla yapılabilir.
+
+| # | Yapın | Görmeyi beklediğiniz |
+|---|---|---|
+| H6-1 | Hiç kabul koşulu **yazmadan** bir plan kaydedin, dört onayı verip çalıştırın, sonra çalışmanın "Test sonucu" satırına bakın | "Uygulanmadi" yazar **ve gerekçesini söyler**: plan makinenin karar verebileceği bir koşul yazmadı, yalnız bir cümle kaydetti ve cümle koşulmaz. Plan söz verdiği bütün dosyaları üretmiş olsa bile bu değişmez |
+| H6-2 | Aynı görevde yeni bir plan yazın; bu kez "Dosya calisma alaninda var mi" koşulunu üreteceğiniz dosyanın adıyla ekleyip çalıştırın | Test sonucu "Gecti" olur, ve hükmün bir kabuk komutunun çıktısı değil **dosyaların okunmasıyla** verildiği yazılıdır |
+| H6-3 | Üçüncü bir planda, aynı koşulu plana **yazmadığınız** bir dosya adıyla ekleyin, "Soz verilen cikti dosyalari" alanını boş bırakın ve çalıştırın | Çalışma **tamamlanır**, ama test sonucu "Kaldi" olur ve **sağlanmayan koşul adıyla** yazılır. "Tamamlandı" ile "geçti" bu üründe iki ayrı cümledir ve ayrı ayrı gösterilir |
+| H6-4 | Koşul listesine bakın: kayıtlı olmayan bir koşul adı yazmayı deneyin | Yazacak yer yoktur. Koşul kümesi sabit bir radyo listesidir ve serbest metin kabul eden bir alan **hiç yoktur**; her koşulun ne yaptığı yanında yazılıdır |
+| H6-5 | Bir koşula yol benzeri bir dosya adı verin (`..\gizli.txt` gibi) ve planı kaydetmeye çalışın | Plan **kaydedilmez** ve ret gerekçesiyle ekrana çıkar; ret ayrıca Aktivite'de bir karar noktası olarak durur. Bir koşul bir dosyayı yalnız **sade adıyla** anar |
+| H6-6 | Çalışma bittikten sonra "Yayin hazirligi" bölümünde, **hiçbir düğmeye basmadan**, bekleyen alanları okuyun | Doğrulanmamış alanlar **adıyla** yazılıdır, yani bir deneme yapmadan neden reddedileceğinizi görürsünüz. Ekran ayrıca "yayıma hazır"ın **istenemeyeceğini** söyler: durum değiştirme düğmelerinin arasında karşılığı yoktur ve yayın hazırlığı isteği bir **hedef alanı taşımaz** |
+| H6-7 | Üç alandan biri eksikken "Yayin hazirligini degerlendir (durumu istemez)"e basın | Reddedilir, ret **eksik alanları adıyla** sayar ve durum değişmez. Aynı isteği kaç kez yaparsanız yapın cevap aynıdır: cevap kanıtın bir fonksiyonudur |
+| H6-8 | Üç alan da doğrulandıktan sonra (çıktı üretildi, test sonucu "Gecti", ve Kanitlar'da siz kabul ettiniz) aynı düğmeye basın | Durum "Yayima hazir" olur ve ekran bunun bir **yayım olmadığını** söyler: hiçbir şey gönderilmedi, dış paylaşım ayrı bir işlemdir |
+
 ---
 
 ## I. Paketlenmiş sürüm ve kaldırma
@@ -242,7 +374,9 @@ Bu bölüm yalnız ZIP yolunu seçerseniz geçerlidir.
 ## İstenmeyecekler — ve nedenleri
 
 Bu belge aşağıdakileri **istemez**. Hiçbiri unutulmuş değildir; her biri
-ölçülmüş bir sebeple dışarıda bırakılmıştır.
+ölçülmüş ya da koddan okunmuş bir sebeple dışarıda bırakılmıştır. Ortak
+ölçüt tektir: bir madde, ekranın başında oturan bir kişinin **gerçekten
+gözlemleyip yargılayabileceği** bir şey istemiyorsa listeye girmez.
 
 - **"İmzanın geçerli olduğunu doğrulayın" istenmez.** Artefakt
   **imzasızdır** ([`paket-i.md` §12.3](verification/paket-i.md)): bu
@@ -264,6 +398,35 @@ Bu belge aşağıdakileri **istemez**. Hiçbiri unutulmuş değildir; her biri
   **tek yönlüdür** — başarısız olursa size hiçbir şey öğretmez, başarılı
   olursa kimliği o profile taşımış olursunuz. Bu, bir kabul adımının değil,
   bilinçli bir taşıma kararının konusudur.
+- **"Modelin iyi bir plan önerdiğini doğrulayın" istenmez.** Bir önerinin
+  "iyi" olup olmadığı ölçülebilir bir şey değildir ve bu üründe böyle bir
+  hüküm veren bir alan yoktur; olsaydı, uydurulmuş olurdu. Doğrulanabilir
+  olan, öneriye **ne yapıldığıdır** — adı kapalı registry'de aranır,
+  argümanları tiplenir, sonuç dört onayı bekleyen bir plandır — ve H5 tam
+  olarak bunları ister.
+- **"Modele kayıtlı olmayan bir araç adı önerdirip reddi görün" istenmez.**
+  Ret yolu gerçektir ve `refused` sonucu olarak ekranda vardır, ama onu
+  **siz üretemezsiniz**: modelin o turda ne döndüreceği sizin elinizde
+  değildir, ve sizden tetikleyemeyeceğiniz bir davranışı onaylamanızı
+  istemek bir kabul maddesini bir temenniye çevirir. Yerine H5-1 kuralın
+  **ekranda, düğmeden önce** yazılı olduğunu, H5-4 ise sizin kendi
+  seçiminizle üretebileceğiniz, hiçbir istek göndermeyen bir reddi ister.
+- **"Onayladığınız bir planın kabul koşulunu düzenleyip planın geçersiz
+  olduğunu doğrulayın" istenmez.** Bu üründe **plan düzenleme diye bir şey
+  yoktur**; farklı bir plan yeni bir çalışmadır ve yeni bir çalışma yapı
+  gereği onaysızdır. Koşullar planın özetinin içindedir ve düzenlenmiş bir
+  plan başlatmada reddedilir — ama bunu ekranda **yapabileceğiniz bir yol
+  olmadığı için**, madde sizden ulaşamayacağınız bir kapıyı yoklamanızı
+  istemiş olurdu. H2-5 bu davranışın gözlemlenebilir yarısını —
+  değişen bir plana onayların **geçmediğini** — zaten istiyor.
+- **"Bir dosyayı tavanın üstüne çıkarıp gövdesinin pakete alınmadığını
+  doğrulayın" istenmez.** Bu ürünün tek bir araç çağrısında yazabileceği en
+  büyük dosya **20 000 karakterdir**, tekil dosya tavanı ise **512 KiB**, ve
+  çalışma alanı zaten en çok **64 dosya** tutar. Yani bu ürünle üretilen bir
+  çalışma alanı bu tavanların hiçbirini geçemez; tavan dışlaması ancak
+  dosyanın oraya **başka bir yoldan** konmasıyla görülebilir ve bir kabul
+  adımı sizden dizine elle dosya koymanızı istememelidir. E9, aynı per-dosya
+  ret mekanizmasını sizin **gerçekten üretebileceğiniz** bir yoldan sorar.
 
 ---
 

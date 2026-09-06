@@ -42,10 +42,29 @@ no model lane, ADR-0008 2) and it does not mean a command is being executed
 (arbitrary execution is closed, ADR-0008 1). ``paused`` means the user
 stopped it.
 
-The consequence for the far end of the machine is unchanged: the run never
-records a ``test_result`` reference, because running the test is the closed
-capability. So a finished run leaves a task in ``review_needed``, and
-``ready_to_publish`` stays out of reach exactly as SI-222 requires.
+The consequence for the far end of the machine **changed in H4**, and this
+paragraph changed with it rather than after it. It used to read: "the run
+never records a ``test_result`` reference, because running the test is the
+closed capability. So a finished run leaves a task in ``review_needed``, and
+``ready_to_publish`` stays out of reach." Both halves were true when they
+were written and neither is true now.
+
+What is closed is still *arbitrary execution* (ADR-0008 1), and it stays
+closed. What H4 added is the other half:
+:mod:`station_api.agent.acceptance` decides a small closed set of conditions
+by reading bytes already on disk, so a run **can** record a ``test_result``
+reference, and ``ready_to_publish`` **is** reachable - through
+``POST /api/tasks/{id}/publish-readiness``, from three separately verified
+evidence fields.
+
+SI-222 is untouched by that, which is the distinction worth keeping: the
+invariant was never "the state is unreachable", it was "the state is derived
+from evidence and cannot be *asked for*".
+:data:`~station_api.schemas.TaskUserTransitionName` still omits
+``ready_to_publish``, and the publish-readiness body carries no target field,
+so no request in this product can name the state. A plan that recorded only a
+sentence and no machine-checkable condition still reports ``not_implemented``
+and still leaves its task in ``review_needed``.
 
 How ``suggested`` was opened, and what deliberately did not move
 ----------------------------------------------------------------

@@ -14,6 +14,7 @@ import { TasksPage } from "../pages/TasksPage";
 import { WorkScanPage } from "../pages/WorkScanPage";
 import { DEFAULT_SECTION_ID, READY_SECTIONS, type SectionId } from "../sections";
 import { ErrorRegion } from "./ErrorRegion";
+import { SectionBoundary } from "./SectionBoundary";
 
 interface AppShellProps {
   readonly status: AppStatus | null;
@@ -125,6 +126,7 @@ export function AppShell({ status, loading, connectionError, onRetryConnection }
             </div>
           )}
 
+          <SectionBoundary key={selected}>
           {selected === "overview" && (
             <OverviewPage loading={loading} onNavigate={setSelected} status={status} />
           )}
@@ -136,6 +138,7 @@ export function AppShell({ status, loading, connectionError, onRetryConnection }
           {selected === "sources" && <SourcesPage />}
           {selected === "evidence" && <EvidencePage />}
           {selected === "settings" && <SettingsHelpPage status={status} />}
+          </SectionBoundary>
         </main>
 
         <footer className="mx-auto w-full max-w-6xl px-4 pb-8 sm:px-6">

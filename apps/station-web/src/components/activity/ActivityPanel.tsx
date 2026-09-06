@@ -58,11 +58,16 @@ const ERROR_TITLE: Record<Step, string> = {
 };
 
 /**
- * The fourteen actions, each with its own sentence.
+ * The seventeen actions, each with its own sentence.
  *
  * Deliberately not grouped: "planned" and "called a tool" are the two the
  * product would most like to blur together, and they are exactly the two a
  * reader needs apart.
+ *
+ * The last three arrived with the model planning lane (ADR-0012), and they
+ * are worded so none of them can be read as "the model did something". A turn
+ * was spent, a plan was *proposed*, or the model stopped proposing; the actor
+ * column still says the station's runner, because that is who acted.
  */
 const ACTION_LABEL: Record<ActivityActionName, string> = {
   run_planned: "Planlandi",
@@ -79,6 +84,9 @@ const ACTION_LABEL: Record<ActivityActionName, string> = {
   budget_exhausted: "Tavana ulasildi",
   execution_unavailable: "Yurutme kullanilamiyor",
   activity_deleted: "Aktivite kaydi silindi",
+  model_called: "Model cagrisi yapildi",
+  model_plan_proposed: "Model bir plan onerdi (calistirilmadi)",
+  model_session_ended: "Model arac cagirmayi birakti",
 };
 
 /** There is no `model` actor, because there is no model lane. */
@@ -105,8 +113,20 @@ const OUTCOME_TONE: Record<ActivityOutcomeName, "ok" | "problem" | "pending"> = 
 const NO_PROGRESS_STATEMENT =
   "Bu ekranda ilerleme cubugu, yuzde ve doner animasyon yoktur. Gorunen her satir backend'in kaydettigi bir olaydir; iki olay arasinda bir ilerleme uydurulmaz ve bir isin ne kadar kaldigi tahmin edilmez.";
 
+/**
+ * The sentence that had to change when the fact under it changed.
+ *
+ * It used to end "...and there is no model lane to produce one". ADR-0012
+ * opened the lane, so that half became false while the rest stayed true, and
+ * a screen that kept saying it would be claiming safety from an absence that
+ * is no longer there. What is claimed now is the part that is still
+ * structural: the table these rows come from **has no column** for a
+ * reasoning trace, a prompt or a raw provider payload. The provider does send
+ * a `reasoning_content` field; it is read, unused, unstored and undisplayed
+ * (ADR-0012 1), and saying so is stronger than implying it never arrives.
+ */
 const NO_MODEL_STATEMENT =
-  "Modelin muhakemesi, istem metni ve ham saglayici yaniti burada gosterilmez. Bu bir temizleme degildir: bu satirlarin geldigi tabloda boyle bir sutun yoktur ve uretecek bir model yolu da yoktur.";
+  "Modelin muhakemesi, istem metni ve ham saglayici yaniti burada gosterilmez. Bu bir temizleme degildir: bu satirlarin geldigi tabloda boyle bir sutun yoktur. Model yolu artik aciktir ve saglayicinin yaniti bir muhakeme alani tasir; o alan okunur, kullanilmaz, saklanmaz, loglanmaz ve gosterilmez.";
 
 /** UTC first, then the reader's own clock. Both, because they differ. */
 function formatUtc(value: string): string {

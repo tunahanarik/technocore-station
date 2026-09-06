@@ -3,6 +3,7 @@
     GET  /api/proof/{task_id}               artifacts, digests, gaps, claims
     POST /api/proof/{task_id}/prepare       mint one single-use share approval
     POST /api/proof/{task_id}/share         spend it and download the bundle
+    POST /api/proof/{task_id}/artifact      spend it and take one produced file
     POST /api/proof/{task_id}/acceptance    a person accepts what they read
     POST /api/proof/{task_id}/public-share  point field four at an archived send
 
@@ -17,7 +18,16 @@ What is deliberately absent
   There is no directory parameter, no filename parameter and no fixed export
   root, so path traversal, symlinks, reparse points and overwrite prompts are
   absent from this feature rather than defended against (ADR-0003 9,
-  ADR-0009 3).
+  ADR-0009 3). ``artifact`` is the same shape: it hands over one produced
+  file, under the same single-use approval, out of the document that approval
+  was bound to - it opens no path of its own and the ``name`` in the body
+  selects an entry rather than addressing the filesystem.
+* **No route that serves an artifact as anything but text.** A workspace may
+  legitimately hold ``rapor.html``, and Station is a same-origin product with
+  no CORS middleware, so a response that let a browser render one would be
+  markup this product did not write executing on this product's own origin.
+  The media type is fixed at ``text/plain; charset=utf-8``, the disposition is
+  ``attachment``, and the global ``nosniff`` header closes the third way.
 * **No archive.** Two formats, both plain text. Nothing is packed and nothing
   is ever unpacked.
 * **No route that sends anything anywhere.** External publication goes through
@@ -62,6 +72,7 @@ from station_api.proof.service import ProofError, ProofService
 from station_api.schemas import (
     ProjectModuleStatus,
     ProofAcceptanceRequest,
+    ProofArtifactRequest,
     ProofArtifactStatus,
     ProofClaimStatus,
     ProofMissingStatus,
@@ -86,6 +97,14 @@ _NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 #: ``evidence/export.py`` records at length.
 DELIVERED_AT_HEADER = "X-Station-Delivered-At"
 
+#: The delivered artifact's own digest, and the digest of the bundle the
+#: approval was bound to. Headers rather than a wrapper around the bytes,
+#: because the response body has to *be* the file: a person who saves it and
+#: hashes it must get the number the bundle printed, and any envelope at all
+#: would break that.
+ARTIFACT_DIGEST_HEADER = "X-Station-Artifact-Sha256"
+ARTIFACT_BUNDLE_HEADER = "X-Station-Bundle-Sha256"
+
 #: Which refusal reason gets which status code. A closed mapping rather than a
 #: guess per raise site, so two refusals of the same kind cannot answer
 #: differently depending on which function raised them.
@@ -97,10 +116,17 @@ _CONFLICT_REASONS = frozenset(
         "approval_foreign_session",
         "approval_foreign_task",
         "evidence_unavailable",
+        # The body was left out of the bundle, and the sentence says why - a
+        # ceiling, a secret-pattern hit, a file that is not UTF-8. A conflict
+        # rather than a 404: the file exists and is listed, and what cannot be
+        # served is its contents.
+        "artifact_body_unavailable",
     }
 )
 
-_MISSING_REASONS = frozenset({"task_missing", "evidence_record_missing"})
+_MISSING_REASONS = frozenset(
+    {"task_missing", "evidence_record_missing", "artifact_missing"}
+)
 
 
 def _refuse(exc: ProofError | TaskError) -> HTTPException:
@@ -308,6 +334,55 @@ def take_bundle(
     )
 
 
+@router.post("/{task_id}/artifact")
+def take_artifact(
+    request: Request,
+    session: CurrentSession,
+    task_id: str,
+    body: ProofArtifactRequest,
+) -> Response:
+    """Spend the approval and hand over one produced file. Writes no path.
+
+    The route this feature was missing. A bundle is the document *about* a
+    task - what was produced, what is absent, what a digest does and does not
+    establish - and an independent review measured that it was the only thing a
+    person could actually take: the report a run wrote stayed on disk while its
+    name and digest travelled. This hands over the file.
+
+    It is not a second consent shape. The approval is the one ``prepare``
+    minted, single-use and bound to the bundle digest, and since that digest
+    now covers the artifact bodies it covers these exact bytes. A refused
+    delivery spends the token like any other, so "the approval is spent once"
+    stays true across both download routes rather than per route.
+
+    ``def`` rather than ``async def``: the delivery rebuilds the bundle, which
+    reads and digests a directory, and doing that on the event loop would stall
+    every other request.
+    """
+    proof = _proof(request)
+    try:
+        result = proof.deliver_artifact(
+            task_id,
+            session_id=session.session_id,
+            share_token=body.share_token,
+            name=body.name,
+        )
+    except (ProofError, TaskError) as exc:
+        raise _refuse(exc) from exc
+
+    return Response(
+        content=result.payload,
+        media_type=result.media_type,
+        headers={
+            **_NO_STORE,
+            "Content-Disposition": content_disposition(result.filename),
+            DELIVERED_AT_HEADER: result.delivered_at.isoformat(),
+            ARTIFACT_DIGEST_HEADER: result.sha256,
+            ARTIFACT_BUNDLE_HEADER: result.bundle_sha256,
+        },
+    )
+
+
 @router.post("/{task_id}/acceptance", response_model=ProofWorkspaceResponse)
 def record_acceptance(
     request: Request,
@@ -366,4 +441,9 @@ def record_public_share(
         raise _refuse(exc) from exc
 
 
-__all__ = ["DELIVERED_AT_HEADER", "router"]
+__all__ = [
+    "ARTIFACT_BUNDLE_HEADER",
+    "ARTIFACT_DIGEST_HEADER",
+    "DELIVERED_AT_HEADER",
+    "router",
+]

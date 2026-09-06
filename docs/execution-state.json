@@ -1,5 +1,14 @@
 {
   "schema_version": 1,
+  "review_fix_round": {
+    "base_sha": "58b542310758cc2c95f735dd2bbde2808f2d658f",
+    "branch": "codex/review-regressions",
+    "status": "testing",
+    "merge_authorized": false,
+    "next_step": "F1-F5 PR, sonra model ve teslim akisi",
+    "live_verification_authorized": true,
+    "live_verification_performed": false
+  },
   "updated_utc": "2026-09-06T02:30:00Z",
   "base_sha": "5411171dd2302c6fea5a2af22695503859317c27",
   "note": "Kayit ile gercek Git/GitHub durumu celisirse Git/GitHub kaniti esastir.",

@@ -61,14 +61,15 @@ them is refused.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
 
 from station_api.db.models import (
+    AppMetadata,
     EvidenceRecord,
     TaskEvidenceOutcome,
     TaskRecord,
@@ -217,9 +218,7 @@ def _refs_from_row(row: TaskEvidenceOutcome | None) -> tuple[EvidenceRef, ...]:
     for field in EvidenceField:
         if field in UNFILLABLE_FIELDS:
             continue
-        ref_id_column, verified_column, version_column, detail_column, _ = (
-            _field_columns(field)
-        )
+        ref_id_column, verified_column, version_column, detail_column, _ = _field_columns(field)
         ref_id = str(getattr(row, ref_id_column))
         if not ref_id:
             continue
@@ -274,6 +273,30 @@ class TaskService:
 
     def __init__(self, *, engine: Engine) -> None:
         self._engine = engine
+        self._output_revision: Callable[[str], str] | None = None
+
+    def bind_output_reader(self, reader: Callable[[str], str]) -> None:
+        """The workspace owner supplies a read-only revision, never a verdict."""
+        self._output_revision = reader
+
+    def _current_refs(self, session: Session, view: TaskView) -> TaskView:
+        if self._output_revision is None or not view.refs:
+            return view
+        revision = self._output_revision(view.id)
+        if not revision:
+            return view
+        refs = []
+        for ref in view.refs:
+            if ref.field is not EvidenceField.PUBLIC_SHARE:
+                binding = session.get(AppMetadata, f"output.{view.id}.{ref.field.value}")
+                if binding is None or binding.value != revision:
+                    ref = replace(
+                        ref,
+                        verified=False,
+                        detail="Cikti veya plan surumu degisti; yeniden dogrulama gerekiyor.",
+                    )
+            refs.append(ref)
+        return replace(view, refs=tuple(refs))
 
     # --- creation ----------------------------------------------------------
 
@@ -413,18 +436,17 @@ class TaskService:
             if row is None:
                 raise TaskError("Gorev bulunamadi.", reason="task_missing")
             outcome = session.get(TaskEvidenceOutcome, task_id)
-            return _to_view(row, outcome)
+            return self._current_refs(session, _to_view(row, outcome))
 
     def list_tasks(self, *, module_id: ModuleId | None = None) -> tuple[TaskView, ...]:
         with Session(self._engine) as session:
             statement = select(TaskRecord).order_by(TaskRecord.created_at.desc())
             if module_id is not None:
                 statement = statement.where(TaskRecord.module_id == module_id.value)
-            rows: Sequence[TaskRecord] = (
-                session.execute(statement.limit(MAX_TASKS)).scalars().all()
-            )
+            rows: Sequence[TaskRecord] = session.execute(statement.limit(MAX_TASKS)).scalars().all()
             return tuple(
-                _to_view(row, session.get(TaskEvidenceOutcome, row.id)) for row in rows
+                self._current_refs(session, _to_view(row, session.get(TaskEvidenceOutcome, row.id)))
+                for row in rows
             )
 
     def gate(self, task_id: str) -> TaskGateStatus:
@@ -458,6 +480,20 @@ class TaskService:
         )
 
     # --- evidence ----------------------------------------------------------
+
+    def invalidate_output_evidence(self, task_id: str) -> None:
+        """Retain old references for history, but revoke their current validity."""
+        with Session(self._engine) as session, session.begin():
+            row = session.get(TaskEvidenceOutcome, task_id)
+            if row is None:
+                raise TaskError("Gorev bulunamadi.", reason="task_missing")
+            for field in (
+                EvidenceField.TASK_OUTCOME,
+                EvidenceField.TEST_RESULT,
+                EvidenceField.USER_ACCEPTANCE,
+            ):
+                _, verified_column, _, _, _ = _field_columns(field)
+                setattr(row, verified_column, False)
 
     def record_evidence(
         self,
@@ -516,6 +552,14 @@ class TaskService:
             setattr(row, version_column, ref.source_version_id)
             setattr(row, detail_column, ref.detail)
             setattr(row, recorded_column, now)
+            if self._output_revision is not None and field is not EvidenceField.PUBLIC_SHARE:
+                session.merge(
+                    AppMetadata(
+                        key=f"output.{task_id}.{field.value}",
+                        value=self._output_revision(task_id),
+                        updated_at=now,
+                    )
+                )
 
             task = session.get(TaskRecord, task_id)
             if task is not None:
@@ -549,9 +593,7 @@ class TaskService:
 
     # --- the state machine -------------------------------------------------
 
-    def transition(
-        self, task_id: str, target: TaskState, *, detail: str = ""
-    ) -> TaskView:
+    def transition(self, task_id: str, target: TaskState, *, detail: str = "") -> TaskView:
         """Move a task, or refuse and say why.
 
         Two refusals in addition to the table's own: a state no producer can
@@ -567,9 +609,7 @@ class TaskService:
 
         if target in EVIDENCE_DERIVED_STATES:
             status = evaluate_gate(
-                TaskGateInput(
-                    source_version_id=view.source_version_id, refs=view.refs
-                )
+                TaskGateInput(source_version_id=view.source_version_id, refs=view.refs)
             )
             if not status.ready_to_publish:
                 raise TaskError(

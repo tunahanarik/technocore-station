@@ -403,6 +403,7 @@ const OPENCODE_UNCONFIGURED: OpenCodeStatus = {
       "Akis (streaming) ve arac cagrisi bu surumde yoktur: resmi belgede bu iki bicimin sozlesmesi yayimlanmamis, tahmin edilmemistir.",
     shape_provenance:
       "Uc protokol ailesinin govde bicimi OpenCode belgelerinde yayimlanmis degildir.",
+    tool_call_provenance: "",
   },
 };
 

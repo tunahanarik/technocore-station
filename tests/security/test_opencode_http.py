@@ -219,9 +219,22 @@ def test_a_fresh_install_reports_not_configured_and_never_verified(
 def test_the_status_document_carries_the_unverified_header_caveat(
     mocked_client: TestClient,
 ) -> None:
-    """The assumption is restated to the user, not buried in a comment."""
-    payload = mocked_client.get(STATUS_PATH).json()
-    assert "dogrulanmamistir" in payload["auth_header_caveat"]
+    """The label is restated to the user, not buried in a comment.
+
+    What the label *says* changed in ADR-0012: a metered request carrying the
+    header answered 200, so calling it unverified became false. The half that
+    survived is about the source - the documentation still does not publish
+    the header - and that is the half a user needs, because it says the
+    provider may change it without breaking anything published. So this test
+    now pins both halves and pins that the retired word is gone; a caveat
+    that kept "dogrulanmamistir" for tidiness would be the kind of sentence
+    this repository has had to correct four times already.
+    """
+    caveat = mocked_client.get(STATUS_PATH).json()["auth_header_caveat"]
+
+    assert "yayimlanmamistir" in caveat
+    assert "dogrulandi" in caveat
+    assert "dogrulanmamistir" not in caveat
 
 
 def test_the_spending_context_opens_no_budget_and_claims_nothing_unlimited(
@@ -243,16 +256,59 @@ def test_the_spending_context_opens_no_budget_and_claims_nothing_unlimited(
     assert "engelledigini iddia etmez" in spending["use_balance"]
 
 
-def test_the_protocol_context_states_the_two_deferrals(
+def test_the_protocol_context_states_the_deferral_and_the_measurement(
     mocked_client: TestClient,
 ) -> None:
+    """One format still deferred, one measured - and the wire says which.
+
+    Named ``the_two_deferrals`` until Package H4, when one of the two stopped
+    being deferred. The renamed test asserts the surviving deferral in the
+    same words and requires the measured half to arrive with its provenance:
+    a client that is told tool calls are supported has to be able to read
+    what was measured, or it has been handed a claim rather than a fact.
+
+    The value is compared against the module constant rather than typed out,
+    because the point of the change was that the wire is **derived** from the
+    constant. Typing ``True`` here would let the two drift apart again, which
+    is the drift the ``public_share_available`` repair was about.
+    """
+    from station_api.opencode.events import STREAMING_SUPPORTED, TOOL_CALLS_SUPPORTED
+
     context = mocked_client.get(STATUS_PATH).json()["protocol_context"]
 
-    assert context["streaming_supported"] is False
-    assert context["tool_calls_supported"] is False
+    assert context["streaming_supported"] is STREAMING_SUPPORTED is False
+    assert context["tool_calls_supported"] is TOOL_CALLS_SUPPORTED is True
     assert len(context["protocols"]) == 3
     assert context["deferral"]
     assert context["shape_provenance"]
+    assert "chat/completions" in context["tool_call_provenance"]
+
+
+def test_the_wire_follows_the_constant_rather_than_a_second_hard_coded_answer(
+    mocked_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The H3 repair, applied to the field H4 changed.
+
+    An adversarial review of Package H3 measured that mutating a derived
+    field into a hard-coded literal **killed nothing**: two tests claimed the
+    wire and the rule could not drift apart, and both passed against a fixed
+    value. So this drives the derivation from the other side - the module
+    constant is flipped, and the wire has to follow it.
+
+    Without this, a route that answered ``True`` unconditionally would look
+    identical to one that reads the constant, right up to the release where
+    somebody sets the constant to ``False`` and the surface keeps saying the
+    format is supported.
+    """
+    from station_api.routes import opencode as opencode_routes
+
+    monkeypatch.setattr(opencode_routes, "TOOL_CALLS_SUPPORTED", False)
+    context = mocked_client.get(STATUS_PATH).json()["protocol_context"]
+
+    assert context["tool_calls_supported"] is False
+    # And the provenance goes with it: a sentence saying what was measured,
+    # beside a field saying nothing was, is the claim without the evidence.
+    assert context["tool_call_provenance"] == ""
 
 
 # ---------------------------------------------------------------------------

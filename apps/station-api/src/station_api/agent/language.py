@@ -1,13 +1,21 @@
 """The claims the agent runtime may not make, and the ones it makes instead.
 
 Package E built this control for the evidence layer and H1 extended it to the
-work scan (ADR-0007 10). Both scans are scoped to their own directory, so a
-new package's wording is covered by nothing at all until it brings its own -
-and a rule that does not cover the text being written is not a rule. ADR-0008
-9 asks H2 for the same two halves over its own tree: a runtime guard on the
-sentences this package writes, and a static scan over **every string literal
-in the package**, plus a mutation control that proves the guard is
-load-bearing.
+work scan (ADR-0007 10) - a rule that does not cover the text being written
+is not a rule. ADR-0008 9 asks H2 for the same two halves over its own tree:
+a runtime guard on the sentences this package writes, and a static scan over
+**every string literal in the package**, plus a mutation control that proves
+the guard is load-bearing.
+
+This docstring used to add that both earlier scans were scoped to their own
+directory, so a new package's wording was covered by nothing at all until it
+brought its own. That was true, and stating it in prose while nothing checked
+it is the shape this repository has now closed twelve times. It no longer
+holds: ``tests/security/test_language_scope.py`` walks the whole of
+``station_api`` and applies the union of all four registries to every string
+literal in it, so a package that brings no registry of its own is covered by
+the widest one rather than by nothing. What a package still gets by bringing
+its own is the *runtime* half and its own additions.
 
 Reused rather than reimplemented
 --------------------------------
@@ -31,10 +39,15 @@ What H2 adds, and why each one
     most expensive false sentence the product could print.
 
 ``"test gecti"``, ``"testler gecti"``
-    A test result is a **recorded** result, and this build records none: the
-    executor that would produce one is exactly the thing that is closed. The
-    run reports ``not_implemented`` for its test condition, which is why a
-    task cannot reach ``ready_to_publish`` from a run.
+    Both phrases stay forbidden, and ADR-0012 changed why. They used to be
+    refused because nothing could produce a test result at all; now
+    :mod:`station_api.agent.acceptance` can, and the reason has moved rather
+    than gone. What it decides is a **closed set of conditions read off the
+    bytes on disk** - a file exists, parses, carries the keys it promised,
+    hashes to what was expected. "The test passed" describes a check that was
+    executed, and no check is executed here. The permitted wording says which
+    conditions were satisfied; a plan that wrote none still reports
+    ``not_implemented``, and a task cannot be published on one.
 
 ``"otomatik onaylandi"``
     Approval is a person's act. A run begins because a user asked for it, and
@@ -92,18 +105,42 @@ PERMITTED_ALTERNATIVES: tuple[str, ...] = (
 #: The sentence shown beside every run. ADR-0008 1 and 7 both require the
 #: cost of a closed executor to be stated to the user rather than left in a
 #: design document.
+#:
+#: It made two absolute claims and ADR-0012 took both away on one commit.
+#: *"There is no model call"* stopped being true when the provider's tool-call
+#: contract was measured and the lane opened, and *"the test result stays
+#: 'not implemented'"* stopped being true when
+#: :mod:`station_api.agent.acceptance` gave a plan conditions a machine can
+#: decide. Neither was softened here: the sentence now states the same costs
+#: with the conditions they actually carry, which is longer to write and the
+#: only version that survives being read next to the screen it appears on.
+#:
+#: Everything it still says, it still owes. Arbitrary code and shell execution
+#: are closed (ADR-0008 1, restated by ADR-0012 7). The model **proposes**; it
+#: cannot approve its own plan or start a run. A plan that records only a
+#: sentence is not checked, and a task cannot be published on one.
 RUN_HONESTY_SENTENCE = (
-    "Bu surumde arac zinciri deterministiktir: model cagrisi, kabuk komutu ve "
-    "keyfi kod yurutmesi yoktur. Uretilen dosyalar uzerinde yalnizca "
-    "deterministik dogrulayicilar kosar; test sonucu 'uygulanmadi' kalir ve "
-    "gorev bu nedenle yayima hazir sayilamaz."
+    "Bu surumde kabuk komutu ve keyfi kod yurutmesi yoktur; araclar kapali "
+    "bir registry'den gelir ve deterministiktir. Model plan onerir, "
+    "calistirmaz. Test sonucu planin kendi kabul kosullarindan turetilir; "
+    "kabul kosulu yazmamis bir plan 'uygulanmadi' alir ve yayima hazir "
+    "sayilamaz."
 )
 
 #: The second half, about what a stop actually stops.
+#:
+#: The last clause used to read "and the file it produced is removed from the
+#: workspace", which was true of one of the two writes and false of the other.
+#: A cancelled ``update_workspace_file`` call does not delete its target - the
+#: target is an **earlier, completed** step's output - it puts the previous
+#: bytes back. The old sentence promised a user that stopping a run could
+#: destroy work the run had already shown them, and for a while the code did
+#: exactly that.
 STOP_HONESTY_SENTENCE = (
     "Durdur, sonraki arac cagrisini engeller. Baslamis bir cagri kendi "
-    "adimini bitirir; iptalden sonra donen sonucu kaydedilmez ve urettigi "
-    "dosya calisma alanindan kaldirilir."
+    "adimini bitirir; iptalden sonra donen sonucu kaydedilmez. Adim yeni bir "
+    "dosya olusturduysa o dosya kaldirilir; var olan bir dosyanin ustune "
+    "yazdiysa onceki baytlar geri yuklenir."
 )
 
 #: Precomputed once. Each entry is the folded form of a forbidden phrase.

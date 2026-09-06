@@ -281,11 +281,19 @@ def _error_excerpt(response: httpx.Response) -> str:
 
     This is the one door remote prose comes through, so it is where the claim
     registry is applied to it. The excerpt is quoted inside a sentence this
-    product wrote ("the server answered 429: ..."), which means a body saying
-    "sunucu kaniti" would be putting a forbidden claim in our mouth. It is
-    replaced rather than refused: the excerpt is a courtesy, and a remote
-    server must not be able to decide that a record can never be exported
-    again (the failure this replaced - see ``evidence/language.py``).
+    product wrote ("the server answered 429: ..."), so a body carrying one of
+    the registry's phrases - the first entry of
+    :data:`station_api.evidence.language.FORBIDDEN_PHRASES` is the plain case:
+    a server calling its own answer proof - would be putting a forbidden claim
+    in our mouth. It is replaced rather than refused: the excerpt is a
+    courtesy, and a remote server must not be able to decide that a record can
+    never be exported again (the failure this replaced - see
+    ``evidence/language.py``).
+
+    The phrase is named rather than spelled here on purpose. Only the four
+    registries may write a registered phrase out; every other file in the tree
+    is scanned for them, this docstring included
+    (``test_language_scope.py``).
     """
     chunks: list[bytes] = []
     total = 0

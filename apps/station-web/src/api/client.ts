@@ -13,9 +13,39 @@
  *    response was garbage or the session expired; `ApiError` says which.
  */
 
+import {
+  type ResponseValidator,
+  isActivityDeleteResponse,
+  isActivityListResponse,
+  isAgentSurfaceResponse,
+  isAgentTaskRunsResponse,
+  isAppStatus,
+  isAuditChainStatus,
+  isComposeCapability,
+  isComposeDraft,
+  isComposeSendResult,
+  isComposeSignature,
+  isConformanceStatus,
+  isEvidenceCaptureResult,
+  isEvidenceList,
+  isIdentityStatus,
+  isModelProposalResponse,
+  isOpenCodeStatus,
+  isProofPrepareResult,
+  isProofWorkspace,
+  isRecoveryInspectResult,
+  isSessionBootstrap,
+  isTaskListResponse,
+  isTaskStatusResponse,
+  isTechnocoreStatus,
+  isWorkScanStatus,
+  isWorkScanSuggestion,
+  isWriteGateStatus,
+} from "./response-validation";
 import type {
   ActivityDeleteResponse,
   ActivityListResponse,
+  AgentAcceptanceKindName,
   AgentSurfaceResponse,
   AgentTaskRunsResponse,
   AppStatus,
@@ -29,13 +59,13 @@ import type {
   EvidenceExportFormat,
   EvidenceList,
   IdentityStatus,
+  ModelProposalResponse,
   OpenCodeStatus,
   ProofBundleFormat,
   ProofPrepareResult,
   ProofWorkspace,
   ProtectionMode,
   RecoveryInspectResult,
-  SessionBootstrap,
   TaskListResponse,
   TaskStatusResponse,
   TaskUserTransitionName,
@@ -288,8 +318,20 @@ function readRequestId(response: Response): string | null {
   return value !== null && REQUEST_ID_RE.test(value) ? value : null;
 }
 
+/**
+ * One request, one deadline, one validated document.
+ *
+ * `validate` is a **required parameter**, and that is the whole mechanism: a
+ * new endpoint cannot be added without saying what its response must look
+ * like, because the call site does not compile until it does. The previous
+ * shape - a single `if (path === "/api/app/status")` guard - checked one URL
+ * and returned `data as T` for every other one, so a 200 carrying `{}` was
+ * accepted everywhere else and only failed later, inside a component, as a
+ * `TypeError` on a nested field.
+ */
 async function request<T>(
   path: string,
+  validate: ResponseValidator<T>,
   init?: RequestInit,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<T> {
@@ -316,8 +358,17 @@ async function request<T>(
   }
 
   try {
-    return (await response.json()) as T;
-  } catch {
+    const data: unknown = await response.json();
+    // Every endpoint, not one of them. The check descends into nested objects
+    // and list elements, so a body that is the right shape only at the top
+    // level is refused here rather than crashing a screen later.
+    if (!validate(data)) throw new Error("invalid_document_shape");
+    return data;
+  } catch (caught) {
+    if (caught instanceof DOMException &&
+        (caught.name === "TimeoutError" || caught.name === "AbortError")) {
+      throw classifyFetchFailure(caught, deadline);
+    }
     // The response arrived and claimed success but does not parse. That is a
     // different finding from a dropped connection and is reported as such.
     throw new ApiError(response.status, "malformed_response", { kind: "malformed", requestId });
@@ -326,7 +377,7 @@ async function request<T>(
 
 /** Exchange the session cookie for this session's CSRF value. */
 export async function bootstrapSession(): Promise<void> {
-  const data = await request<SessionBootstrap>("/api/session/bootstrap");
+  const data = await request("/api/session/bootstrap", isSessionBootstrap);
   csrfToken = data.csrf_token;
   csrfHeader = data.csrf_header || DEFAULT_CSRF_HEADER;
 }
@@ -342,7 +393,7 @@ export function resetSessionState(): void {
 }
 
 export async function fetchAppStatus(): Promise<AppStatus> {
-  return request<AppStatus>("/api/app/status");
+  return request("/api/app/status", isAppStatus);
 }
 
 /**
@@ -351,14 +402,16 @@ export async function fetchAppStatus(): Promise<AppStatus> {
  */
 export async function mutate<T>(
   path: string,
+  validate: ResponseValidator<T>,
   body: unknown,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<T> {
   if (csrfToken === null) {
     throw new Error("session_not_bootstrapped");
   }
-  return request<T>(
+  return request(
     path,
+    validate,
     {
       method: "POST",
       body: JSON.stringify(body),
@@ -369,19 +422,27 @@ export async function mutate<T>(
 }
 
 /** Multipart POST. Used only to send an already-encrypted .tcrec file. */
-async function mutateForm<T>(path: string, form: FormData): Promise<T> {
+async function mutateForm<T>(
+  path: string,
+  validate: ResponseValidator<T>,
+  form: FormData,
+): Promise<T> {
   if (csrfToken === null) {
     throw new Error("session_not_bootstrapped");
   }
   // Content-Type is intentionally omitted: the browser must set the multipart
   // boundary itself.
-  return request<T>(path, { method: "POST", body: form, headers: { [csrfHeader]: csrfToken } });
+  return request(path, validate, {
+    method: "POST",
+    body: form,
+    headers: { [csrfHeader]: csrfToken },
+  });
 }
 
 // --- Identity and recovery -------------------------------------------------
 
 export async function fetchIdentity(): Promise<IdentityStatus> {
-  return request<IdentityStatus>("/api/identity");
+  return request("/api/identity", isIdentityStatus);
 }
 
 /**
@@ -390,7 +451,7 @@ export async function fetchIdentity(): Promise<IdentityStatus> {
  * open or closed.
  */
 export async function fetchWriteGate(): Promise<WriteGateStatus> {
-  return request<WriteGateStatus>("/api/write-gate");
+  return request("/api/write-gate", isWriteGateStatus);
 }
 
 /**
@@ -401,7 +462,7 @@ export async function fetchWriteGate(): Promise<WriteGateStatus> {
  * this boundary.
  */
 export async function fetchConformance(): Promise<ConformanceStatus> {
-  return request<ConformanceStatus>("/api/conformance/status");
+  return request("/api/conformance/status", isConformanceStatus);
 }
 
 /**
@@ -409,7 +470,7 @@ export async function fetchConformance(): Promise<ConformanceStatus> {
  * it reports what the last user-initiated check found, or that none has run.
  */
 export async function fetchTechnocore(): Promise<TechnocoreStatus> {
-  return request<TechnocoreStatus>("/api/technocore/status");
+  return request("/api/technocore/status", isTechnocoreStatus);
 }
 
 /**
@@ -418,7 +479,7 @@ export async function fetchTechnocore(): Promise<TechnocoreStatus> {
  * the backend runs a fixed source registry and there is nothing to steer.
  */
 export async function refreshTechnocore(): Promise<TechnocoreStatus> {
-  return mutate<TechnocoreStatus>("/api/technocore/refresh", {}, REFRESH_TIMEOUT_MS);
+  return mutate("/api/technocore/refresh", isTechnocoreStatus, {}, REFRESH_TIMEOUT_MS);
 }
 
 export interface CreateIdentityInput {
@@ -431,7 +492,7 @@ export interface CreateIdentityInput {
 }
 
 export async function createIdentity(input: CreateIdentityInput): Promise<IdentityStatus> {
-  return mutate<IdentityStatus>("/api/identity", {
+  return mutate("/api/identity", isIdentityStatus, {
     protection: input.protection,
     passphrase: input.passphrase,
     passphrase_confirm: input.passphraseConfirm,
@@ -497,7 +558,7 @@ export async function verifyRecovery(
   const form = new FormData();
   form.append("recovery_file", file);
   form.append("recovery_passphrase", recoveryPassphrase);
-  return mutateForm<IdentityStatus>("/api/identity/recovery/verify", form);
+  return mutateForm("/api/identity/recovery/verify", isIdentityStatus, form);
 }
 
 export async function inspectRecovery(
@@ -507,7 +568,7 @@ export async function inspectRecovery(
   const form = new FormData();
   form.append("recovery_file", file);
   form.append("recovery_passphrase", recoveryPassphrase);
-  return mutateForm<RecoveryInspectResult>("/api/identity/recovery/inspect", form);
+  return mutateForm("/api/identity/recovery/inspect", isRecoveryInspectResult, form);
 }
 
 export async function adoptRecovery(input: {
@@ -527,11 +588,11 @@ export async function adoptRecovery(input: {
   if (input.vaultPassphrase !== null) {
     form.append("vault_passphrase", input.vaultPassphrase);
   }
-  return mutateForm<IdentityStatus>("/api/identity/recovery/adopt", form);
+  return mutateForm("/api/identity/recovery/adopt", isIdentityStatus, form);
 }
 
 export async function revokeIdentity(confirmDid: string): Promise<IdentityStatus> {
-  return mutate<IdentityStatus>("/api/identity/revoke", { confirm_did: confirmDid });
+  return mutate("/api/identity/revoke", isIdentityStatus, { confirm_did: confirmDid });
 }
 
 // --- Composer (Paket D) ----------------------------------------------------
@@ -549,7 +610,7 @@ export async function revokeIdentity(confirmDid: string): Promise<IdentityStatus
  * closed door instead of showing an inert form.
  */
 export async function fetchComposeCapability(): Promise<ComposeCapability> {
-  return request<ComposeCapability>("/api/compose/capability");
+  return request("/api/compose/capability", isComposeCapability);
 }
 
 /** Step 1: sweep and bind a digest. Reserves no nonce and signs nothing. */
@@ -557,7 +618,7 @@ export async function createComposeDraft(input: {
   readonly room: string;
   readonly text: string;
 }): Promise<ComposeDraft> {
-  return mutate<ComposeDraft>("/api/compose/draft", {
+  return mutate("/api/compose/draft", isComposeDraft, {
     room: input.room,
     text: input.text,
   });
@@ -576,8 +637,7 @@ export async function signComposeDraft(input: {
   readonly draftDigest: string;
   readonly vaultPassphrase: string | null;
 }): Promise<ComposeSignature> {
-  return mutate<ComposeSignature>(
-    "/api/compose/sign",
+  return mutate("/api/compose/sign", isComposeSignature,
     {
       draft_id: input.draftId,
       draft_digest: input.draftDigest,
@@ -596,8 +656,7 @@ export async function signComposeDraft(input: {
  * nonce is spent whatever the outcome (ADR-0002 3).
  */
 export async function sendComposeMessage(sendToken: string): Promise<ComposeSendResult> {
-  return mutate<ComposeSendResult>(
-    "/api/compose/send",
+  return mutate("/api/compose/send", isComposeSendResult,
     { send_token: sendToken },
     SEND_TIMEOUT_MS,
   );
@@ -613,7 +672,7 @@ export async function sendComposeMessage(sendToken: string): Promise<ComposeSend
 
 /** The archive plus the audit chain's verdict, in one read. */
 export async function fetchEvidenceRecords(): Promise<EvidenceList> {
-  return request<EvidenceList>("/api/evidence/records");
+  return request("/api/evidence/records", isEvidenceList);
 }
 
 /**
@@ -626,8 +685,7 @@ export async function fetchEvidenceRecords(): Promise<EvidenceList> {
 export async function captureEvidenceLine(
   evidenceId: string,
 ): Promise<EvidenceCaptureResult> {
-  return mutate<EvidenceCaptureResult>(
-    "/api/evidence/capture",
+  return mutate("/api/evidence/capture", isEvidenceCaptureResult,
     { evidence_id: evidenceId },
     CAPTURE_TIMEOUT_MS,
   );
@@ -635,7 +693,7 @@ export async function captureEvidenceLine(
 
 /** Recompute the chain and compare it against its separately held head. */
 export async function fetchAuditChain(): Promise<AuditChainStatus> {
-  return request<AuditChainStatus>("/api/evidence/audit");
+  return request("/api/evidence/audit", isAuditChainStatus);
 }
 
 /**
@@ -700,7 +758,7 @@ export async function exportEvidence(input: {
 
 /** The whole connection, read-only. Contacts nobody outside this machine. */
 export async function fetchOpenCodeStatus(): Promise<OpenCodeStatus> {
-  return request<OpenCodeStatus>("/api/opencode/status");
+  return request("/api/opencode/status", isOpenCodeStatus);
 }
 
 /**
@@ -716,12 +774,12 @@ export async function fetchOpenCodeStatus(): Promise<OpenCodeStatus> {
  * verified**, from the same fields that would have said anything else.
  */
 export async function storeOpenCodeCredential(apiKey: string): Promise<OpenCodeStatus> {
-  return mutate<OpenCodeStatus>("/api/opencode/credential", { api_key: apiKey }, CREDENTIAL_TIMEOUT_MS);
+  return mutate("/api/opencode/credential", isOpenCodeStatus, { api_key: apiKey }, CREDENTIAL_TIMEOUT_MS);
 }
 
 /** Remove the stored key. Empty body: there is nothing here to steer. */
 export async function forgetOpenCodeCredential(): Promise<OpenCodeStatus> {
-  return mutate<OpenCodeStatus>("/api/opencode/credential/forget", {});
+  return mutate("/api/opencode/credential/forget", isOpenCodeStatus, {});
 }
 
 /**
@@ -733,7 +791,7 @@ export async function forgetOpenCodeCredential(): Promise<OpenCodeStatus> {
  * outbound host.
  */
 export async function refreshOpenCodeCatalog(): Promise<OpenCodeStatus> {
-  return mutate<OpenCodeStatus>("/api/opencode/catalog/refresh", {}, CATALOG_TIMEOUT_MS);
+  return mutate("/api/opencode/catalog/refresh", isOpenCodeStatus, {}, CATALOG_TIMEOUT_MS);
 }
 
 /**
@@ -752,7 +810,7 @@ export async function selectOpenCodeModel(input: {
   readonly modelId: string;
   readonly trainingAcknowledged: boolean;
 }): Promise<OpenCodeStatus> {
-  return mutate<OpenCodeStatus>("/api/opencode/model", {
+  return mutate("/api/opencode/model", isOpenCodeStatus, {
     model_id: input.modelId,
     training_acknowledged: input.trainingAcknowledged,
   });
@@ -760,12 +818,15 @@ export async function selectOpenCodeModel(input: {
 
 // --- Public-room work scan (Paket H1) --------------------------------------
 //
-// Four calls, and the shape of the set is the point.
+// Five calls, and the shape of the set is the point.
 //
-// * **Nothing here is called on a timer.** No interval, no background task,
-//   no `wait` parameter and no cursor that a "read the rest" loop could be
-//   built on. `fetchWorkScanStatus` runs once on mount and contacts nobody;
-//   the other three run only inside a click (ADR-0007 4).
+// * **Nothing here is called on a timer.** No interval, no background task
+//   and no `wait` parameter. There *is* now a cursor - the discovery log's
+//   `since` - and it is a parameter of a call rather than a value this module
+//   keeps: it comes from the caller on the press that uses it, so continuing
+//   the log is a user action and not the second half of a loop.
+//   `fetchWorkScanStatus` runs once on mount and contacts nobody; the other
+//   four run only inside a click (ADR-0007 4).
 // * **The scope is the caller's room list.** There is no scan-everything
 //   call and no endpoint behind one. `scanWorkRooms` sends the rooms it was
 //   given and nothing about an address.
@@ -828,6 +889,15 @@ export const WORK_SCAN_ROOM_INDEX_LIMIT = 50;
 export const WORK_SCAN_MESSAGE_LIMIT = 50;
 
 /**
+ * Lines read from the discovery log in one read. Same published clamp again.
+ *
+ * The log is an ordinary room to the backend - `/r/{room}` with a
+ * compile-time room name - so it inherits the same 1..200 clamp, and this
+ * sends the number explicitly for the same reason the other two do.
+ */
+export const WORK_SCAN_DISCOVERY_LIMIT = 50;
+
+/**
  * The whole scan surface, read-only.
  *
  * Contacts nobody: it reports what the last user-initiated read found, or
@@ -835,7 +905,7 @@ export const WORK_SCAN_MESSAGE_LIMIT = 50;
  * mount, and that is safe precisely because it makes no outbound request.
  */
 export async function fetchWorkScanStatus(): Promise<WorkScanStatus> {
-  return request<WorkScanStatus>("/api/workscan/status");
+  return request("/api/workscan/status", isWorkScanStatus);
 }
 
 /**
@@ -846,9 +916,37 @@ export async function fetchWorkScanStatus(): Promise<WorkScanStatus> {
  * read everything.
  */
 export async function refreshWorkScanRooms(): Promise<WorkScanStatus> {
-  return mutate<WorkScanStatus>(
-    "/api/workscan/rooms/refresh",
+  return mutate("/api/workscan/rooms/refresh", isWorkScanStatus,
     { limit: WORK_SCAN_ROOM_INDEX_LIMIT },
+    WORK_SCAN_ROOMS_TIMEOUT_MS,
+  );
+}
+
+/**
+ * Read the discovery log once, because the user asked.
+ *
+ * `GET /r/events` is the service's own append-ordered log of new public rooms.
+ * It is a third decision, not a step inside either of the other two: "what has
+ * opened lately", "show me the current list" and "read these rooms" are things
+ * a person chooses separately, and a button that did two of them would always
+ * do the more expensive one.
+ *
+ * `since` is the cursor **the caller carries**, taken from the previous read's
+ * `last_seq` and passed back only when a person presses the continue control.
+ * Nothing on this side stores it between reads: a remembered cursor plus any
+ * scheduler is a crawl, and this module owns the half it can refuse.
+ *
+ * The deadline is `WORK_SCAN_ROOMS_TIMEOUT_MS` rather than a number of its
+ * own, and that reuse is the honest choice: behind this route the server makes
+ * exactly one bounded outbound read, through the same client, against the same
+ * per-target budget as the overview read. A second constant here would be a
+ * second answer to a question that has one.
+ */
+export async function refreshWorkScanDiscovery(
+  since: number | null,
+): Promise<WorkScanStatus> {
+  return mutate("/api/workscan/discovery/refresh", isWorkScanStatus,
+    { since, limit: WORK_SCAN_DISCOVERY_LIMIT },
     WORK_SCAN_ROOMS_TIMEOUT_MS,
   );
 }
@@ -862,8 +960,7 @@ export async function refreshWorkScanRooms(): Promise<WorkScanStatus> {
  * included - server-side.
  */
 export async function scanWorkRooms(rooms: readonly string[]): Promise<WorkScanStatus> {
-  return mutate<WorkScanStatus>(
-    "/api/workscan/scan",
+  return mutate("/api/workscan/scan", isWorkScanStatus,
     { rooms: [...rooms], limit: WORK_SCAN_MESSAGE_LIMIT },
     WORK_SCAN_BASE_TIMEOUT_MS + rooms.length * WORK_SCAN_ROOM_TIMEOUT_MS,
   );
@@ -879,7 +976,7 @@ export async function scanWorkRooms(rooms: readonly string[]): Promise<WorkScanS
 export async function suggestWorkScanCandidate(
   candidateId: string,
 ): Promise<WorkScanSuggestion> {
-  return mutate<WorkScanSuggestion>("/api/workscan/suggest", {
+  return mutate("/api/workscan/suggest", isWorkScanSuggestion, {
     candidate_id: candidateId,
   });
 }
@@ -947,7 +1044,7 @@ export const AGENT_RUN_TIMEOUT_MS = 150000;
 
 /** The tasks, newest first, bounded. Reads a local table and nothing else. */
 export async function fetchTasks(): Promise<TaskListResponse> {
-  return request<TaskListResponse>("/api/tasks");
+  return request("/api/tasks", isTaskListResponse);
 }
 
 /**
@@ -959,12 +1056,12 @@ export async function fetchTasks(): Promise<TaskListResponse> {
  * restart left interrupted - which it **lists** and never continues.
  */
 export async function fetchAgentSurface(): Promise<AgentSurfaceResponse> {
-  return request<AgentSurfaceResponse>("/api/tasks/surface");
+  return request("/api/tasks/surface", isAgentSurfaceResponse);
 }
 
 /** One task's runs and the files its workspace currently holds. */
 export async function fetchTaskRuns(taskId: string): Promise<AgentTaskRunsResponse> {
-  return request<AgentTaskRunsResponse>(`/api/tasks/${taskId}/runs`);
+  return request(`/api/tasks/${taskId}/runs`, isAgentTaskRunsResponse);
 }
 
 /**
@@ -979,7 +1076,7 @@ export async function transitionTask(input: {
   readonly target: TaskUserTransitionName;
   readonly detail?: string;
 }): Promise<TaskStatusResponse> {
-  return mutate<TaskStatusResponse>(`/api/tasks/${input.taskId}/transition`, {
+  return mutate(`/api/tasks/${input.taskId}/transition`, isTaskStatusResponse, {
     target: input.target,
     detail: input.detail ?? "",
   });
@@ -998,11 +1095,29 @@ export async function planTaskRun(input: {
   readonly steps: readonly { readonly tool_id: string; readonly arguments: Record<string, string> }[];
   readonly expectedArtifacts: readonly string[];
   readonly testCondition: string;
+  /**
+   * How success is established for a **machine**, as conditions from the
+   * closed acceptance registry.
+   *
+   * Optional, and its absence is not an oversight: a plan may record only the
+   * sentence, and such a plan reports `not_implemented` and leaves the task
+   * short of publication - which is exactly what an unchecked plan has
+   * earned. Defaulting this to something non-empty here would be this client
+   * inventing a success criterion nobody wrote.
+   */
+  readonly acceptance?: readonly {
+    readonly kind: AgentAcceptanceKindName;
+    readonly arguments: Record<string, string>;
+  }[];
 }): Promise<AgentTaskRunsResponse> {
-  return mutate<AgentTaskRunsResponse>(`/api/tasks/${input.taskId}/runs`, {
+  return mutate(`/api/tasks/${input.taskId}/runs`, isAgentTaskRunsResponse, {
     steps: input.steps.map((step) => ({ tool_id: step.tool_id, arguments: step.arguments })),
     expected_artifacts: [...input.expectedArtifacts],
     test_condition: input.testCondition,
+    acceptance: (input.acceptance ?? []).map((entry) => ({
+      kind: entry.kind,
+      arguments: entry.arguments,
+    })),
   });
 }
 
@@ -1011,8 +1126,7 @@ export async function startTaskRun(
   taskId: string,
   runId: string,
 ): Promise<AgentTaskRunsResponse> {
-  return mutate<AgentTaskRunsResponse>(
-    `/api/tasks/${taskId}/runs/${runId}/start`,
+  return mutate(`/api/tasks/${taskId}/runs/${runId}/start`, isAgentTaskRunsResponse,
     {},
     AGENT_RUN_TIMEOUT_MS,
   );
@@ -1030,7 +1144,7 @@ export async function stopTaskRun(
   taskId: string,
   runId: string,
 ): Promise<AgentTaskRunsResponse> {
-  return mutate<AgentTaskRunsResponse>(`/api/tasks/${taskId}/runs/${runId}/stop`, {});
+  return mutate(`/api/tasks/${taskId}/runs/${runId}/stop`, isAgentTaskRunsResponse, {});
 }
 
 /** Continue a paused run, within the scope already approved. */
@@ -1038,10 +1152,106 @@ export async function resumeTaskRun(
   taskId: string,
   runId: string,
 ): Promise<AgentTaskRunsResponse> {
-  return mutate<AgentTaskRunsResponse>(
-    `/api/tasks/${taskId}/runs/${runId}/resume`,
+  return mutate(`/api/tasks/${taskId}/runs/${runId}/resume`, isAgentTaskRunsResponse,
     {},
     AGENT_RUN_TIMEOUT_MS,
+  );
+}
+
+/**
+ * Ask Station to re-derive whether this task is ready to publish.
+ *
+ * **There is no target in this body, and that is the whole design.** SI-222
+ * says `ready_to_publish` is derived from evidence and cannot be asked for,
+ * so it is absent from `TaskUserTransitionName` and there is no parameter
+ * here that could name it. What this asks for is a *re-reading* of three
+ * fields three different acts filled - what the runner produced, what the
+ * plan's own acceptance conditions decided over those bytes, and a person's
+ * acceptance - and the task moves only if all three are verified.
+ *
+ * A caller may ask as often as they like and can never make it come out
+ * differently. A task with a missing or unverified field gets a refusal that
+ * names the fields, not a state change.
+ */
+export async function deriveTaskPublishReadiness(input: {
+  readonly taskId: string;
+  readonly detail?: string;
+}): Promise<TaskStatusResponse> {
+  return mutate(
+    `/api/tasks/${encodeURIComponent(input.taskId)}/publish-readiness`,
+    isTaskStatusResponse,
+    { detail: input.detail ?? "" },
+  );
+}
+
+// --- The model planning lane (ADR-0012) ------------------------------------
+//
+// The one group in this file that causes an outbound request, and it causes
+// exactly one per call: the server spends a single model turn inside the
+// request that asked for it. Three properties are worth stating at the call
+// site rather than only in the route:
+//
+// * **it starts nothing.** The best outcome is `planned` - a recorded plan in
+//   the `planned` phase, waiting for the start route a person invokes. There
+//   is no argument here that could start it and no code path from the planner
+//   to the runner;
+// * **it cannot choose a model, a prompt or a tool list.** The model comes
+//   from the stored selection, the tools are the whole compile-time registry
+//   and the system prompt is a constant. The only free text is the person's
+//   own instruction;
+// * **it schedules nothing.** One turn per call, inside the call. No timer,
+//   no background task, no retry of its own (SI-272).
+
+/**
+ * The deadline for one model turn.
+ *
+ * The server's own transport budget for the metered endpoint is connect 5s +
+ * write 10s + read 30s with **exactly one attempt**, and the turn then
+ * resolves the proposal against the tool registry and records a plan. Sixty
+ * seconds sits above that with margin.
+ *
+ * A shorter deadline would abandon a turn the provider may already have
+ * billed and report `timeout` - a claim about the *local* service - while
+ * discarding the outcome, which is the only thing that says whether a plan
+ * was recorded.
+ */
+export const MODEL_PLAN_TIMEOUT_MS = 60000;
+
+/**
+ * Spend one model turn on this task and record whatever plan it proposed.
+ *
+ * `instruction` is the person's own words and the only free text that reaches
+ * the provider besides the task's own recorded facts. It is swept, bounded
+ * and **not stored**: what gets written down is the plan the turn produced.
+ *
+ * The response carries the task and its runs after the turn, so a caller
+ * needs one request rather than three to show what changed.
+ */
+export async function proposeModelPlan(input: {
+  readonly taskId: string;
+  readonly instruction?: string;
+}): Promise<ModelProposalResponse> {
+  return mutate(
+    `/api/tasks/${encodeURIComponent(input.taskId)}/model-plan`,
+    isModelProposalResponse,
+    { instruction: input.instruction ?? "" },
+    MODEL_PLAN_TIMEOUT_MS,
+  );
+}
+
+/**
+ * Drop this task's planning session so the next turn starts from nothing.
+ *
+ * Contacts nobody, which is why it keeps the default deadline. Starting over
+ * is not a resume and it is not a way around the ceiling: the recorded runs,
+ * the workspace and the task's evidence are all untouched, and the turn
+ * counter comes back in the response rather than being reset here.
+ */
+export async function forgetModelPlanSession(taskId: string): Promise<ModelProposalResponse> {
+  return mutate(
+    `/api/tasks/${encodeURIComponent(taskId)}/model-plan/forget`,
+    isModelProposalResponse,
+    {},
   );
 }
 
@@ -1054,7 +1264,7 @@ export async function resumeTaskRun(
  */
 export async function fetchActivity(runId = ""): Promise<ActivityListResponse> {
   const query = runId === "" ? "" : `?run_id=${encodeURIComponent(runId)}`;
-  return request<ActivityListResponse>(`/api/activity${query}`);
+  return request(`/api/activity${query}`, isActivityListResponse);
 }
 
 /**
@@ -1065,7 +1275,7 @@ export async function fetchActivity(runId = ""): Promise<ActivityListResponse> {
  * them" answer different questions.
  */
 export async function deleteActivity(runId = ""): Promise<ActivityDeleteResponse> {
-  return mutate<ActivityDeleteResponse>("/api/activity/delete", { run_id: runId });
+  return mutate("/api/activity/delete", isActivityDeleteResponse, { run_id: runId });
 }
 
 // --- The proof workspace (Paket H3) ----------------------------------------
@@ -1087,7 +1297,7 @@ export async function deleteActivity(runId = ""): Promise<ActivityDeleteResponse
 
 /** One task's proof, as it stands. A read: it writes nothing and sends nothing. */
 export async function fetchProof(taskId: string): Promise<ProofWorkspace> {
-  return request<ProofWorkspace>(`/api/proof/${encodeURIComponent(taskId)}`);
+  return request(`/api/proof/${encodeURIComponent(taskId)}`, isProofWorkspace);
 }
 
 /**
@@ -1099,8 +1309,7 @@ export async function fetchProof(taskId: string): Promise<ProofWorkspace> {
  * held in component state and never written to any browser storage (SI-24).
  */
 export async function prepareProofShare(taskId: string): Promise<ProofPrepareResult> {
-  return mutate<ProofPrepareResult>(
-    `/api/proof/${encodeURIComponent(taskId)}/prepare`,
+  return mutate(`/api/proof/${encodeURIComponent(taskId)}/prepare`, isProofPrepareResult,
     {},
   );
 }
@@ -1163,6 +1372,85 @@ export async function takeProofBundle(input: {
 }
 
 /**
+ * The header carrying the delivered file's own digest.
+ *
+ * A header rather than a wrapper around the bytes, because the response body
+ * has to *be* the file: a person who saves it and hashes it must get the
+ * number the bundle printed, and any envelope at all would break that.
+ */
+const ARTIFACT_DIGEST_HEADER = "X-Station-Artifact-Sha256";
+
+/** The digest of the bundle the spent approval was bound to. */
+const ARTIFACT_BUNDLE_HEADER = "X-Station-Bundle-Sha256";
+
+/**
+ * Spend the approval and take **one produced file**, as the file.
+ *
+ * The route a proof was missing: a bundle is the document *about* a task, and
+ * until this existed the report a run wrote stayed on disk while its name and
+ * digest travelled. This hands over the bytes.
+ *
+ * It is not a second consent shape. The approval is the one `prepareProofShare`
+ * minted - single-use, bound to the bundle digest - and since that digest now
+ * covers the artifact bodies it covers these exact bytes. **A refused delivery
+ * spends the token too**, exactly as the bundle download does, so "the
+ * approval is spent once" stays true across both routes rather than per route.
+ *
+ * `name` selects an entry from the document the approval was bound to; it is
+ * not a path, and the server opens none. A file whose body was left out of
+ * the bundle - a ceiling, a secret-pattern hit, bytes that are not UTF-8 -
+ * comes back as a refusal that says which, rather than as a truncated file.
+ *
+ * The two digests come back as headers beside the bytes and are returned to
+ * the caller so the surface can print what was delivered without re-hashing
+ * anything itself.
+ */
+export async function takeProofArtifact(input: {
+  readonly taskId: string;
+  readonly shareToken: string;
+  readonly name: string;
+  readonly acknowledged: boolean;
+}): Promise<{ blob: Blob; sha256: string; bundleSha256: string }> {
+  if (csrfToken === null) {
+    throw new Error("session_not_bootstrapped");
+  }
+
+  const deadline = AbortSignal.timeout(DEFAULT_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(`/api/proof/${encodeURIComponent(input.taskId)}/artifact`, {
+      method: "POST",
+      credentials: "same-origin",
+      signal: deadline,
+      headers: { "Content-Type": "application/json", [csrfHeader]: csrfToken },
+      body: JSON.stringify({
+        share_token: input.shareToken,
+        name: input.name,
+        acknowledged: input.acknowledged,
+      }),
+    });
+  } catch (caught) {
+    throw classifyFetchFailure(caught, deadline);
+  }
+
+  const requestId = readRequestId(response);
+
+  if (!response.ok) {
+    throw new ApiError(response.status, await readErrorDetail(response), { requestId });
+  }
+
+  try {
+    return {
+      blob: await response.blob(),
+      sha256: response.headers.get(ARTIFACT_DIGEST_HEADER) ?? "",
+      bundleSha256: response.headers.get(ARTIFACT_BUNDLE_HEADER) ?? "",
+    };
+  } catch {
+    throw new ApiError(response.status, "malformed_response", { kind: "malformed", requestId });
+  }
+}
+
+/**
  * Record that a person accepted one exact bundle.
  *
  * `bundleSha256` is required by the wire and compared server-side against the
@@ -1178,7 +1466,7 @@ export async function recordProofAcceptance(input: {
   readonly bundleSha256: string;
   readonly detail: string;
 }): Promise<ProofWorkspace> {
-  return mutate<ProofWorkspace>(`/api/proof/${encodeURIComponent(input.taskId)}/acceptance`, {
+  return mutate(`/api/proof/${encodeURIComponent(input.taskId)}/acceptance`, isProofWorkspace, {
     bundle_sha256: input.bundleSha256,
     detail: input.detail,
   });
@@ -1196,7 +1484,7 @@ export async function recordProofPublicShare(input: {
   readonly evidenceId: string;
   readonly detail: string;
 }): Promise<ProofWorkspace> {
-  return mutate<ProofWorkspace>(`/api/proof/${encodeURIComponent(input.taskId)}/public-share`, {
+  return mutate(`/api/proof/${encodeURIComponent(input.taskId)}/public-share`, isProofWorkspace, {
     evidence_id: input.evidenceId,
     detail: input.detail,
   });

@@ -49,6 +49,7 @@ from station_api.db.models import (
     OpenCodeModelSnapshot,
 )
 from station_api.logging_setup import forget_secret, register_secret
+from station_api.opencode import planner
 from station_api.opencode.catalog import (
     CatalogEntry,
     ModelView,
@@ -66,6 +67,7 @@ from station_api.opencode.errors import (
     ModelNotSelectableError,
     OpenCodeConfigurationError,
     OpenCodeError,
+    OpenCodeLostResponseError,
     OpenCodeRequestError,
     OpenCodeResponseError,
 )
@@ -526,6 +528,93 @@ class OpenCodeService:
                 row.updated_at = now
             session.commit()
         return bare
+
+    # --- the metered lane --------------------------------------------------
+
+    def propose_plan(
+        self,
+        *,
+        messages: tuple[planner.Message, ...],
+        functions: tuple[planner.ToolFunction, ...],
+        max_output_tokens: int,
+    ) -> planner.PlanProposal:
+        """Ask the selected model for one turn. **The only metered call here.**
+
+        Everything that could go wrong before money is spent is refused
+        before the request is built, and each refusal is its own sentence:
+
+        * no credential - there is nothing to authenticate with;
+        * no selected model - Station does not pick one. ADR-0005 11's rule is
+          that nothing is ever substituted, and choosing a default *for* the
+          user is the same substitution with a friendlier name;
+        * a model whose row in the closed table is not selectable, or whose
+          protocol family is not the one whose tool-call shape was
+          **measured**. The measurement covers ``chat/completions`` and
+          nothing else, so a ``responses`` or ``messages`` model is refused by
+          name rather than sent to a contract nobody has read.
+
+        The credential is held in the redaction registry for exactly the
+        duration of the call - :meth:`ApiKeyEnvelope.opened` takes that choice
+        away from this method - and the client registers it a second time
+        around the response excerpt, which is where a reflected key would
+        otherwise appear.
+
+        One attempt, never two. :meth:`OpenCodeClient.post_completion` turns a
+        lost response into :class:`OpenCodeLostResponseError` because a
+        request that left the process may already have been billed, and this
+        turns that into a stated failure rather than a retry.
+
+        ``max_output_tokens`` has **no default**, deliberately. It used to
+        carry one, and a caller that never mentioned it therefore got a
+        ceiling nobody in the calling lane had thought about - which is how a
+        live planning turn came to be cut off at 1024 tokens with nothing in
+        the calling code naming that number. A required argument makes the
+        ceiling a decision the lane spending the money states out loud, and
+        makes forgetting it a build error rather than a truncation a person
+        discovers.
+        """
+        self._require_engine()
+        if not (self._credential_row() is not None and self._envelope.exists()):
+            raise OpenCodeConfigurationError(
+                "Saglayici anahtari kaydedilmedi; model cagrisi yapilamaz."
+            )
+        selected = self._selected_model()
+        if not selected:
+            raise ModelNotSelectableError(
+                "Bir model secilmedi. Station sizin yerinize model secmez; "
+                "listeden birini secin."
+            )
+        mapping = find_mapping(selected, mappings=self._mappings)
+        if mapping is None or not mapping.selectable:
+            raise ModelNotSelectableError(
+                f"'{selected}' bu surumun pinli tablosunda secilebilir "
+                "degil; model cagrisi yapilmaz ve baska bir modele gecilmez."
+            )
+        if mapping.protocol is not planner.SUPPORTED_PROTOCOL:
+            raise ModelNotSelectableError(
+                f"'{selected}' modelinin protokol ailesi "
+                f"'{mapping.protocol.value}'. Arac cagrisi bicimi yalnizca "
+                f"'{planner.SUPPORTED_PROTOCOL.value}' ailesi icin olculdu; "
+                "digerleri icin tahmin edilmez."
+            )
+
+        body = planner.build_plan_request(
+            model=mapping.wire_id,
+            messages=messages,
+            functions=functions,
+            max_output_tokens=max_output_tokens,
+        )
+        client = self._client if self._client is not None else OpenCodeClient()
+        with self._envelope.opened() as api_key:
+            try:
+                raw = client.post_completion(
+                    planner.SUPPORTED_PROTOCOL, body, api_key=api_key
+                )
+            except OpenCodeLostResponseError as exc:
+                return planner.lost(str(exc))
+            except OpenCodeRequestError as exc:
+                return planner.transport_failed(str(exc))
+        return planner.parse_plan_response(raw)
 
     # --- internals ---------------------------------------------------------
 

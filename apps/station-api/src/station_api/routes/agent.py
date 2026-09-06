@@ -4,6 +4,7 @@
     GET  /api/tasks/surface                          tools, ceiling, isolation
     GET  /api/tasks/{task_id}                        one task, four fields apart
     POST /api/tasks/{task_id}/transition             a user-driven state change
+    POST /api/tasks/{task_id}/publish-readiness      re-derive it from evidence
     GET  /api/tasks/{task_id}/runs                   runs and workspace files
     POST /api/tasks/{task_id}/runs                   record a plan; runs nothing
     POST /api/tasks/{task_id}/runs/{run_id}/start    carry the recorded plan out
@@ -54,6 +55,12 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from station_api.agent import budget, isolation
+from station_api.agent.acceptance import (
+    ACCEPTANCE_CHECKS,
+    AcceptanceCheck,
+    AcceptanceKind,
+    AcceptanceState,
+)
 from station_api.agent.activity import RETAINED_EVENTS, ActivityLog, ActivityView
 from station_api.agent.errors import (
     ActivityError,
@@ -64,11 +71,7 @@ from station_api.agent.errors import (
     WorkspaceError,
 )
 from station_api.agent.language import RUN_HONESTY_SENTENCE, STOP_HONESTY_SENTENCE
-from station_api.agent.service import (
-    TEST_RESULT_DETAIL,
-    AgentService,
-    RunView,
-)
+from station_api.agent.service import AgentService, RunView
 from station_api.agent.tools import TOOLS, ToolRecord, ToolScope
 from station_api.agent.workspace import WorkspaceFile
 from station_api.dependencies import require_session
@@ -77,6 +80,9 @@ from station_api.schemas import (
     ActivityDeleteResponse,
     ActivityEventStatus,
     ActivityListResponse,
+    AgentAcceptanceCheckStatus,
+    AgentAcceptanceConditionStatus,
+    AgentAcceptanceKindName,
     AgentCeilingStatus,
     AgentExecutionStatus,
     AgentIsolationFindingStatus,
@@ -85,11 +91,13 @@ from station_api.schemas import (
     AgentRunStepStatus,
     AgentSurfaceResponse,
     AgentTaskRunsResponse,
+    AgentTestResultStateName,
     AgentToolParamStatus,
     AgentToolScopeName,
     AgentToolStatus,
     AgentWorkspaceFileStatus,
     TaskListResponse,
+    TaskPublishReadinessRequest,
     TaskStatusResponse,
     TaskTransitionRequest,
 )
@@ -209,6 +217,42 @@ def _tool(record: ToolRecord) -> AgentToolStatus:
     )
 
 
+#: The acceptance registry's kinds and its three verdicts, spelled as the
+#: wire literals. Mappings rather than ``.value`` with a cast, for
+#: :data:`_SCOPE_NAMES`'s reason: a member added to either enum without a name
+#: here is a type error at build time, which is the point of typing the fields
+#: as closed literals in the first place.
+_ACCEPTANCE_KIND_NAMES: dict[AcceptanceKind, AgentAcceptanceKindName] = {
+    AcceptanceKind.ARTIFACT_EXISTS: "artifact_exists",
+    AcceptanceKind.ARTIFACT_IS_JSON: "artifact_is_json",
+    AcceptanceKind.ARTIFACT_HAS_JSON_KEYS: "artifact_has_json_keys",
+    AcceptanceKind.ARTIFACT_CONTAINS: "artifact_contains",
+    AcceptanceKind.ARTIFACT_DIGEST_IS: "artifact_digest_is",
+}
+
+_TEST_RESULT_NAMES: dict[AcceptanceState, AgentTestResultStateName] = {
+    AcceptanceState.PASSED: "passed",
+    AcceptanceState.FAILED: "failed",
+    AcceptanceState.NOT_IMPLEMENTED: "not_implemented",
+}
+
+
+def _acceptance_check(record: AcceptanceCheck) -> AgentAcceptanceCheckStatus:
+    return AgentAcceptanceCheckStatus(
+        kind=_ACCEPTANCE_KIND_NAMES[record.kind],
+        purpose=record.purpose,
+        params=[
+            AgentToolParamStatus(
+                name=param.name,
+                type=param.type.value,
+                required=param.required,
+                detail=param.detail,
+            )
+            for param in record.params
+        ],
+    )
+
+
 def _ceiling() -> AgentCeilingStatus:
     return AgentCeilingStatus(
         max_tool_calls=budget.CEILING.max_tool_calls,
@@ -247,7 +291,14 @@ def _execution() -> AgentExecutionStatus:
     )
 
 
-def _run(view: RunView) -> AgentRunStatus:
+def run_status(view: RunView) -> AgentRunStatus:
+    """One run, projected onto the wire.
+
+    Public rather than private since Package H4, because
+    ``routes/planner.py`` returns the same runs after a model turn and a
+    second projection is a second place for the two to disagree about what a
+    run looks like - which is the duplication ADR-0004 2 named.
+    """
     return AgentRunStatus(
         id=view.id,
         task_id=view.task_id,
@@ -258,7 +309,17 @@ def _run(view: RunView) -> AgentRunStatus:
         stop_requested=view.stop_requested,
         plan_sha256=view.plan_sha256,
         test_condition=view.test_condition,
-        test_result_detail=TEST_RESULT_DETAIL,
+        acceptance=[
+            AgentAcceptanceConditionStatus(
+                kind=_ACCEPTANCE_KIND_NAMES[result.kind],
+                label=result.label,
+                satisfied=result.satisfied,
+                detail=result.detail,
+            )
+            for result in view.test_result.results
+        ],
+        test_result_state=_TEST_RESULT_NAMES[view.test_result.state],
+        test_result_detail=view.test_result_detail,
         expected_artifacts=list(view.expected_artifacts),
         steps=[
             AgentRunStepStatus(
@@ -315,7 +376,7 @@ def _task_runs(
 ) -> AgentTaskRunsResponse:
     return AgentTaskRunsResponse(
         task=_task_status(tasks, task_id),
-        runs=[_run(view) for view in agent.list_runs(task_id)],
+        runs=[run_status(view) for view in agent.list_runs(task_id)],
         workspace_files=[_file(item) for item in agent.workspace_files(task_id)],
         honesty=RUN_HONESTY_SENTENCE,
     )
@@ -352,9 +413,12 @@ async def read_surface(request: Request, session: CurrentSession) -> Response:
             execution=_execution(),
             ceiling=_ceiling(),
             tools=[_tool(record) for record in TOOLS],
+            acceptance_checks=[
+                _acceptance_check(record) for record in ACCEPTANCE_CHECKS
+            ],
             honesty=RUN_HONESTY_SENTENCE,
             stop_statement=STOP_HONESTY_SENTENCE,
-            interrupted_runs=[_run(view) for view in agent.interrupted_runs()],
+            interrupted_runs=[run_status(view) for view in agent.interrupted_runs()],
         )
     )
 
@@ -391,6 +455,58 @@ def move_task(
     try:
         service.transition(
             task_id, TaskState(body.target), detail=body.detail
+        )
+        return _json(_task_status(service, task_id))
+    except TaskError as exc:
+        raise _refuse(exc) from exc
+
+
+@router.post("/tasks/{task_id}/publish-readiness", response_model=TaskStatusResponse)
+def derive_publish_readiness(
+    request: Request,
+    session: CurrentSession,
+    task_id: str,
+    body: TaskPublishReadinessRequest,
+) -> Response:
+    """Re-derive whether this task is ready to publish, and move it if it is.
+
+    The route that finally makes ``ready_to_publish`` reachable, and it is a
+    **separate** route rather than a new value on the transition literal on
+    purpose. SI-222's rule is that the state is derived from evidence and
+    cannot be asked for; :data:`~station_api.schemas.TaskUserTransitionName`
+    still omits it, so no request in this product can name it, and
+    :class:`~station_api.schemas.TaskPublishReadinessRequest` carries no
+    target field to name it with.
+
+    What the caller is asking for is a re-reading of three fields that three
+    different acts filled: ``task_outcome`` from what the runner produced,
+    ``test_result`` from the plan's own acceptance conditions decided over
+    those bytes, and ``user_acceptance`` from a person (ADR-0009 8). If any
+    of them is missing, unverified, or bound to a superseded output, the gate
+    refuses and the refusal names them - and it refuses in
+    :meth:`~station_api.tasks.service.TaskService.transition`, which is the
+    only function in this product that writes a task state, so this route
+    cannot be the second one.
+    """
+    del session
+    service = _tasks(request)
+    try:
+        status_before = service.gate(task_id)
+        if not status_before.ready_to_publish:
+            raise TaskError(
+                "Gorev yayima hazir degil; su alanlar dogrulanmis degil: "
+                + ", ".join(status_before.blocking_fields)
+                + ". Bu durum istenerek degil kanittan turer.",
+                reason="evidence_incomplete",
+            )
+        service.transition(
+            task_id,
+            TaskState.READY_TO_PUBLISH,
+            detail=body.detail
+            or (
+                "Uc kanit alani ayri ayri dogrulandi; durum kanittan "
+                "turetildi."
+            ),
         )
         return _json(_task_status(service, task_id))
     except TaskError as exc:
@@ -437,6 +553,10 @@ def plan_run(
             steps=[(step.tool_id, dict(step.arguments)) for step in body.steps],
             expected_artifacts=body.expected_artifacts,
             test_condition=body.test_condition,
+            acceptance_conditions=[
+                (condition.kind, dict(condition.arguments))
+                for condition in body.acceptance
+            ],
         )
         return _json(_task_runs(tasks, agent, task_id))
     except (ToolRegistryError, ToolArgumentError, WorkspaceError) as exc:
@@ -597,4 +717,4 @@ def delete_activity(
     )
 
 
-__all__ = ["router"]
+__all__ = ["router", "run_status"]

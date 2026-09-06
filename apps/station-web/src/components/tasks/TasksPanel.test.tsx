@@ -42,23 +42,32 @@ import { TasksPanel } from "./TasksPanel";
 
 //: TEST-ONLY sentences. Shaped like the backend's, never copied from a live
 //: response, and none of them is a real measurement of this machine.
+//:
+//: Being shaped like the backend's is what makes them rot. Three of these
+//: were still asserting the pre-ADR-0012 build - no model call, a test result
+//: that stays `not_implemented`, a three-unit ceiling - long after the
+//: product stopped saying any of it, and because they are fixtures they went
+//: on passing. A fixture that hard-codes a product sentence keeps that
+//: sentence alive in the suite whether or not the product still means it, so
+//: they are scanned for stale claims alongside the source itself
+//: (`tests/security/test_model_lane_claims.py`).
 const EXECUTION_DETAIL =
   "TEST-ONLY: Keyfi kod ve kabuk yurutmesi bu surumde kapalidir. Guvenilir bir izolasyon urunun kendi kurulumunun parcasi degildir.";
 
 const RUN_HONESTY =
-  "TEST-ONLY: Bu surumde arac zinciri deterministiktir: model cagrisi, kabuk komutu ve keyfi kod yurutmesi yoktur.";
+  "TEST-ONLY: Bu surumde kabuk komutu ve keyfi kod yurutmesi yoktur; araclar kapali bir registry'den gelir ve deterministiktir. Model plan onerir, calistirmaz.";
 
 const STOP_STATEMENT =
   "TEST-ONLY: Durdur, sonraki arac cagrisini engeller. Iptalden sonra donen sonucu kaydedilmez ve urettigi dosya calisma alanindan kaldirilir.";
 
 const REFUSED_UNITS_DETAIL =
-  "TEST-ONLY: Bu surumde token ve para birimi sayilmaz: model yolu kapalidir, dolayisiyla saglayicidan gelen bir kullanim degeri yoktur ve uydurulmaz.";
+  "TEST-ONLY: Token ve para birimi tavan olarak kullanilmaz: saglayicinin bildirdigi kullanim ve maliyet kaydedilir, sinir olarak okunmaz.";
 
 const CEILING_DETAIL =
   "TEST-ONLY: Tavan derleme zamaninda yazilir; hicbir kod yolu onu degistirmez.";
 
 const TEST_RESULT_DETAIL =
-  "TEST-ONLY: Test sonucu bu surumde uygulanmadi. Plan bir basari olcutu kaydeder, fakat onu kosacak yurutme kapalidir.";
+  "TEST-ONLY: Test sonucu uygulanmadi: bu plan makinece degerlendirilebilir bir kabul kosulu yazmadi.";
 
 const SURFACE: AgentSurfaceResponse = {
   execution: {
@@ -86,7 +95,7 @@ const SURFACE: AgentSurfaceResponse = {
     max_tool_calls: 32,
     max_wall_clock_seconds: 120,
     max_concurrency: 1,
-    units: ["tool_call_count", "wall_clock_seconds", "concurrency"],
+    units: ["tool_call_count", "model_call_count", "wall_clock_seconds", "concurrency"],
     refused_units: ["token", "currency"],
     refused_units_detail: REFUSED_UNITS_DETAIL,
     detail: CEILING_DETAIL,
@@ -113,6 +122,26 @@ const SURFACE: AgentSurfaceResponse = {
       ],
       call_cost: 1,
       produces_artifact: false,
+    },
+  ],
+  //: TEST-ONLY. Two of the five registered conditions, because the point of
+  //: the fixture is that the composer renders whatever the registry
+  //: publishes - a hard-coded list on the screen would pass with one.
+  acceptance_checks: [
+    {
+      kind: "artifact_exists",
+      purpose: "TEST-ONLY: adi verilen dosya calisma alaninda var mi.",
+      params: [
+        { name: "name", type: "file_name", required: true, detail: "TEST-ONLY: sade dosya adi." },
+      ],
+    },
+    {
+      kind: "artifact_contains",
+      purpose: "TEST-ONLY: dosya istenen metni iceriyor mu. Metin aranir, yorumlanmaz.",
+      params: [
+        { name: "name", type: "file_name", required: true, detail: "TEST-ONLY: sade dosya adi." },
+        { name: "text", type: "text", required: true, detail: "TEST-ONLY: aranacak metin." },
+      ],
     },
   ],
   honesty: RUN_HONESTY,
@@ -182,6 +211,9 @@ const PLANNED_RUN: AgentRunStatus = {
   stop_requested: false,
   plan_sha256: "5d4c3b2a19876543",
   test_condition: "TEST-ONLY: cikti dosyasi acilir ve alintiyla yan yana okunur.",
+  //: Empty on purpose: this plan recorded only the sentence, which is
+  //: exactly the case whose verdict has to stay `not_implemented`.
+  acceptance: [],
   test_result_state: "not_implemented",
   test_result_detail: TEST_RESULT_DETAIL,
   expected_artifacts: ["rapor.md"],
@@ -592,15 +624,37 @@ describe("Gorevler: the honesty surface", () => {
     expect(inventory).toHaveTextContent("olcum: not_measured");
   });
 
-  it("says the model lane is closed and that there is no model output at all", async () => {
+  /**
+   * The assertion that had to change when the fact under it changed.
+   *
+   * It used to require the sentence "the model lane is closed in this
+   * release", which was true while `tool_calls_supported` was a literal
+   * `false` and there was no model call in production. ADR-0012 measured the
+   * contract and opened the lane, so the old wording became a claim of safety
+   * from an absence that is no longer there - the same class of staleness as
+   * the `tool_calls_supported: false` mirror this package fixed.
+   *
+   * What replaces it is stricter, not looser. The guarantee is no longer "no
+   * model output exists" but "model output cannot start, approve or widen
+   * anything", and each half of that is asserted separately below.
+   */
+  it("says the model proposes and cannot run, approve or widen anything", async () => {
     stub(runsFor([]));
     render(<TasksPanel />);
     await ready();
 
     const statement = screen.getByTestId("tasks-model-lane");
-    expect(statement).toHaveTextContent("Model yolu bu surumde kapalidir");
-    expect(statement).toHaveTextContent("model ciktisi diye bir sey yoktur");
-    expect(statement).toHaveTextContent("'model' diye bir aktor tanimli degildir");
+    expect(statement).toHaveTextContent("Model plan ONERIR, calistirmaz");
+    expect(statement).toHaveTextContent("kendi planina onay veremez");
+    expect(statement).toHaveTextContent("kendi arac listesine arac ekleyemez");
+    expect(statement).toHaveTextContent("bir calismayi baslatamaz");
+    expect(statement).toHaveTextContent("Modelin muhakemesi saklanmaz ve gosterilmez");
+
+    // Opening the model lane did not open arbitrary execution, and the
+    // screen says which of the two moved.
+    expect(screen.getByTestId("tasks-no-arbitrary-execution")).toHaveTextContent(
+      "Keyfi kod ve kabuk yurutmesi kapali kalir",
+    );
   });
 
   it("reports the test result as not_implemented and shows no publish-ready badge", async () => {
@@ -610,8 +664,15 @@ describe("Gorevler: the honesty surface", () => {
     await ready();
     await openTask(user);
 
+    // The wider claim ("nothing is ever tested") became false when the
+    // acceptance registry opened, so the sentence now says the narrower thing
+    // that is still true and still keeps this task away from publication: a
+    // plan with no machine-checkable condition earns `not_implemented`.
     expect(screen.getByTestId("tasks-untested")).toHaveTextContent(
-      "Calistirilmamis kod test edilmis sayilmaz",
+      "Uretilmis bir dosya gecmis bir test degildir",
+    );
+    expect(screen.getByTestId("tasks-untested")).toHaveTextContent(
+      "Hicbir kabul kosulu yazmamis bir plan",
     );
     expect(screen.getByTestId("tasks-test-result-state")).toHaveTextContent(
       "Test sonucu: not_implemented",
@@ -735,6 +796,42 @@ describe("Gorevler: the honesty surface", () => {
 });
 
 describe("Gorevler: approval and control", () => {
+  it.each(["start", "resume"] as const)("can stop while %s is still pending on this screen", async (action) => {
+    let release: () => void = () => {};
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    let stopped = 0;
+    const initial = action === "start" ? PLANNED_RUN : PAUSED_RUN;
+    const mock = stub(runsFor([initial]));
+    const original = mock.getMockImplementation();
+    mock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : new URL(input as URL).pathname;
+      if (url.endsWith(`/${action}`) && init?.method === "POST") {
+        return pending.then(() => jsonOk(runsFor([PAUSED_RUN])));
+      }
+      if (url.endsWith("/stop") && init?.method === "POST") {
+        stopped += 1;
+        return Promise.resolve(jsonOk(runsFor([PAUSED_RUN])));
+      }
+      return original!(input, init) as Promise<Response>;
+    });
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+    await approveAll(user);
+    await user.click(screen.getByRole("button", { name: action === "start" ? "Onayli plani calistir" : "Devam et" }));
+    try {
+      const stop = screen.getByRole("button", { name: "Durdur" });
+      expect(stop).toBeEnabled();
+      await user.click(stop);
+      expect(stopped).toBe(1);
+    } finally {
+      release();
+    }
+    await waitFor(() => expect(screen.queryByText("Calistiriliyor...")).not.toBeInTheDocument());
+  });
+
   it("refuses to carry out a plan until all four approvals are given", async () => {
     const sent: Recorded[] = [];
     stub(runsFor([PLANNED_RUN]), { sent });
@@ -798,7 +895,15 @@ describe("Gorevler: approval and control", () => {
 
     // Recording a plan ran nothing: the only write was the plan itself.
     expect(sent.map((entry) => entry.url)).toEqual([`/api/tasks/${TASK.id}/runs`]);
-  });
+    // Explicit headroom, and the reason rather than a round number. This test
+    // types a 41-character criterion one keystroke at a time, and every
+    // keystroke re-renders the whole panel; Paket H4 added the model region
+    // and the acceptance composer to that panel, which roughly doubled the
+    // cost of each of those renders and took the test from ~2s to ~4.5s.
+    // Under the full suite it crossed the 5s default and failed as a timeout
+    // - a slow test reported as a broken one. Nothing about what is asserted
+    // has changed.
+  }, 20_000);
 
   it("stops a run, and shows that the late result produced no side effect", async () => {
     const sent: Recorded[] = [];
@@ -1094,17 +1199,35 @@ describe("Gorevler: kabul gecisin girdisidir", () => {
     expect(sent.filter((entry) => entry.url.endsWith("/acceptance"))).toHaveLength(1);
   });
 
-  it("says the publish-ready state cannot be asked for, and offers no control that would", async () => {
+  /**
+   * The route arrived; the rule did not move.
+   *
+   * The old assertion required the screen to say there is no user path to
+   * `ready_to_publish` at all. There is one now, and it is still not a way to
+   * *ask* for the state: the request carries no target, the transition list
+   * still omits the value, and the gate decides from evidence. The negative
+   * this test exists to protect - that no control on this surface names the
+   * state as something it will produce - is asserted unchanged below.
+   */
+  it("says the publish-ready state cannot be asked for, and offers no control that names it", async () => {
     stub(runsFor([PLANNED_RUN]));
     const user = userEvent.setup();
     render(<TasksPanel />);
     await ready();
     await openTask(user);
 
-    expect(screen.getByTestId("tasks-publish-unreachable")).toHaveTextContent(
-      "tasiyan bir kullanici yolu bu surumde yoktur",
+    const statement = screen.getByTestId("tasks-publish-unreachable");
+    expect(statement).toHaveTextContent("Yayima hazir\" istenemez");
+    expect(statement).toHaveTextContent("hicbir istek onu adiyla hedefleyemez");
+    expect(statement).toHaveTextContent("karari kapi verir");
+
+    expect(screen.getByTestId("tasks-readiness-rule")).toHaveTextContent(
+      "Istek bir hedef alani tasimaz",
     );
+
     // The five user transitions, and `ready_to_publish` is not among them.
+    // The readiness control is worded as an evaluation, so it does not - and
+    // must not - match here.
     const labels = screen
       .getAllByRole("button")
       .map((element) => element.textContent ?? "");
@@ -1197,5 +1320,885 @@ describe("Gorevler: the fourth field points at an archived send", () => {
     for (const key of ["room", "url", "path", "text", "message", "did"]) {
       expect(body, `the request may not carry ${key}`).not.toHaveProperty(key);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Paket H4 / ADR-0012: the model proposes, and only proposes.
+//
+// The lane this screen used to say did not exist. Every assertion below is
+// the frontend half of a backend guarantee, and each one fails closed on the
+// same class of mistake: letting "the model suggested it" stand in for
+// "a person approved it".
+// ---------------------------------------------------------------------------
+
+const TOOL_CALL_PROVENANCE =
+  "TEST-ONLY: Arac cagrisi bicimi hesap sahibinin kendi anahtariyla olculdu; olcum yalnizca bu protokol ailesi icindir.";
+
+const USAGE_DETAIL = "giris token=184, cikis token=46, maliyet='0'";
+
+//: TEST-ONLY. The connection as the planner reads it: a model is selected and
+//: the tool-call shape was measured for its family.
+const LANE = {
+  configured: true,
+  fingerprint_short: "TESTONLYFING",
+  configured_at: "2026-09-06T08:00:00Z",
+  updated_at: "2026-09-06T08:00:00Z",
+  check: {
+    state: "key_saved_unverified",
+    reasons: ["TEST-ONLY: katalog anahtarsiz da cevap veriyor."],
+    detail: "TEST-ONLY: anahtar kayitli, dogrulanmadi.",
+  },
+  selected_model: "test-only/model-flash",
+  auth_header_caveat: "TEST-ONLY: baslik varsayimi dogrulanmadi.",
+  catalog: {
+    state: "ok",
+    fetched_at: "2026-09-06T08:00:00Z",
+    models_fetched_at: "2026-09-06T08:00:00Z",
+    detail: "TEST-ONLY: katalog okundu.",
+    http_status: 200,
+    models: [],
+    model_count: 0,
+    selectable_count: 0,
+    unmapped_count: 0,
+    listing_caveat: "TEST-ONLY: listelenmek yetki degildir.",
+    table_provenance: "TEST-ONLY: tablo 2026-09-01'de okundu.",
+    drift_notice: "",
+  },
+  spending: {
+    budget_available: false,
+    limits: [],
+    limit_behaviour: "TEST-ONLY: saglayicinin yayimladigi sinir.",
+    use_balance: "TEST-ONLY: tercih saglayicidadir.",
+    local_counter_caveat: "TEST-ONLY: yerel sayac yoktur.",
+    unknown_cost_sentence: "TEST-ONLY: bilinmeyen maliyet sifir yazilmaz.",
+  },
+  protocol_context: {
+    protocols: ["responses", "messages", "chat_completions"],
+    streaming_supported: false,
+    // The value the mirror used to pin to `false`. It arrives `true` here
+    // because the wire can now say so, and the screen has to read it.
+    tool_calls_supported: true,
+    deferral: "TEST-ONLY: akis bicimi hala olculmedi ve tahmin edilmez.",
+    shape_provenance: "TEST-ONLY: govde bicimi ust protokol ailesinden alinir.",
+    tool_call_provenance: TOOL_CALL_PROVENANCE,
+  },
+};
+
+/** The run a model turn recorded. `planned`, and approved by nobody. */
+const MODEL_RUN: AgentRunStatus = {
+  ...PLANNED_RUN,
+  id: "cc33dd44ee55ff6677889900aa11bb22",
+  test_condition:
+    "TEST-ONLY: Bu plan bir model turundan geldi; olcut plan adimlarindan turetildi.",
+};
+
+function proposal(
+  overrides: Partial<{
+    outcome: string;
+    run_id: string;
+    detail: string;
+    model_calls_used: number;
+    usage_detail: string;
+    closing_text: string;
+    runs: readonly AgentRunStatus[];
+  }> = {},
+): Record<string, unknown> {
+  return {
+    outcome: "planned",
+    run_id: MODEL_RUN.id,
+    detail:
+      "TEST-ONLY: Model 1 adimlik bir plan onerdi ve plan kaydedildi. Hicbir adim kosulmadi.",
+    model_calls_used: 1,
+    max_model_calls: 8,
+    usage_detail: USAGE_DETAIL,
+    closing_text: "",
+    tool_call_provenance: TOOL_CALL_PROVENANCE,
+    task: TASK,
+    runs: [MODEL_RUN],
+    model_can_start_a_run: false,
+    ...overrides,
+  };
+}
+
+/** Answer the model-plan routes, and let everything else fall through. */
+function modelStub(
+  body: Record<string, unknown>,
+  sent?: Recorded[],
+): ReturnType<typeof vi.fn> {
+  return stub(runsFor([]), {
+    sent,
+    onPost: (url) =>
+      url.includes("/model-plan") || url === "/api/opencode/status"
+        ? jsonOk(body)
+        : null,
+  });
+}
+
+describe("Gorevler: the model proposes and cannot approve or start", () => {
+  it("reads which model is selected rather than naming one itself", async () => {
+    // The connection read is a GET, so the shared helper's POST hook cannot
+    // answer it; this test installs its own router for that one path and
+    // leaves every other route exactly where the helper puts it.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : new URL(input as URL).pathname;
+        if (url === "/api/session/bootstrap") {
+          return Promise.resolve(
+            jsonOk({
+              csrf_token: "test-only-value-not-a-real-token",
+              csrf_header: "X-Station-CSRF",
+            }),
+          );
+        }
+        if (url === "/api/tasks/surface") return Promise.resolve(jsonOk(SURFACE));
+        if (url === "/api/tasks") return Promise.resolve(jsonOk(LIST));
+        if (url === `/api/tasks/${TASK.id}/runs`) return Promise.resolve(jsonOk(runsFor([])));
+        if (url === "/api/opencode/status") return Promise.resolve(jsonOk(LANE));
+        return Promise.resolve(jsonOk({ detail: "not_found" }, 404));
+      }),
+    );
+
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    // Before the read, the screen refuses to guess: a turn's own response
+    // carries no model id and this surface will not invent one.
+    expect(screen.getByTestId("tasks-model-lane-unread")).toHaveTextContent(
+      "bir model adi uydurmaz",
+    );
+
+    await user.click(screen.getByRole("button", { name: /Hangi model secili/ }));
+    await screen.findByTestId("tasks-model-selection");
+
+    expect(screen.getByTestId("tasks-model-selection")).toHaveTextContent(
+      "test-only/model-flash",
+    );
+    // `tool_calls_supported` arrives `true`, and the wording follows the
+    // value rather than a constant.
+    expect(screen.getByTestId("tasks-model-tool-calls")).toHaveTextContent("olculmustur");
+    expect(screen.getByTestId("tasks-model-provenance")).toHaveTextContent(
+      TOOL_CALL_PROVENANCE,
+    );
+  });
+
+  it("sends only the person's instruction: no model, no tools, no sampling knob", async () => {
+    const sent: Recorded[] = [];
+    modelStub(proposal(), sent);
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.type(
+      screen.getByRole("textbox", { name: /Modele iletilecek yonerge/ }),
+      "TEST-ONLY yonerge",
+    );
+    await user.click(screen.getByRole("button", { name: /Modelden plan oner/ }));
+    await screen.findByTestId("tasks-model-outcome");
+
+    const turn = sent.find((entry) => entry.url === `/api/tasks/${TASK.id}/model-plan`);
+    expect(turn, "the turn must have been requested").toBeDefined();
+    // Exactly one key. A body that could carry a model, a tool list, a system
+    // prompt or a temperature would be a body that could widen what a
+    // proposal is allowed to be.
+    expect(turn?.body).toEqual({ instruction: "TEST-ONLY yonerge" });
+  });
+
+  it("shows the proposed plan, the provider's own usage, and that it started nothing", async () => {
+    modelStub(proposal());
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.click(screen.getByRole("button", { name: /Modelden plan oner/ }));
+    await screen.findByTestId("tasks-model-outcome");
+
+    expect(screen.getByTestId("tasks-model-outcome")).toHaveTextContent("Sonuc: planned");
+    expect(screen.getByTestId("tasks-model-detail")).toHaveTextContent("Hicbir adim kosulmadi");
+    expect(screen.getByTestId("tasks-model-calls")).toHaveTextContent("1 / 8");
+
+    // `usage` and `cost` are the provider's statement, and are labelled as
+    // such every time they appear. A screen that printed them bare would be
+    // presenting somebody else's arithmetic as its own measurement.
+    expect(screen.getByTestId("tasks-model-usage")).toHaveTextContent("Saglayicinin beyani");
+    expect(screen.getByTestId("tasks-model-usage")).toHaveTextContent(USAGE_DETAIL);
+    expect(screen.getByTestId("tasks-model-usage-rule")).toHaveTextContent(
+      "bizim olcumumuz degildir ve tavan olarak kullanilmaz",
+    );
+
+    expect(screen.getByTestId("tasks-model-cannot-start")).toHaveTextContent(
+      "Model bir calismayi baslatamaz",
+    );
+    expect(screen.getByTestId("tasks-model-no-reasoning")).toHaveTextContent(
+      "saklanmaz, loglanmaz ve gosterilmez",
+    );
+  });
+
+  it("makes a model-proposed plan meet the same four approvals as a written one", async () => {
+    const sent: Recorded[] = [];
+    modelStub(proposal(), sent);
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.click(screen.getByRole("button", { name: /Modelden plan oner/ }));
+    await screen.findByTestId("tasks-model-outcome");
+
+    // The proposed run is on screen, in `planned`, and its start control is
+    // refused: being the model's idea buys no approval at all.
+    const start = await screen.findByRole("button", { name: /Onayli plani calistir/ });
+    expect(start).toBeDisabled();
+
+    await approveAll(user);
+    expect(screen.getByRole("button", { name: /Onayli plani calistir/ })).toBeEnabled();
+
+    // And nothing was started by the turn itself.
+    expect(sent.filter((entry) => entry.url.endsWith("/start"))).toHaveLength(0);
+    expect(screen.getByTestId("tasks-model-approval-rule")).toHaveTextContent(
+      "hicbir adimi atlatmaz",
+    );
+  });
+
+  it("shows a refusal on screen instead of swallowing it or trimming the plan", async () => {
+    modelStub(
+      proposal({
+        outcome: "refused",
+        run_id: "",
+        detail:
+          "TEST-ONLY: Model kayitli olmayan bir arac onerdi; oneri butunuyle reddedildi.",
+        runs: [],
+      }),
+    );
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.click(screen.getByRole("button", { name: /Modelden plan oner/ }));
+    await screen.findByTestId("tasks-model-outcome");
+
+    expect(screen.getByTestId("tasks-model-outcome")).toHaveTextContent("Sonuc: refused");
+    expect(screen.getByTestId("tasks-model-detail")).toHaveTextContent(
+      "oneri butunuyle reddedildi",
+    );
+    expect(screen.getByTestId("tasks-model-calls")).toHaveTextContent("(kaydedilmedi)");
+    // A refusal is a result, not a failure of the local service: the shared
+    // error region stays empty.
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows a ceiling and a provider failure as outcomes, each saying which", async () => {
+    modelStub(
+      proposal({
+        outcome: "budget_exhausted",
+        run_id: "",
+        detail: "TEST-ONLY: Bu oturum model cagrisi tavanina ulasti; istek gonderilmedi.",
+        model_calls_used: 8,
+        usage_detail: "",
+        runs: [],
+      }),
+    );
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.click(screen.getByRole("button", { name: /Modelden plan oner/ }));
+    await screen.findByTestId("tasks-model-outcome");
+
+    expect(screen.getByTestId("tasks-model-outcome")).toHaveTextContent(
+      "Sonuc: budget_exhausted",
+    );
+    expect(screen.getByTestId("tasks-model-calls")).toHaveTextContent("8 / 8");
+    // Never zero-filled: an unreported number is reported as unreported.
+    expect(screen.getByTestId("tasks-model-usage")).toHaveTextContent("(bildirilmedi)");
+  });
+
+  /**
+   * Forgetting a session must not clear the counter on the screen either.
+   *
+   * This test used to end on a bare substring check for "tavan sifirlanmaz",
+   * and the sentence it pinned was **false**: the backend's `forget` dropped
+   * the session object the model-call counter lived on, so pressing the button
+   * really did hand back a fresh ceiling. A component test cannot see that,
+   * and pinning the claim here made the screen look covered while the
+   * behaviour was not. What holds the claim now is where the counter is -
+   * `test_model_planner.py::test_forget_cannot_be_clicked_for_a_second_ceiling`
+   * and `::test_the_ceiling_survives_a_restart_of_the_process` drive the abuse
+   * against a mock transport and count the requests that reach it (ADR-0013).
+   *
+   * The sentence check is kept, because a screen that quietly stopped saying
+   * this is a real regression at this layer - but it is no longer the only
+   * thing standing behind it, and the assertion that actually belongs here is
+   * the one below it: the panel renders the server's count and never invents a
+   * zero of its own after a forget.
+   */
+  it("keeps the plans, the workspace and the server's spent-turn count on forget", async () => {
+    const sent: Recorded[] = [];
+    modelStub(
+      proposal({
+        outcome: "finished",
+        run_id: "",
+        detail: "TEST-ONLY: Bu gorevin model oturumu unutuldu.",
+        model_calls_used: 2,
+      }),
+      sent,
+    );
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.click(screen.getByRole("button", { name: /Oturumu unut/ }));
+    await screen.findByTestId("tasks-model-outcome");
+
+    expect(sent.some((entry) => entry.url.endsWith("/model-plan/forget"))).toBe(true);
+    // The counter comes back from the server rather than being reset here.
+    const calls = screen.getByTestId("tasks-model-calls");
+    expect(calls).toHaveTextContent("2 / 8");
+    expect(calls.textContent ?? "").not.toContain("0 / 8");
+
+    const rule = screen.getByTestId("tasks-model-turn-rule");
+    expect(rule).toHaveTextContent("tavan sifirlanmaz");
+    // And the restart half of the same promise, which the sentence now makes
+    // because the answer changed: the count is written to the task.
+    expect(rule).toHaveTextContent("yeniden baslatmak");
+  });
+
+  /**
+   * A cut answer must not look like a finished one.
+   *
+   * The backend split `truncated` and `inconclusive` out of `finished`
+   * because a live turn came back `finish_reason: "length"` - the model was
+   * cut off at the output ceiling before it could name a tool - and the
+   * product told the person the model had chosen to stop, then closed the
+   * session so they could not ask again. This is that fix at the surface: the
+   * screen has to say the session is still open and the turn can be asked
+   * again, and it must not carry the word for giving up.
+   */
+  it("says a truncated turn was cut off and can be asked again", async () => {
+    modelStub(
+      proposal({
+        outcome: "truncated",
+        run_id: "",
+        detail:
+          "TEST-ONLY: Model yaniti cikti tavanina dayandi ve kesildi (sonlanma nedeni: length).",
+      }),
+    );
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.click(screen.getByRole("button", { name: /Modelden plan oner/ }));
+    await screen.findByTestId("tasks-model-outcome");
+
+    const outcome = screen.getByTestId("tasks-model-outcome");
+    expect(outcome).toHaveTextContent("Sonuc: truncated");
+    expect(outcome).toHaveTextContent("kesildi");
+    expect(outcome).toHaveTextContent("oturum acik kaldi");
+    // The word for an ending is the one thing this branch may not say.
+    expect(outcome.textContent ?? "").not.toContain("oturum bitti");
+    // Nor may it borrow the *tone* of one. `inactive` is what a closed
+    // session looks like, and looking closed is how this outcome sent people
+    // away without retrying.
+    expect(outcome).toHaveTextContent("durum: sorunlu");
+    expect(outcome.textContent ?? "").not.toContain("durum: etkin degil");
+
+    const note = screen.getByTestId("tasks-model-outcome-note");
+    expect(note).toHaveTextContent("Bu bir bitis degildir");
+    expect(note).toHaveTextContent("yeniden isteyebilirsiniz");
+    // The provider's own sentence is still shown, under it rather than
+    // instead of it.
+    expect(screen.getByTestId("tasks-model-detail")).toHaveTextContent("sonlanma nedeni: length");
+  });
+
+  /**
+   * An unreadable ending is carried, not translated into a guess.
+   *
+   * `inconclusive` is the outcome for a turn that produced no call for a
+   * reason this build does not read - the provider's own content filter, an
+   * empty `tool_calls`, a word nobody published, or no reason at all. Which
+   * of those it was arrives in `detail` in the provider's own spelling, and
+   * the surface's job is to show it and to say the session was not closed.
+   */
+  it("carries an unreadable ending in the provider's own words", async () => {
+    modelStub(
+      proposal({
+        outcome: "inconclusive",
+        run_id: "",
+        detail:
+          "TEST-ONLY: Saglayici tanimadigimiz bir sonlanma nedeni bildirdi: 'quota_pause'.",
+      }),
+    );
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.click(screen.getByRole("button", { name: /Modelden plan oner/ }));
+    await screen.findByTestId("tasks-model-outcome");
+
+    const outcome = screen.getByTestId("tasks-model-outcome");
+    expect(outcome).toHaveTextContent("Sonuc: inconclusive");
+    expect(outcome).toHaveTextContent("oturum kapatilmadi");
+    expect(outcome).toHaveTextContent("durum: sorunlu");
+    // Verbatim: the value we could not read is passed through, never renamed.
+    expect(screen.getByTestId("tasks-model-detail")).toHaveTextContent("'quota_pause'");
+
+    const note = screen.getByTestId("tasks-model-outcome-note");
+    expect(note).toHaveTextContent("uydurmaz");
+    expect(note).toHaveTextContent("Oturum kapatilmadi");
+  });
+
+  it("leaves the explanatory note off the outcomes that are complete on their own", async () => {
+    modelStub(proposal({ outcome: "finished", run_id: "" }));
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.click(screen.getByRole("button", { name: /Modelden plan oner/ }));
+    await screen.findByTestId("tasks-model-outcome");
+
+    expect(screen.getByTestId("tasks-model-outcome")).toHaveTextContent("oturum bitti");
+    expect(screen.queryByTestId("tasks-model-outcome-note")).toBeNull();
+  });
+
+  /**
+   * The pill is the sentence, and until now nothing read it.
+   *
+   * A mutation gave `refused` the label of `planned` - "Model bir plan onerdi
+   * ve plan kaydedildi" - and the `ok` tone, so a proposal naming an
+   * unregistered tool rendered as a green tick beside the words for a
+   * recorded plan. **All 434 component tests and the whole browser suite
+   * stayed green.** Every assertion in this file reads either the raw
+   * `Sonuc: <outcome>` word or the backend's `detail`, and a reader who skims
+   * reads neither: they read the pill.
+   *
+   * So the rule is asserted over the pill itself, for every member of the
+   * closed map, and `planned` is checked in the same breath as the six -
+   * a test that only forbade things would pass over a screen that had
+   * stopped rendering the pill at all.
+   */
+  const NOT_A_RECORDED_PLAN = [
+    "finished",
+    "truncated",
+    "inconclusive",
+    "refused",
+    "budget_exhausted",
+    "provider_failed",
+  ] as const;
+
+  /** The pill beside the machine word, and nothing else on the screen. */
+  function outcomePill(outcome: string): HTMLElement {
+    const region = screen.getByTestId("tasks-model-outcome");
+    const machine = within(region).getByText(`Sonuc: ${outcome}`);
+    const pill = machine.parentElement;
+    if (pill === null) throw new Error("the outcome pill is not beside the machine word");
+    return pill;
+  }
+
+  /** Spend one turn whose ending is `outcome`, and hand back its pill. */
+  async function pillFor(outcome: string): Promise<HTMLElement> {
+    modelStub(
+      proposal({
+        outcome,
+        run_id: outcome === "planned" ? MODEL_RUN.id : "",
+        detail: `TEST-ONLY: bu tur '${outcome}' ile bitti.`,
+        runs: outcome === "planned" ? [MODEL_RUN] : [],
+      }),
+    );
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+    await user.click(screen.getByRole("button", { name: /Modelden plan oner/ }));
+    await screen.findByTestId("tasks-model-outcome");
+    return outcomePill(outcome);
+  }
+
+  it("words and tones the one ending that recorded a plan as the recorded plan", async () => {
+    const pill = await pillFor("planned");
+
+    // The positive control. `planned` is the only ending that may say a plan
+    // was recorded, and the map's own wording is what says it.
+    expect(pill).toHaveTextContent("Model bir plan onerdi ve plan kaydedildi");
+    // `pending`, not `ok`: even a recorded plan is a plan waiting for four
+    // approvals, so this pill never carries the success glyph either.
+    expect(pill).toHaveTextContent("durum: bekliyor");
+    expect(pill.textContent ?? "").not.toContain("✓");
+  });
+
+  it.each(NOT_A_RECORDED_PLAN)(
+    "does not let the %s ending wear the recorded plan's words or its tone",
+    async (outcome) => {
+      const pill = await pillFor(outcome);
+
+      // Not the recorded plan's sentence. A refusal that borrowed it is the
+      // mutation this test exists for.
+      expect(pill.textContent ?? "").not.toContain("plan kaydedildi");
+      expect(pill.textContent ?? "").not.toContain("plan onerdi");
+      // And not the success tone, in either of the two ways it shows: the
+      // glyph a sighted reader sees and the state a screen reader hears.
+      expect(pill.textContent ?? "").not.toContain("durum: iyi");
+      expect(pill.textContent ?? "").not.toContain("✓");
+      // Not vacuous: the pill really is on screen and really carries a
+      // sentence of its own.
+      expect((pill.textContent ?? "").length).toBeGreaterThan(
+        `Sonuc: ${outcome}`.length + 8,
+      );
+    },
+  );
+
+  /**
+   * `reasoning_content` is read from the provider's answer and dropped
+   * (ADR-0012 1). Nothing at any layer noticed a screen that rendered it.
+   *
+   * The mutation that found this added one paragraph to the model region
+   * printing the field - and it was invisible, because **no fixture in this
+   * repository puts a reasoning field on the wire at all**. A guarantee about
+   * a field nobody sends cannot be violated by a fixture nobody wrote, so the
+   * canary is the test: three plausible spellings travel in the response, and
+   * none of them may reach the document.
+   */
+  it("renders nothing from a reasoning field the provider sent", async () => {
+    const CANARY = "TEST-ONLY-REASONING-CANARY-NOT-FOR-DISPLAY";
+    modelStub({
+      ...proposal(),
+      // Unknown keys are allowed through validation on purpose, so all three
+      // of these reach the component exactly as a real provider field would.
+      reasoning_content: `${CANARY}-content`,
+      reasoning: `${CANARY}-plain`,
+      thinking: `${CANARY}-thinking`,
+    });
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.click(screen.getByRole("button", { name: /Modelden plan oner/ }));
+    await screen.findByTestId("tasks-model-outcome");
+
+    // The turn really happened and its own fields really rendered, so the
+    // absence below is an absence rather than an empty screen.
+    expect(screen.getByTestId("tasks-model-detail")).toHaveTextContent("Hicbir adim kosulmadi");
+    expect(document.body.textContent ?? "").not.toContain(CANARY);
+    expect(screen.getByTestId("tasks-model-no-reasoning")).toHaveTextContent(
+      "saklanmaz, loglanmaz ve gosterilmez",
+    );
+  });
+
+  /**
+   * An unmeasured contract is not invented, and the wording has to follow the
+   * wire in **both** directions.
+   *
+   * The lane fixture in this file carries `tool_calls_supported: true`, so a
+   * screen that said "olculmustur" unconditionally passed every test here.
+   * That is the unsourced claim ADR-0005 1.2 refuses, said about the one
+   * thing ADR-0012 had to measure before the lane could open.
+   */
+  it("says the tool-call format was measured only when the wire says it was", async () => {
+    const unmeasured = {
+      ...LANE,
+      protocol_context: { ...LANE.protocol_context, tool_calls_supported: false },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : new URL(input as URL).pathname;
+        if (url === "/api/session/bootstrap") {
+          return Promise.resolve(
+            jsonOk({
+              csrf_token: "test-only-value-not-a-real-token",
+              csrf_header: "X-Station-CSRF",
+            }),
+          );
+        }
+        if (url === "/api/tasks/surface") return Promise.resolve(jsonOk(SURFACE));
+        if (url === "/api/tasks") return Promise.resolve(jsonOk(LIST));
+        if (url === `/api/tasks/${TASK.id}/runs`) return Promise.resolve(jsonOk(runsFor([])));
+        if (url === "/api/opencode/status") return Promise.resolve(jsonOk(unmeasured));
+        return Promise.resolve(jsonOk({ detail: "not_found" }, 404));
+      }),
+    );
+
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.click(screen.getByRole("button", { name: /Hangi model secili/ }));
+    await screen.findByTestId("tasks-model-selection");
+
+    const line = screen.getByTestId("tasks-model-tool-calls");
+    expect(line).toHaveTextContent("olculmus degildir");
+    expect(line.textContent ?? "").not.toContain("icin olculmustur");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Paket H4: a produced file is not a passed test.
+// ---------------------------------------------------------------------------
+
+const PASSED_RUN: AgentRunStatus = {
+  ...PLANNED_RUN,
+  id: "dd44ee55ff6677889900aa11bb22cc33",
+  phase: "completed",
+  acceptance: [
+    {
+      kind: "artifact_exists",
+      label: "artifact_exists(name=rapor.md)",
+      satisfied: true,
+      detail: "TEST-ONLY: 'rapor.md' calisma alaninda bulundu.",
+    },
+  ],
+  test_result_state: "passed",
+  test_result_detail: "TEST-ONLY: Planin yazdigi 1 kosulun hepsi su anda saglaniyor.",
+};
+
+const FAILED_RUN: AgentRunStatus = {
+  ...PASSED_RUN,
+  id: "ee55ff6677889900aa11bb22cc33dd44",
+  acceptance: [
+    {
+      kind: "artifact_contains",
+      label: "artifact_contains(name=rapor.md, text=...)",
+      satisfied: false,
+      detail: "TEST-ONLY: 'rapor.md' istenen metni icermiyor.",
+    },
+  ],
+  test_result_state: "failed",
+  test_result_detail: "TEST-ONLY: 1 kosuldan 1'i su anda saglanmiyor.",
+};
+
+describe("Gorevler: the verdict comes from the plan's own conditions", () => {
+  it("renders a real pass with the condition it was derived from", async () => {
+    stub(runsFor([PASSED_RUN]));
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    expect(screen.getByTestId("tasks-test-result-state")).toHaveTextContent(
+      "Test sonucu: passed",
+    );
+    const conditions = screen.getByTestId(`tasks-acceptance-${PASSED_RUN.id}`);
+    expect(conditions).toHaveTextContent("Dosya calisma alaninda var mi");
+    expect(conditions).toHaveTextContent("su anda saglaniyor");
+    expect(conditions).toHaveTextContent("artifact_exists(name=rapor.md)");
+  });
+
+  it("renders a failure as a failure, not as an absence", async () => {
+    stub(runsFor([FAILED_RUN]));
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    expect(screen.getByTestId("tasks-test-result-state")).toHaveTextContent(
+      "Test sonucu: failed",
+    );
+    const conditions = screen.getByTestId(`tasks-acceptance-${FAILED_RUN.id}`);
+    expect(conditions).toHaveTextContent("su anda saglanmiyor");
+    expect(conditions).toHaveTextContent("istenen metni icermiyor");
+    // A failed verdict never picks up the success tone by omission.
+    expect(conditions).not.toHaveTextContent("su anda saglaniyor");
+  });
+
+  it("says a conditionless plan earned its not_implemented", async () => {
+    stub(runsFor([PLANNED_RUN]));
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    expect(screen.getByTestId(`tasks-acceptance-none-${PLANNED_RUN.id}`)).toHaveTextContent(
+      "hicbir cumle kosulmaz",
+    );
+    expect(screen.getByTestId(`tasks-acceptance-none-${PLANNED_RUN.id}`)).toHaveTextContent(
+      "gorev yayimin esiginde kalir",
+    );
+  });
+
+  it("records the acceptance conditions a person composed, from the published registry", async () => {
+    const sent: Recorded[] = [];
+    stub(runsFor([]), {
+      sent,
+      onPost: (url) => (url === `/api/tasks/${TASK.id}/runs` ? jsonOk(runsFor([PASSED_RUN])) : null),
+    });
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    // One step, so the plan is recordable at all.
+    await user.click(screen.getByRole("radio", { name: /write_workspace_file/ }));
+    await user.click(screen.getByRole("button", { name: "Adimi plana ekle" }));
+    await user.type(
+      screen.getByRole("textbox", { name: /Basari olcutu/ }),
+      "TEST-ONLY olcut",
+    );
+
+    // The condition chooser is built from `acceptance_checks`, so a registry
+    // the backend publishes and this screen does not know about would still
+    // be offered.
+    await user.click(screen.getByRole("radio", { name: /artifact_exists/ }));
+    await user.type(screen.getAllByRole("textbox", { name: /^name/ }).slice(-1)[0]!, "rapor.md");
+    await user.click(screen.getByRole("button", { name: "Kosulu plana ekle" }));
+    expect(screen.getByTestId("tasks-acceptance-draft-count")).toHaveTextContent(
+      "Plandaki kabul kosulu sayisi: 1",
+    );
+
+    await user.click(screen.getByRole("button", { name: /Plani kaydet/ }));
+    await waitFor(() => {
+      expect(sent.some((entry) => entry.url === `/api/tasks/${TASK.id}/runs`)).toBe(true);
+    });
+
+    const plan = sent.find((entry) => entry.url === `/api/tasks/${TASK.id}/runs`);
+    expect(plan?.body).toMatchObject({
+      acceptance: [{ kind: "artifact_exists", arguments: { name: "rapor.md" } }],
+    });
+  });
+
+  /**
+   * The verdict a person reads, as opposed to the one a test reads.
+   *
+   * Every assertion above this one reads `tasks-test-result-state`, which is
+   * the **machine** word - `Test sonucu: not_implemented` - and the four
+   * fields region, which is toned from a different map. A mutation relabelled
+   * `not_implemented` as "Gecti: planin yazdigi kabul kosullarinin hepsi su
+   * anda saglaniyor" and toned it `ok`, so a conditionless plan announced a
+   * passed test with a green tick, three words away from the machine value
+   * that still said `not_implemented`. **Nothing at any layer went red.**
+   *
+   * The sentence and the tone are therefore pinned here, for all three
+   * verdicts at once. Pinning all three is what makes it a rule rather than
+   * an anecdote: `passed` has to keep the success tone, so a test that just
+   * banned it everywhere would be wrong rather than strict.
+   */
+  it.each([
+    ["passed", PASSED_RUN, "Gecti", "durum: iyi"],
+    ["failed", FAILED_RUN, "Kaldi", "durum: sorunlu"],
+    ["not_implemented", PLANNED_RUN, "Uygulanmadi", "durum: etkin degil"],
+  ] as const)(
+    "renders the %s verdict as its own sentence and its own tone",
+    async (state, run, opening, tone) => {
+      stub(runsFor([run]));
+      await bootstrapSession();
+      const user = userEvent.setup();
+      render(<TasksPanel />);
+      await ready();
+      await openTask(user);
+
+      const machine = screen.getByTestId("tasks-test-result-state");
+      expect(machine).toHaveTextContent(`Test sonucu: ${state}`);
+
+      // The pill sits beside the machine word in one row; that row is what a
+      // reader actually reads.
+      const row = machine.parentElement;
+      expect(row).not.toBeNull();
+      const read = row?.textContent ?? "";
+      expect(read).toContain(opening);
+      expect(read).toContain(tone);
+
+      // And the two verdicts that are not a pass may not carry the pass's
+      // opening word or its glyph, in either direction.
+      if (state !== "passed") {
+        expect(read).not.toContain("Gecti");
+        expect(read).not.toContain("✓");
+      }
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Paket H4: the gate decides, and the request cannot name the state.
+// ---------------------------------------------------------------------------
+
+describe("Gorevler: publication readiness is derived, never requested", () => {
+  it("asks with a body that carries no target field", async () => {
+    const sent: Recorded[] = [];
+    stub(runsFor([PLANNED_RUN]), {
+      sent,
+      onPost: (url) =>
+        url === `/api/tasks/${TASK.id}/publish-readiness`
+          ? jsonOk({ ...TASK, state: "ready_to_publish", ready_to_publish: true, blocking_fields: [] })
+          : null,
+    });
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.click(screen.getByRole("button", { name: /Yayin hazirligini degerlendir/ }));
+    await screen.findByTestId("tasks-readiness-moved");
+
+    const request = sent.find(
+      (entry) => entry.url === `/api/tasks/${TASK.id}/publish-readiness`,
+    );
+    expect(request, "the derivation must have been requested").toBeDefined();
+    // A detail and nothing else. There is no `target`, and there is no key
+    // here that could be turned into one.
+    expect(request?.body).toEqual({ detail: "" });
+    expect(Object.keys(request?.body as Record<string, unknown>)).not.toContain("target");
+  });
+
+  it("names the unverified evidence when the gate refuses", async () => {
+    stub(runsFor([PLANNED_RUN]), {
+      onPost: (url) =>
+        url === `/api/tasks/${TASK.id}/publish-readiness`
+          ? jsonOk(
+              {
+                detail:
+                  "TEST-ONLY: Gorev yayima hazir degil; su alanlar dogrulanmis degil: task_outcome, test_result, user_acceptance. Bu durum istenerek degil kanittan turer.",
+              },
+              409,
+            )
+          : null,
+    });
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    // The blocking fields are readable *before* anything is pressed, so a
+    // person can see why an attempt would fail without making one.
+    expect(screen.getByTestId("tasks-readiness-blocking")).toHaveTextContent(
+      "task_outcome, test_result, user_acceptance",
+    );
+
+    await user.click(screen.getByRole("button", { name: /Yayin hazirligini degerlendir/ }));
+    await screen.findByTestId("tasks-readiness-refusal");
+
+    expect(screen.getByTestId("tasks-readiness-refusal")).toHaveTextContent(
+      "su alanlar dogrulanmis degil: task_outcome, test_result, user_acceptance",
+    );
+    expect(screen.queryByTestId("tasks-readiness-moved")).toBeNull();
   });
 });

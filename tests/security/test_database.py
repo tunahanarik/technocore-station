@@ -126,13 +126,21 @@ def test_initialise_database_is_repeatable(tmp_path: Path) -> None:
 #: constant that read the head off the script directory would agree with
 #: whatever the script directory happened to say.
 OLDER_RELEASE_REVISION = "0007"
-CURRENT_MIGRATION_HEAD = "0009"
+#: ``0009`` until Package H4 added ``0010`` - one additive column on
+#: ``agent_run`` - and ``0011`` after ADR-0013, which adds one table,
+#: ``model_call_ledger``. The upgrade path this file drives is unchanged in
+#: shape: a populated ``0007`` database still arrives at the head with its rows
+#: intact, and the head simply moved another revision further along. There is
+#: no backfill and none would be honest - a task whose model turns nobody
+#: recorded has no count to migrate, and inventing one would be a ceiling built
+#: out of a guess.
+CURRENT_MIGRATION_HEAD = "0011"
 
 
 def test_an_upgrade_from_an_older_release_keeps_the_rows_it_found(
     tmp_path: Path,
 ) -> None:
-    """ADR-0010 6. A populated ``0007`` database reaches ``0009`` intact.
+    """ADR-0010 6. A populated ``0007`` database reaches the head intact.
 
     The gap this closes is specific. Every migration test before Package I
     ran against an empty file, so "additive only" was checked as a property

@@ -19,10 +19,18 @@ onayı), kanıt defteri ve audit zinciri, iş taraması, görev yüzeyi ve agent
 
 Aynı ölçüde önemli olan, ürünün **yapmadıklarıdır**: bu depoda hiçbir gerçek
 Technocore write **hiç** yapılmadı, keyfi kod ve kabuk yürütmesi **kapalıdır**,
-model çağrısı **yoktur**, yayımlanmış bir artefakt **yoktur** ve insan
-güvenlik incelemesi **ertelenmiş bir kalan risktir** (ADR-0001 §5). Her
-bölümün kendi sınırı [`docs/kullanim-kilavuzu.md`](docs/kullanim-kilavuzu.md)
-içinde yazılıdır.
+yayımlanmış bir artefakt **yoktur** ve insan güvenlik incelemesi **ertelenmiş
+bir kalan risktir** (ADR-0001 §5). Her bölümün kendi sınırı
+[`docs/kullanim-kilavuzu.md`](docs/kullanim-kilavuzu.md) içinde yazılıdır.
+
+Bu paragraf bir madde **eksiltti**: eskiden "model çağrısı **yoktur**" da
+diyordu ve o cümle artık doğru değil. Sözleşme
+[ADR-0012](docs/decisions/0012-model-yolu-sozlesme-dogrulamasi-2026-09-06.md)
+ile hesap sahibinin kendi anahtarıyla **ölçüldü** ve model yolu açıldı: model
+bir plan **önerebilir**. Öneri yine kapalı araç registry'sinden geçer, model
+kendine araç ekleyemez, kendi planını başlatamaz ve kendi planına onay
+veremez. Otomatik testlerin hiçbiri gerçek bir sağlayıcıya çıkmaz —
+hepsi `httpx.MockTransport` kullanır.
 
 Bu paragrafta bilerek aşama numarası yoktur: sayı taşımayan bir metin
 bayatlamaz. Aşama sayımı ve ayrıntılı durum tek kaynaktadır —

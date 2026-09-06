@@ -423,12 +423,33 @@ def test_the_three_protocol_addresses_are_distinct_and_registered() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_streaming_and_tool_calls_are_absent_and_say_so() -> None:
-    """Deferred, visibly (ADR-0005 2). An absence nobody states is a bug."""
+def test_streaming_is_absent_and_says_so_and_tool_calls_were_measured() -> None:
+    """One format deferred, one measured, and the sentence says which is which.
+
+    This test said "both are absent" and asserted two ``False``s. The claim
+    was true when it was written and half of it stopped being true when
+    ADR-0012 measured the tool-call contract against the account holder's own
+    key. It is rewritten rather than relaxed, and the half that did **not**
+    change is asserted harder than before: streaming is still ``False``,
+    still named in the deferral sentence, and nothing measured it.
+
+    The measured half now has to carry its provenance. A ``True`` with no
+    sentence saying what was measured and how far the measurement reaches
+    would be exactly the unsourced claim ADR-0005 1.2 refuses - which is what
+    the old ``False`` was protecting against in the first place.
+    """
+    from station_api.opencode.planner import TOOL_CALL_PROVENANCE
+
     assert STREAMING_SUPPORTED is False
-    assert TOOL_CALLS_SUPPORTED is False
     assert "streaming" in DEFERRAL_SENTENCE.lower()
-    assert "arac cagrisi" in DEFERRAL_SENTENCE
+
+    assert TOOL_CALLS_SUPPORTED is True
+    assert "arac cagrisi" in DEFERRAL_SENTENCE.lower()
+    assert "olculdu" in DEFERRAL_SENTENCE.lower()
+    # The provenance names the endpoint and the observable that was read.
+    assert "chat/completions" in TOOL_CALL_PROVENANCE
+    assert "tool_calls" in TOOL_CALL_PROVENANCE
+    assert not set(TOOL_CALL_PROVENANCE) & set("çğıöşüÇĞİÖŞÜ")
 
 
 def test_the_shape_provenance_is_stated_rather_than_implied() -> None:

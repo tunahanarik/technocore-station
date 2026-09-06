@@ -2,27 +2,51 @@
 
 > Ana karar kaynağı: [`Technocore-Station-Proje-Kunyesi.md`](Technocore-Station-Proje-Kunyesi.md)
 > Çalışma kuralları: [`AGENTS.md`](AGENTS.md) · [`CLAUDE.md`](CLAUDE.md)
-> Son güncelleme: **5 Eylül 2026** (Aşama 12 / Paket J — bütünleşik inceleme
-> ve temizlik: yeni yetenek yok; belgeler ürünle uzlaştırıldı, `-qq` tuzağı
-> kapatıldı, SI tablosunun test adları artık ölçülüyor, kod aşaması 11)
+> Son güncelleme: **6 Eylül 2026** (Paket H4 — model plan yolu ve makinece
+> denetlenen kabul koşulları; ADR-0012 sözleşmeyi ölçtü, `tool_calls_supported`
+> `True` oldu ve `ready_to_publish` kanıttan türeyerek erişilebilir hâle geldi.
+> Ardından bir temizlik turu: ölü sabitler kaldırıldı ve model yolu açılınca
+> yanlışa düşen cümleler düzeltildi. En son: kalıbın **on ikinci** ve son
+> örneği kapatıldı — yasak ifade denetimi artık altı paketi değil `station_api`
+> ağacının tamamını kapsıyor, SI-344.)
 >
-> **Proje durumu: CODE_COMPLETE_USER_ACCEPTANCE_PENDING** — dosyanın sonuna
+> **Proje durumu: REVIEW_FIXES_IN_PROGRESS_CORE_AGENT_INCOMPLETE** — dosyanın sonuna
 > bakın.
 
 ## Aşama checklist
 
-- [x] **Aşama 0 — Spesifikasyon** — tamamlandı
-- [x] **Aşama 1 — Güvenli iskelet** — tamamlandı
-- [x] **Aşama 2 — Identity & Recovery** — tamamlandı
-- [x] **Aşama 2B — Conformance** — tamamlandı
-- [x] **Aşama 3 — Salt okunur Technocore** — tamamlandı
-- [x] **Aşama 3.1 — Protokol projeksiyonu düzeltmesi** — tamamlandı
-- [x] **Aşama 4 — Composer & Participation** — tamamlandı
-- [x] **Aşama 5 — Evidence & Audit** — tamamlandı
-- [x] **Aşama 6 — Project Modules** — tamamlandı (temel; görünür yüzey H1/H2)
-- [x] **Aşama 7 — Packaging** — betik, spec ve testler tamamlandı;
-      **artefakt üretildi ve çalıştırıldı** (PyInstaller kilitli bir
-      **geliştirme** bağımlılığı; artefaktın içine girmez)
+Bu liste **aşama 7'de bitiyordu** ve son beş aşamayı hiç saymıyordu; üstelik
+"Aşama 7 — Packaging" diyordu, oysa aşama 7 OpenCode bağlantısıdır ve
+paketleme **aşama 11**'dir. Liste gövdedeki başlıklara göre düzeltildi ve
+her satır kendi doğrulama raporuna bağlandı — ayrıntı raporlarda, sayım
+burada.
+
+| Aşama | Konu | Paket | Doğrulama raporu |
+|---|---|---|---|
+| 0 | Spesifikasyon | — | — |
+| 1 | Güvenli iskelet | — | — |
+| 2 | Identity & Recovery | — | — |
+| 2B | Conformance | — | — |
+| 3 | Salt okunur Technocore | — | — |
+| 3.1 | Protokol projeksiyonu düzeltmesi | B | [`paket-b`](docs/verification/paket-b.md) |
+| — | Başlangıç, kapsam eki, tekrarlanabilir CI | A | [`paket-a`](docs/verification/paket-a.md) |
+| — | Dashboard kabuğu ve hata sözleşmesi | C | [`paket-c`](docs/verification/paket-c.md) |
+| 4 | Composer & Participation | D | [`paket-d`](docs/verification/paket-d.md) |
+| 5 | Evidence & Audit | E | [`paket-e`](docs/verification/paket-e.md) |
+| 6 | Project Modules (temel; görünür yüzey H1/H2) | F | [`paket-f`](docs/verification/paket-f.md) |
+| 7 | OpenCode Go bağlantısı | G | [`paket-g`](docs/verification/paket-g.md) |
+| 8 | Work Scan | H1 | [`paket-h1`](docs/verification/paket-h1.md) |
+| 9 | Agent çalışma ortamı ve Activity Desk | H2 | [`paket-h2`](docs/verification/paket-h2.md) |
+| 10 | Kanıt çalışma alanı | H3 | [`paket-h3`](docs/verification/paket-h3.md) |
+| 11 | Windows paketleme — artefakt **üretildi ve çalıştırıldı**; imzasız (ADR-0010 §9) | I | [`paket-i`](docs/verification/paket-i.md) |
+| 12 | Bütünleşik inceleme ve temizlik (yeni yetenek yok) | J | [`paket-j`](docs/verification/paket-j.md) |
+| — | Model plan yolu ve makinece denetlenen kabul koşulları | H4 | [`paket-h4`](docs/verification/paket-h4.md) |
+| — | Bağımsız inceleme düzeltmesi (F1–F5) | — | [`review-fixes`](docs/verification/review-fixes.md) |
+
+Hepsi tamamlandı. **Bekleyen tek şey kullanıcı kabulüdür**
+([`kullanici-kabul-listesi.md`](docs/kullanici-kabul-listesi.md)); insan
+güvenlik incelemesi ertelenmiş kalan risktir (ADR-0001 §5). PyInstaller
+kilitli bir **geliştirme** bağımlılığıdır ve artefaktın içine girmez.
 
 ---
 
@@ -2186,4 +2210,1256 @@ adlandırılması, ve tablodaki her satır kimliğinin bozulması); **yedisi de
 
 ---
 
-**Proje durumu: CODE_COMPLETE_USER_ACCEPTANCE_PENDING** (5 Eylül 2026)
+**Tarihsel Paket J beyanı: CODE_COMPLETE_USER_ACCEPTANCE_PENDING** (5 Eylül 2026).
+Bağımsız incelemeyle model/teslim akışı eksikleri yeniden doğrulandığından güncel
+tamamlanma beyanı değildir.
+
+## Bağımsız inceleme düzeltmesi — devam ediyor
+
+`codex/review-regressions`, taban `58b5423`. F1–F5 bağımsız regresyonlarla
+yeniden üretildi. Geri alma/devam, çıktı sürümüne bağlı kabul ve kesilen
+çalışma uzlaştırması uygulandı; bekleyen start/resume sırasında Durdur çalışır.
+AppStatus cevap doğrulaması ve bölüm hata sınırı eklendi.
+Dosyalar ve kırmızı/yeşil kanıt: [düzeltme raporu](docs/verification/review-fixes.md).
+Yeni bağımlılık yok; mevcut kilitli sürümler korunuyor.
+İlk tam koşudaki paket/index/test-yardımcısı hataları gideriliyor.
+Sonraki iş model → plan → araç → çıktı → doğrulama → kabul → teslim akışı.
+PR'lar bu turda merge edilmeden bağımsız incelemeye bırakılacak.
+Canlı model/DID operasyonuna son mesajla yetki verildi; henüz yapılmadı.
+Manuel tarayıcı ve görsel kabul yapılmadı; kullanıcıya ait.
+
+## Paket H4 — model plan yolu ve makinece denetlenen kabul koşulları
+
+Bağlayıcı karar: [ADR-0012](docs/decisions/0012-model-yolu-sozlesme-dogrulamasi-2026-09-06.md).
+Uygulanmış hâli: [`docs/model-planning.md`](docs/model-planning.md).
+Değişmezler: `docs/security-invariants.md` §9m (SI-330 … SI-343).
+
+Bu paket **hiçbir güvenlik değişmezini gevşetmedi**; iki *olguyu* değiştirdi
+ve o olgulara dayanan cümleleri düzeltti.
+
+### Ne açıldı
+
+- [x] **Model plan önerebiliyor.** `station_api/planner` üçüncü bir paket
+      olarak eklendi: `station_api.agent` giden yüzey edinemez (kendi
+      sınır taraması bunu reddeder), `station_api.opencode` görev/çalışma
+      sahibi olamaz, birleştirme ikisini de içe alan ama hiçbirinin içe
+      almadığı bir pakette yapıldı.
+- [x] **Model kendi planını başlatamıyor.** Öneri `planned` fazında bir
+      çalışmadır; `plan_run` yolu bir kişinin yazdığı planla aynıdır.
+      `start_run`/`resume_run`/`request_stop` adları planner ağacında **hiç
+      geçmiyor** ve bu sözdizim ağacından okunuyor.
+- [x] **`reasoning_content` hiçbir yere gidemiyor.** Düzeltildi (bağımsız
+      inceleme): korumanın tip düzeyinde olduğu ölçüldü — `PlanProposal`'ın
+      böyle bir alanı yok — ve ölü `pop` döngüsü kaldırıldı. **"Gösterilmez"**
+      yarısı tutmuyordu: sağlayıcı hata gövdesinin alıntısı `error` üyeli bir
+      `200`'de tüm gövdeyi taşıyordu. Deny-list, kimlik bilgisi
+      redaksiyonuyla aynı fonksiyona taşındı (`client._excerpt`); alıntı
+      sağlayıcının hata metnini korur, muhakeme üyelerini kaybeder.
+- [x] **Dördüncü tavan birimi:** `model_call_count`. `usage` ve `cost`
+      olduğu gibi kaydediliyor, **tavan olarak okunmuyor**.
+- [x] **Kabul koşulları** (yedinci kapalı registry) ve gerçek bir
+      `test_result`; `ready_to_publish` artık **kanıttan türeyerek**
+      erişilebilir. SI-222 korundu: hiçbir istek gövdesi bu durumu
+      adlandıramıyor.
+- [x] Migration **`0010`**: `agent_run.acceptance_json` (tek sütun, katkısal).
+
+### Ne açılmadı
+
+- **Keyfi kod/kabuk yürütmesi kapalı kaldı** (ADR-0008 §1). Planner ağacında
+  `subprocess`/`exec`/`eval`/`os.system` yok ve tarama ekili çağrıda kırmızı.
+- **Streaming açılmadı**: biçimi ölçülmedi, `streaming_supported` `False`.
+- **Altıncı giden yüzey açılmadı**: `OUTBOUND_CLIENT_MODULES` beşte.
+- **Zamanlayıcı yok**: bir tur, onu isteyen isteğin içinde olur.
+- **Model oturumu diske yazılmıyor**; yeniden başlatmada kaybolur (SI-224).
+
+### Bu turda ölçülenler
+
+- Dört kapı yeşil (`ruff`, `ruff` ikinci kapsam, `mypy`, `pytest`).
+- Her yeni guard mutasyonla sürüldü; skorlar düzeltme raporundadır.
+- **Gerçek bir sağlayıcı isteği yapılmadı**: bütün testler
+  `httpx.MockTransport` kullanıyor ve kimlik bilgisi depodaki sentetik
+  `TEST-ONLY` sabitidir. Anahtar koda, teste, belgeye veya loga yazılmadı.
+- Manuel tarayıcı kabulü ve görsel kabul **yapılmadı**; kullanıcıya aittir.
+
+
+---
+
+## Temizlik turu — ölü sabitler ve H4 sonrası bayatlayan cümleler (6 Eylül 2026)
+
+Yeni yetenek yok. Bu tur iki şey yaptı: **ölçerek** ölü kod sildi ve model
+yolu açılınca (ADR-0012, Paket H4) **yanlışa düşen** cümleleri düzeltti.
+Hiçbir güvenlik testi silinmedi, `skip`/`xfail` edilmedi veya zayıflatılmadı;
+bir tane **eklendi**.
+
+### Ölçüm önce geldi
+
+Bütün `apps/station-api/src` ve `packages/technocore-conform/src` ağacı AST
+ile tarandı; her tanımlı ad için depo genelinde (kaynak + testler + belgeler
++ `packaging/` + `.github/` + `apps/station-web/src`) sözcük sınırlı referans
+sayıldı, ve `getattr`/`globals`/`importlib` gibi dinamik erişim noktaları ayrı
+listelendi. Sonuç: **ölü fonksiyon veya sınıf yok**. Yalnız üç modül düzeyi
+adı yalnızca kendi tanımından ibaretti.
+
+### Silinenler — üçünün ikisi
+
+| Silinen | Kanıt | Neden gerçekten ölü |
+|---|---|---|
+| `technocore/projection.py::_SIGNED_BODY_FIELDS` | depo genelinde referans **1** (kendi tanımı) | `PLANNED_BODY_FIELDS` onu **geçersizleştirmişti**: `evaluate_signed_body` alan kümesini çağırandan (`PLANNED_BODY_FIELDS[lane]`) alıyor. Üstelik eski sabit **payload alanını** (`text`/`value`) taşımıyordu, yani biri onu geri bağlasa her `anyOf` dalını **yanlış** kümeye karşı yargılardı — ADR-0004 §2'nin adlandırdığı sessiz drift |
+| `agent/service.py::MAX_PLAN_ACCEPTANCE` (+ `__all__` satırı) | referans **2** (tanımı + `__all__`) | Yorumu "route katmanı gövdeyi servisle aynı sayıya karşı sınırlasın diye yeniden dışa aktarıldı" diyordu. **Hiçbir route onu import etmiyordu**; servis doğrudan `MAX_ACCEPTANCE_CONDITIONS` kullanıyor. Yani iki sayı aslında **korumasızdı** ve üstlerinde koruduğunu söyleyen bir sabit duruyordu |
+
+`_SIGNED_BODY_FIELDS`'in taşıdığı karar (`from` alanı bilerek yok) silinmedi;
+`PLANNED_BODY_FIELDS`'in yorumuna taşındı.
+
+### Silinen sabitin yerine **gerçek** koruma
+
+`schemas.py` bilerek bir yaprak modüldür — `station_api`'den hiçbir şey
+import etmez, çünkü bu süreçten çıkabilecek her alan orada tanımlıdır. Bu
+yüzden `MAX_PLAN_ACCEPTANCE` tarif ettiği işi **yapamazdı**. Sabitin yerine
+tarif ettiği koruma yazıldı:
+
+`test_agent_acceptance.py::test_the_request_bound_is_the_same_number_the_service_enforces`
+— `AgentPlanRequest.acceptance`'ın `max_length`'i `MAX_ACCEPTANCE_CONDITIONS`
+ile **eşit** olmalı.
+
+**Mutasyonla sürüldü:** `max_length` 8 → 7 yapıldığında test kırmızıya döndü
+(`assert [7] == [8]`), geri alındığında yeşile. Yani ölü sabit, gerçekten
+öldüren bir iddiaya dönüştü.
+
+### Düzeltilen yanlış cümleler — hepsi H4/ADR-0012 sonrası bayatlamıştı
+
+| Yer | Önce | Sonra |
+|---|---|---|
+| `README.md` | "…keyfi kod ve kabuk yürütmesi kapalıdır, **model çağrısı yoktur**…" | Madde listeden çıkarıldı; model yolunun ölçülerek açıldığı, modelin plan **önerebildiği** ama kendi planını başlatamadığı/onaylayamadığı yazıldı |
+| `docs/opencode-connection.md` §"Doğrulanamayan" tablosu | "Streaming ve tool-call biçimi \| `TOOL_CALLS_SUPPORTED = False`" | Satır ikiye ayrıldı: streaming tabloda kaldı, tool-call **ölçüldüğü için** tablodan çıktı |
+| `docs/opencode-connection.md` §4 | "**Streaming ve tool-call yoktur** (ADR-0005 §2)" | "Streaming yoktur… **Tool-call vardır**" — tek cümle ikisinden biri hakkında zorunlu olarak yanlış olduğu için ayrıldı |
+| `docs/opencode-connection.md` §10 | "Tool-call \| H2 — aynı gerekçe"; "Gerçek bütçe sınırı ve eşzamanlılık \| H2" | İkisi de **kapandı** olarak işaretlendi; nereye kapandıkları yazıldı |
+| `docs/proof-workspace.md` §4 | "`test_result` \| `not_implemented` \| Aynı sebep; H2'den devralınır" | Satır tablodan **çıktı**: H4 alanı gerçekten üretiyor. Yalnız cümle taşıyan plan hâlâ `not_implemented` |
+| `docs/proof-workspace.md` §4 | "`independent_check` … **Model yolu kapalı** (ADR-0008 §2)" | Öncül düzeltildi: model yolu açık; alan yerinde kalıyor çünkü **planı öneren model o planın üçüncü tarafı değildir** |
+| `docs/proof-workspace.md` §10 | "…`ready_to_publish`'e taşıyan bir kullanıcı rotası yoktur. Bu… **açık bir boşluktur**" | Boşluk H4'te `POST /api/tasks/{id}/publish-readiness` ile kapandı; SI-222'nin gevşetilmediği dört madde hâlinde yazıldı |
+| `docs/architecture.md` paket tablosu | Aşama 6'da bitiyordu; `opencode/`, `workscan/`, `agent/`, `proof/`, `planner/` **yoktu** | Beş satır eklendi |
+| `docs/architecture.md` secret sınırı | "**Gelecekteki** bir LLM/model adaptörü bu paketi import edemez" | Adaptör artık mevcut; kural bir öngörü değil `test_planner_boundary.py`'nin **ölçtüğü** olgu |
+| `tasks/states.py` docstring | "the run never records a `test_result` reference… `ready_to_publish` stays out of reach" | İkisi de artık yanlış; SI-222'nin gerçek iddiası ("türetilir, **istenemez**") ayırt edilerek yazıldı |
+| `modules/registry.py` `_PROOF_WORKSPACE_REQUIREMENTS` yorumu | "The model lane is closed (ADR-0008 2), so there is no second opinion" | Öncül gitti, sonuç kaldı ve **keskinleşti** |
+| `PROJECT_STATUS.md` aşama checklist'i | Aşama **7'de bitiyordu** ve "Aşama 7 — Packaging" diyordu | Aşama 7 OpenCode'dur, paketleme **11**'dir. Tablo gövdedeki başlıklara göre düzeltildi ve her satır doğrulama raporuna bağlandı |
+
+### Bilerek **yapılmayan** bir düzeltme — adıyla
+
+`modules/registry.py`'deki `run_test_result_recorded` hâlâ
+`implemented=False`. Bayrak bu turda **çevrilmedi**, çünkü `complete`
+bayraktan türer: onu çevirmek `agent_workspace` modülünün "tamamlandı"
+diyebilmesi demektir ve bu bir belge düzeltmesi değil, **ürün durumu
+iddiası**dır — H3'ün `user_accepted_the_run_output`'u kendi yüzeyini kuran
+commit'te çevirmesi gibi, onu ölçen pakete aittir. Sessizce bırakılmadı:
+sebebi sabitin kendi yorumuna yazıldı.
+
+Aynı satırın `detail`'i ise **düzeltildi** (aşağıdaki tur). "Hiçbir kod yolu
+bu kanıtı üretemez" cümlesi ekranda duruyordu ve üstündeki yorum onun artık
+yanlış olduğunu **söylüyordu**; bayrağın bilerek bırakılması, yanlış cümlenin
+de bırakılması için bir gerekçe değildi.
+
+### Bu turda ölçülmeyenler ve dokunulmayanlar — adıyla
+
+- **`apps/station-web/**` hiç açılmadı.** Ön yüz ajanı çalışıyordu.
+  `api/types.ts` `tool_calls_supported`'ı hâlâ `false` **tipiyle** taşıyor
+  (paket-h4 §5'te de kayıtlı) ve `TasksPanel.test.tsx` hâlâ "model çıktısı
+  diye bir şey yoktur" metnini bekliyor. Frontend kapıları **koşulmadı**.
+- **`workscan/**`, `routes/workscan.py` ve `schemas.py`'nin oda şemaları**
+  başka bir ajanın canlı yazımıdır; okunmadı diye değil, **dokunulmadı** diye
+  raporlanıyor. `workscan/snapshot.py::measured_caveat` referans sayısı 1
+  ölçüldü ve **silinmedi**; o ajanın işi bitince bakılmalı.
+- `docs/ui-action-map.md`'deki "model çıktısı diye bir şey yoktur" satırları
+  **düzeltilmedi**: o belge arayüzün ne gösterdiğini anlatır ve arayüz şu an
+  değişiyor. Belgeyi arayüzden önce düzeltmek onu ikinci kez yanlış yapardı.
+- `client.py::AUTH_HEADER_CAVEAT` hâlâ "bu bir varsayımdır ve
+  **doğrulanmamıştır**" diyor. ADR-0012'nin ölçümü `Authorization: Bearer`'ı
+  metered uçta 200 ile geçirdi, yani cümlenin ikinci yarısı tartışmalı hâle
+  geldi. **Değiştirilmedi**: ADR-0012 §6 güncellemeyi açıkça
+  `tool_calls_supported` ve düzyazısıyla sınırladı, ve değişiklik iki
+  `tests/security` iddiasına ve SI-235'e dokunurdu. Karar kullanıcıya bırakıldı.
+
+---
+
+## Tur: model yolu açıldıktan sonra kalan yanlış cümleler (6 Eylül 2026)
+
+Tarayıcıda çalışan sürümde **Gorevler** ekranı okundu ve birkaç paragraf
+arayla birbiriyle çelişen iki cümle bulundu: kart açıklaması "hiçbir model
+çağrısı yoktur" diyordu, koşu cümlesi "test sonucu 'uygulanmadi' kalır"
+diyordu, ve **hemen altlarındaki** blok modelin plan **önerdiğini** ve test
+sonucunun planın kendi kabul koşullarından türetildiğini doğru anlatıyordu.
+İki cümle de yazıldıklarında doğruydu; ADR-0012 model yolunu açtı,
+`agent/acceptance.py` kabul koşullarını getirdi ve ikisi de yanlış oldu.
+
+### Önce regresyon testi, sonra düzeltme
+
+`tests/security/test_model_lane_claims.py` (yeni, 19 test). Kırmızıyken
+**dokuz dosyada 19 bayat iddia** listeledi; düzeltmeden sonra yeşil.
+
+Kusurun *sınıfını* yakalar, iki dizeyi değil:
+
+- Denetlenecek metin kümesi **ağaç yürüyerek** bulunur
+  (`apps/station-api/src/station_api`, `apps/station-web/src`,
+  `apps/station-web/e2e`); hiçbir dosya yolu listesi yoktur. Python `ast` ile
+  okunur (cümleler örtük birleştirilmiş literal'lerdir), TS/TSX metin olarak
+  (en kötü ihlal bir **JSX metni**ydi, dize bile değildi).
+- **Mutasyon kontrolü** gerçek ağaçlara, bu modülün adını hiç anmadığı iki
+  dizine birer sonda dosya yazar ve yürüyüşün onları gördüğünü ölçer; dosyalar
+  `finally` içinde silinir. `product_files` elle yazılmış bir yol listesiyle
+  değiştirildiğinde bu test **kırmızı** oldu — ölçüldü, varsayılmadı.
+- Her desenin **en az bir örneği eşlediği** ayrıca sabitlenir: hiçbir şeyi
+  eşlemeyen bir desen sonsuza kadar temiz rapor verir.
+- Hâlâ **hak edilmiş** sekiz cümle (yürütme kapalı, anahtar yokken çağrı
+  yapılmaz, tavana ulaşıldı, koşulsuz plan `uygulanmadi` alır) desenlere
+  takılmadıkları için sabitlenir; takılsalardı kural için muafiyet listesi
+  açılırdı.
+- `RUN_HONESTY_SENTENCE`'in anlamı, `acceptance.evaluate`'in gerçekten
+  `PASSED` üretebildiği **ölçülerek** sabitlenir.
+
+### Düzeltilen bayat iddialar
+
+| Yer | Neydi | Ne oldu |
+|---|---|---|
+| `TasksPanel.tsx` kart açıklaması | "hiçbir kabuk komutu ve hiçbir model çağrısı yoktur" | Model **önerebilir**; onay ve başlatma kullanıcınındır; kapalı kalan **kabuk ve keyfi kod** yürütmesidir |
+| `agent/language.py::RUN_HONESTY_SENTENCE` | "model çağrısı … yoktur … test sonucu 'uygulanmadi' **kalır**" | Model **önerir, çalıştırmaz**; test sonucu planın **kabul koşullarından** türetilir, koşul yazmayan plan `uygulanmadi` alır |
+| `agent/language.py` docstring (`test gecti`) | Yasak gerekçesi "hiçbir test sonucu üretilemez" | İfade **yasak kalır**, gerekçesi taşındı: karar baytları okuyarak verilir, bir denetim **koşulmaz** |
+| `modules/registry.py::run_test_result_recorded` | "hiçbir kod yolu bu kanıtı üretemez" | Keyfi yürütme kapalı; koşul yazan plan için sonuç **baytlardan türetilir**, yazmayan için `uygulanmadi` |
+| `modules/registry.py::independent_check_recorded` | "Bu sürümde **model yolu kapalıdır** (ADR-0008 §2)" | Öncül düştü, sonuç sertleşti: **planı öneren model o planın üçüncü tarafı değildir** |
+| `proof/bundle.py::INDEPENDENT_CHECK_DETAIL` | "**Model yolu kapalıdır**, bu yüzden ikinci bir görüş yoktur" | Aynı düzeltme; `not_implemented` durumu **değişmedi** |
+| `tasks/views.py::BUDGET_DETAIL` | Üç birim + "model yolu kapalı olduğu için kullanım değeri yoktur" | **Dört** birim (model çağrısı sayısı dâhil); `usage`/`cost` **kaydedilir**, tavan olarak **okunmaz** (ADR-0012 §3) |
+| `TasksPanel.test.tsx`, `ProofWorkspacePanel.test.tsx`, `e2e/agent.spec.ts`, `e2e/proof.spec.ts` | Ürün cümlelerinin `TEST-ONLY:` kopyaları + üç birimlik tavan | Hepsi güncellendi. Bir fixture'ın sabitlediği bayat cümle, ürün ilerledikten sonra da **yeşil kalır** — bu yüzden fixture'lar da taranıyor |
+| `db/models.py`, `schemas.py`, `proof/language.py`, `api/types.ts` yorumları | "The model lane is closed" | Yokluk artık **kazara değil korunuyor**: sağlayıcı bir muhakeme alanı gönderiyor, alan okunuyor ve düşürülüyor (ADR-0012 §1) |
+| `docs/agent-runtime.md` §3 | Üç birimlik tavan tablosu + kapalı yol gerekçesi | `model_call_count` eklendi; gerekçe ADR-0012 §3'ünkiyle değiştirildi |
+| `docs/kullanim-kilavuzu.md` §7 | "**Model çağrısı yoktur.**" | "Model plan **önerir**, çalıştırmaz" |
+| `docs/ui-action-map.md` §14.5, §15.3 | "üretecek bir model yolu da yoktur", "Model yolu ADR-0008 §2 ile … kapalıdır" | Yol açık; muhakeme alanı **korunan** bir yokluk, bağımsız kontrol ise üçüncü taraf olmadığı için boş |
+
+Güncellenen `tests/security` iddiaları — üçü de **güçlendirildi**, hiçbiri
+gevşetilmedi:
+
+- `test_agent_language.py::test_the_honesty_sentences_say_what_is_actually_true`
+  yalnızca kelimelerin **varlığını** istiyordu, bu yüzden yanındaki yanlış
+  cümleyi göremiyordu; artık iki bayat iddianın **yokluğunu** da istiyor.
+- `test_proof_bundle.py::test_the_independent_check_and_the_exit_code_stay_not_implemented`
+  `"Model yolu kapalidir"` cümlesini **zorunlu tutuyordu** — yani yanlış
+  cümleyi yerinde tutan şeyin kendisiydi. Artık işleyen gerekçeyi ve eski
+  öncülün **yokluğunu** sabitliyor.
+- `test_task_evidence.py::test_the_task_layer_states_where_the_ceiling_lives_rather_than_implying_none`
+  dördüncü birimi ve "tavan olarak" niteliğini istiyor.
+
+**Belgelerdeki tarihsel alıntılara dokunulmadı** ve tarama kapsamına
+alınmadı: `docs/model-planning.md`, `docs/proof-workspace.md`,
+`README.md` ve bu dosya eski ifadeyi *"eskiden şöyle diyordu"* diye anıyor,
+ki bu doğru bir cümledir. `docs/work-scan.md`'deki "model çağrısı yoktur" da
+**paket kapsamlıdır** ve hâlâ doğrudur (SI-279).
+
+### Koşulan kapılar
+
+`ruff check .` · `mypy src` · `pytest ../../tests` (**2426 geçti**) ·
+`npm run lint` · `npm run test` (**434 geçti**) · `npm run build`, ardından
+SPA bundle değiştiği için `pytest` tekrar koşuldu.
+
+
+---
+
+## Aynı kusurun yedinci ve sekizinci örneği: iki tarama, iki üçlü liste
+
+**Durum:** kapandı. Commit edilmedi (INV-08).
+
+### Kusur, ölçülerek
+
+Bu depoda dokuz kez bulunan kalıbın iki örneği daha duruyordu: *koruduğu
+şeyle aynı listeyi okuyan, bu yüzden bir boşluğu asla göremeyen muhafız.*
+
+- `test_task_evidence.py::BUDGET_SCANNED_DIRS` = `("modules", "tasks", "proof")`
+- `test_module_registry.py::REGISTRY_SCANNED_DIRS` = aynı üçlü
+
+İkisi de ADR-0012'nin açtığı model yolunun paketlerini — `planner` ve
+`opencode` — kapsamıyordu. İddia edilmedi, **ekili ihlalle ölçüldü**:
+
+| Ekilen ihlal | Eski tarama | Yeni tarama |
+|---|---|---|
+| `planner/` içine `estimated_budget = 10` + `run.budget_left` | **55 test yeşil** | **1 kırmızı** (`test_the_task_layer_opens_no_budget_field`) |
+| `planner/` ve `opencode/` içine `import importlib` + `loader = importlib.import_module` | **37 test yeşil** | **1 kırmızı** (`test_no_module_is_ever_loaded_from_disk`) |
+
+İkincisi charter ADR-017'nin yasakladığı tek şeydir — diskten kod yükleme
+yolu — ve en yeni kodda hiçbir test görmüyordu.
+
+### Düzeltme
+
+`test_task_states.py`'nin `STATE_WRITER_DIRS` +
+`PACKAGES_OUTSIDE_THE_STATE_WRITE_SCAN` kalıbı iki dosyaya da uygulandı;
+dördüncü bir kalıp uydurulmadı.
+
+- **Bütçe taraması** on dört paketi kapsıyor (`planner` ve `opencode` dâhil).
+  Dışarıda kalan dört paket — `agent` (tavanın evi), `evidence` (denetim
+  olayının adı), `routes` ve `workscan` (tel) — `PACKAGES_OUTSIDE_THE_BUDGET_SCAN`
+  içinde gerekçesiyle sayılıdır. `planner` ve `opencode` taramanın içindedir ve
+  yalnız adlandırılmış birer muafiyet taşır (`budget`, `BUDGET_EXHAUSTED`,
+  `BUDGET_AVAILABLE`) — bu isimler `tasks`/`modules`'a **verilmedi**, yani
+  kuralın en eski yarısı hiç gevşemedi.
+- **Registry taraması** tek liste olmaktan çıktı: üç kural (`dynamic-loading`,
+  `outbound`, `secret-boundary`) ayrı ayrı kapsanıyor. Sebebi somut: `planner`
+  giden yüzey kuralının **dışında**, diğer ikisinin **içinde** olmalı ve tek
+  bir liste bunu söyleyemediği için en gevşek şeyi söylüyordu. Dinamik yükleme
+  kuralının **hiç muafiyeti yok** ve on sekiz paketin tamamını kapsıyor.
+
+### Gerekçeler düzyazıda bırakılmadı
+
+Üç sabitleme, `test_task_states.py`'nin `TaskRecord` sabitlemesinin şekliyle:
+`station_api.agent.budget` tam **üç** modül tarafından import edilir, `httpx`
+tam **beş** (`OUTBOUND_CLIENT_MODULES` beşte kalır, ADR-0012 §4),
+`compose.signer` tam **iki**. İlki daha ilk koşuda bir gerekçeyi yanlış
+çıkardı — `workscan` tavanı hiç import etmiyor — ve gerekçe düzeltildi.
+
+### Muhafızlar mutasyonla sürüldü
+
+İkisi de listeyi değil ağacı yürüyor. `_packages` iki listeyi okuyan bir
+sürüme çevrildiğinde, iki listede de adı geçmeyen ekili bir paket
+(`station_api/spend_probe/`) **görünmez** oluyor: muhafız kırmızıdan yeşile
+dönüyor. Mutasyon kararı tersine çevirdiği için muhafızlar gerçektir.
+
+### Koşulan kapılar
+
+`ruff check .` · `ruff check apps/station-api/src packages/technocore-conform/src tests`
+· `mypy --config-file apps/station-api/pyproject.toml` (**142 dosya**) ·
+`pytest ../../tests` (**2523 geçti**) · `npm run lint` · `npm run test`
+(**434 geçti**) · `npm run build`. SPA bundle **değişmedi**.
+
+### Açık risk — **kapandı** (bir sonraki bölüm)
+
+Tarama birimi **paket**ti (`station_api` altındaki dizinler), üst düzey tek
+dosyalık modüller (`app.py`, `schemas.py`, `resources.py`, …) değil.
+`resources.py` paketlenmiş varlıklar için `importlib.resources` kullanır ve
+bu meşrudur; ama yeni bir üst düzey modül bu üç taramanın da, bütçe
+taramasının da dışında kalıyor ve muhafız bunu söylemiyordu. Kayda geçirildi
+ve **bir sonraki turda ölçülerek kapatıldı**; ayrıntı aşağıda.
+
+---
+
+## Aynı kusurun **onuncu** örneği: gevşek üst-seviye modüller
+
+**Durum:** kapandı. Commit edilmedi (INV-08).
+
+Yedinci ve sekizinci örnek kapatılırken onuncusu **düzeltilmedi, düzyazıya
+yazıldı** — yukarıdaki "Açık risk" başlığı odur. Yorumdaki bir not muhafız
+değildir.
+
+### Kusur, ölçülerek (önce kırmızı istenen regresyon)
+
+`station_api` altında doğrudan duran **on dört** gevşek `.py` dosyası üç
+registry kuralının (`dynamic-loading`, `outbound`, `secret-boundary`) ve
+bütçe kuralının dışındaydı. Dört gevşek modül ekildi; iki muhafız dosyasının
+**175 testinin tamamı yeşil kaldı** — temiz ağaçtaki koşuyla birebir aynı
+sayı.
+
+| Ekilen gevşek modül | Ekimden önce | Ekimden sonra (eski muhafız) |
+|---|---|---|
+| `zz_plant_dynamic.py`: `import importlib` + `loader = importlib.import_module` | 175 geçti | **175 geçti** |
+| `zz_plant_outbound.py`: `import requests` | 175 geçti | **175 geçti** |
+| `zz_plant_secret.py`: `from station_api.vault.service import VaultService` | 175 geçti | **175 geçti** |
+| `zz_plant_budget.py`: `estimated_budget = 10` + `run.budget_left` | 175 geçti | **175 geçti** |
+
+Bütün `tests/security` koşusunda dört ekimin verdiği tek ilgili kırmızı
+`test_write_gate.py::test_httpx_is_imported_only_by_the_reviewed_clients`
+oldu ve o da yalnız `requests` **HTTP kütüphanesi** olduğu için: giden yüzey
+kuralının iç istemci yarısı (`socket`, `station_api.opencode`,
+`station_api.technocore.client`, …) hiçbir gevşek modülde görülmüyordu.
+Diğer iki kırmızı `test_tracked_sources.py`'nin git-takip kontrolüydü —
+ekimler untracked olduğu için; gerçek bir değişiklikte o kontrol hiç
+konuşmaz.
+
+### Yeni muhafız: kırmızı, iki katmanda
+
+| Adım | Sonuç |
+|---|---|
+| Dört modül ekli, tuple'lara **eklenmemiş** | **2 kırmızı**: her iki dosyada `::test_every_loose_module_is_scanned_and_every_scanned_module_exists` |
+| Aynı dört modül tuple'lara **eklenmiş** (listeyi genişleten geliştirici) | **4 kırmızı**: `test_no_module_is_ever_loaded_from_disk` (`attribute .import_module`, `import importlib`), `test_the_task_layer_has_no_outbound_surface` (`requests`), `test_the_task_layer_reaches_no_vault_and_no_signer` (`station_api.vault.service`), `test_the_task_layer_opens_no_budget_field` |
+
+Yani hem "listeyi genişletmeyi unutmak" hem de "listeyi genişletip ihlali
+bırakmak" kapalı.
+
+### Muhafız mutasyonla sürüldü
+
+Keşif `glob("*.py")` yerine elle yazılmış dosya adı listesini okuyacak biçimde
+çevrildi (`_loose_modules` → `set(REGISTRY_SCANNED_MODULES)` /
+`set(BUDGET_SCANNED_MODULES)`), dört ekim yerinde bırakıldı:
+
+| Mutasyon | Sonuç |
+|---|---|
+| `_loose_modules` dizini yürüyor (asıl hâli) | **2 kırmızı** |
+| `_loose_modules` tuple okuyor (mutasyon) | **236 geçti, sıfır kırmızı** — muhafız kör |
+
+Karar tersine döndü; muhafız gerçektir.
+
+### Düzeltme — yeni kalıp uydurulmadı
+
+Mevcut kalıp (yürüyüş + sayılı, gerekçeli muafiyet + bayatlama sabitlemesi)
+bir seviye aşağı taşındı. **Gevşek modül için bütün-modül muafiyeti yoktur**:
+bir modül tek dosyadır, onu muaf etmek kuralın bütün yazımlarını o dosyaya
+vermek olurdu — kapatılan boşluğun bir kat aşağıya taşınmış hâli. Modülün
+alabileceği tek şey **adlandırılmış izin**dir.
+
+Genişletilen taramanın gerçek ağaçta bulduğu beş şey ve verilen karar:
+
+| Bulgu | Karar |
+|---|---|
+| `resources.py`: `from importlib import resources` | **Üye düzeyinde izin.** `importlib.resources` paketlenmiş veri okur, keyfi kod yükleyemez; ADR-017'nin yasakladığı yükleme yolu değildir (ADR-0010 §1). İzin `import importlib.resources` dizesidir — modül adı değil. |
+| `app.py`: `station_api.technocore.write_client`, `station_api.opencode.service` | **Ad düzeyinde izin.** Montaj noktası gözden geçirilmiş istemciyi kurup enjekte eder; kendi istemcisini açmaz. `station_api.opencode.client` **verilmedi**. |
+| `app.py`: `station_api.vault`, `vault.errors`, `compose.signer`, `compose.service`, `compose.nonce` | **Ad düzeyinde izin.** Kasayı biri kurmak zorunda; `app.py` zaten signer'ı adlandırabilen iki modülden biridir ve bu çift `test_the_signer_is_named_by_exactly_the_modules_written_down_here` ile sabitlidir. |
+| `schemas.py`: `budget_available`, `budget_detail`, `budget_state` | **Ad düzeyinde izin.** `routes` muafiyetinin hep hakkında olduğu dosya buydu — gerekçe doğru dosyayı adlandırıyor, yanlış dosyayı kapsıyordu. Dördüncü bir bütçe biçimli üye aynı dosyada kırmızıdır. |
+| `launcher.py`: `import socket` | **Ad düzeyinde izin.** **Dinleyen** soket: `reserve_loopback_socket` port 0 ile bağlanır, INV-02/SI-02, `test_bind.py` tutar. Giden bağlantı değildir. |
+
+Üründe düzeltilmesi gereken gerçek ihlal **çıkmadı**; beş bulgunun beşi de
+gerekçesiyle sayılı izindir. `dynamic-loading` kuralının paket düzeyinde hâlâ
+**sıfır** muafiyeti var ve ağaçtaki tek adlandırılmış izin `resources.py`
+içindeki üyedir. `OUTBOUND_CLIENT_MODULES` **beşte** kaldı.
+
+Tarama kendisi de bir yer daraldı: `from x import y`, banlı bir paketten
+geldiğinde artık **üye üye** raporlanıyor (`import importlib.resources`,
+`import importlib` değil). Etiket inceldi, hüküm değil — banlı bir modülden
+gelen her `from` ifadesi hâlâ en az bir offender üretir.
+
+### Değişen dosyalar
+
+- `tests/security/test_module_registry.py` — `REGISTRY_SCANNED_MODULES`,
+  `MODULE_ALLOWANCES`, `_scope_of`, `_allowances`, `_loose_modules`,
+  `_unfiltered_offenders`; dört yeni test
+  (`::test_every_loose_module_is_scanned_and_every_scanned_module_exists`,
+  `::test_a_planted_violation_is_reported_from_every_scanned_loose_module`,
+  `::test_every_module_allowance_is_used_and_is_scoped`,
+  `::test_the_importlib_allowance_is_the_data_reader_and_not_a_loader`).
+- `tests/security/test_task_evidence.py` — `BUDGET_SCANNED_MODULES`,
+  `BUDGET_NAMES_ONE_MODULE_MAY_USE`, `_loose_modules`; üç yeni test.
+- `docs/security-invariants.md` — SI-210, SI-213, SI-225 kapsam hücreleri ve
+  test atıfları; "Aynı kusurun **onuncu** örneği" ölçüm kaydı.
+- `PROJECT_STATUS.md` — bu bölüm.
+
+Ürün kodunda **hiçbir dosya değişmedi**.
+
+### Koşulan kapılar
+
+`ruff check .` (**All checks passed**) ·
+`ruff check apps/station-api/src packages/technocore-conform/src tests`
+(**All checks passed**) · `mypy --config-file apps/station-api/pyproject.toml`
+(**Success: no issues found in 142 source files**) · `pytest ../../tests`
+(**2584 geçti**, 176.87 sn; önceki tur 2523) · `npm run lint` (temiz) ·
+`npm run test` (**434 geçti**, 13 dosya) · `npm run build` (**built in
+3.56s**). Web kaynağı değişmediği için **SPA bundle değişmedi**; paketleme
+artefaktı yeniden üretilmedi.
+
+Ekimlerin hiçbiri hayatta kalmadı: `git status --untracked-files=all` yalnız
+değişen dört dosyayı `M` olarak gösteriyor, untracked girdi yok.
+
+### Açık risk
+
+`test_task_states.py`'nin `STATE_WRITER_DIRS` taraması hâlâ **paket**
+birimindedir; bu turun kapsamı dört kuraldı (`dynamic-loading`, `outbound`,
+`secret-boundary`, bütçe) ve beşinci kurala dokunulmadı. Gevşek modüllerin
+hiçbiri bugün durum yazmıyor, ama bunu söyleyen bir muhafız yok — aynı
+kalıbın **on birinci** örneği olarak kayda geçirildi.
+
+---
+
+## Aynı kusurun **on birinci** örneği: durum yazma kuralı (6 Eylül 2026)
+
+Bir önceki tur dördüncü/beşinci kuralı gevşek modüllere genişletti ve
+kapatmadığı şeyi **adıyla** kaydetti: `test_task_states.py`'nin
+`STATE_WRITER_DIRS`'ü hâlâ paket kapsamlıydı. `PROJECT_STATUS.md`'de "açık
+risk", commit mesajında "on birincisi olurdu" yazıyordu. İkisi de muhafız
+değildir; bu tur onu kapattı.
+
+### Kusur, ölçülerek (önce kırmızı istenen regresyon)
+
+İki ayrı ekim yapıldı, çünkü ikisi farklı şey ölçer ve onuncu turun ölçümünde
+karışan tam olarak bu ikisiydi:
+
+1. **Yeni** gevşek modül — `apps/station-api/src/station_api/task_shortcut.py`,
+   içinde `row.state = "published"` ve `setattr(row, "state", "running")`.
+2. **Var olan, git'te izlenen** gevşek modüle **yerinde** eklenen yazı —
+   `single_instance.py`'ye `row.state = "review_needed"`.
+
+Eski taramayla:
+
+| Koşu | Sonuç |
+|---|---|
+| `test_task_states.py`, iki ekim de yerinde | **32 geçti** — temiz temel çizgiyle (32 geçti) bayt bayt aynı |
+| Bütün `tests/security`, iki ekim de yerinde | **4 kırmızı, 2246 geçti** |
+| Bütün `tests/security`, **yalnız yerinde ekim** (yeni dosya yok) | **2250 geçti** — temiz temel çizgiyle birebir aynı |
+
+Dört kırmızının **hiçbiri** durum yazma kuralı değildir ve hiçbiri kapsam
+sayılmadı: ikisi (`test_tracked_sources.py`'nin iki testi) yalnız ekilen
+dosyanın **izlenmemesine** tepki verdi — onuncu turda da olan, gerçek bir
+değişiklik hakkında hiçbir şey söylemeyen sinyal; ötekiler
+(`test_module_registry.py` ve `test_task_evidence.py`'nin gevşek modül yürüyüş
+muhafızları) *yeni bir gevşek modül belirdiğini* söyledi, *o modülün görev
+durumu yazdığını* değil. Üçüncü satır bunu kanıtlar: izlenen dosyaya yerinde
+yazılan gerçek ihlal, dosya listelerini hiç değiştirmediği için **bütün
+güvenlik paketini yeşil bıraktı**. Kural hakkında sıfır kapsam.
+
+### Yeni muhafız: kırmızı
+
+Aynı iki ekimle, genişletilmiş taramaya karşı: **3 kırmızı, 48 geçti**.
+
+- `::test_only_the_transition_method_writes_a_task_state` — kuralın kendisi;
+  artık gevşek modülleri de okuduğu için ikisini birden gördü.
+- `::test_every_loose_module_is_scanned_and_every_scanned_module_exists` —
+  büyüme hâli: `['task_shortcut.py']`.
+- `::test_no_loose_module_writes_a_task_state_at_all` — **izlenen** dosyaya
+  yerinde yazılan ihlali adıyla verdi
+  (`single_instance.py:_test_only_force_review`).
+
+### Muhafız mutasyonla sürüldü
+
+| Mutasyon | Ekili modül | Sonuç |
+|---|---|---|
+| `_loose_modules` dizini `glob("*.py")` ile yürüyor (asıl hâli) | `task_shortcut.py`, yerinde | **1 kırmızı** |
+| `_loose_modules` `STATE_WRITER_MODULES` okuyor (mutasyon) | aynı modül, yerinde | **yeşil, 51 test** — muhafız kör |
+
+Hüküm dönüyor, yani muhafız sahte değil.
+
+### Düzeltme — yeni kalıp uydurulmadı
+
+`test_module_registry.py` ve `test_task_evidence.py`'nin bir tur önce
+yerleştiği şekil birebir izlendi: elle yazılmış `STATE_WRITER_MODULES`
+tuple'ı, ağacı `glob` ile yürüyen ayrı bir muhafız, `is_file()` ile korunan
+tarama, ve `<dosya>:<fonksiyon>` biçiminde **adlandırılmış izinler**.
+
+**Modül muafiyet tablosu yok ve olmayacak.** Bir modül tek dosyadır; onu muaf
+etmek düz atama, annotate, artırmalı ve `setattr` yazımlarının hepsini birden
+o dosyaya vermek olurdu — kapatılan deliğin bir kat aşağıya taşınmış hâli.
+
+Genişletilen taramanın gerçek ağaçta bulduğu şey ve verilen karar:
+
+| Bulgu | Karar |
+|---|---|
+| On dört gevşek modülün hiçbirinde `.state` yazısı **yok** | **İzin verilmedi.** `MODULE_STATE_WRITE_ALLOWANCES` boştur; kural genişletilirken hiçbir ürün kodu değişmedi ve hiçbir muafiyet açılmadı. |
+
+Yani üründe düzeltilmesi gereken gerçek ihlal **çıkmadı** — ve bu, taramanın
+sessiz kalması olarak değil, kendi adlandırılmış iddiası olarak yazıldı
+(`::test_no_loose_module_writes_a_task_state_at_all`, on dört dosyanın
+açıldığını **ve** temiz olduğunu ayrı ayrı ölçer).
+
+Boş tablo denetlenmemiş tablo demek olmasın diye izin mekanizması boş küme
+üzerinde döngülenmiyor, **sürülüyor**: atılabilir bir ağaçta bir yazıcıya izin
+verilir, aynı dosyadaki öteki iki yazıcının kırmızı kaldığı ölçülür, aynı izin
+başka bir modüle yazıldığında hiçbir şeyi geçirmediği ölçülür, ve izin
+denetleyicisi önce **geçerli** bir izni kabul ettiği gösterilerek beş bozuk
+şekle karşı sürülür (yoksa "her şeyi reddeden" bir denetleyici de geçerdi).
+
+Bir de eskiden hiç denetlenmeyen bir gerekçe **sayıyla sabitlendi**:
+`PACKAGES_OUTSIDE_THE_STATE_WRITE_SCAN`'in `compose` girdisi paketin dışarıda
+kalmasını tek bir fonksiyona dayandırıyor (`nonce.py:_settle_once`, farklı
+tablo, farklı yaşam döngüsü). O pakette ikinci bir `.state` yazısı belirse
+cümle hâlâ paketi tarif ediyormuş gibi okunurdu; artık
+`::test_the_compose_exemption_still_describes_exactly_one_write` sayıyor — bu,
+`test_task_evidence.py`'nin tavanı **tam üç** import'çıya sabitlemesinin
+aynısı.
+
+### Değişen dosyalar
+
+- `tests/security/test_task_states.py` — `STATE_WRITER_MODULES`,
+  `MODULE_STATE_WRITE_ALLOWANCES`, `THE_ONLY_EXEMPT_STATE_WRITE`,
+  `_loose_modules`, `_state_write_scan_files`, `_scope_of`, `_writes_in`,
+  `_module_allowance_problems`; `_state_writers` gevşek modülleri de açıyor ve
+  adlandırılmış izinleri uyguluyor; beş yeni test
+  (`::test_every_loose_module_is_scanned_and_every_scanned_module_exists`,
+  `::test_a_planted_state_writer_is_reported_from_every_scanned_loose_module`,
+  `::test_no_loose_module_writes_a_task_state_at_all`,
+  `::test_the_module_allowance_permits_one_named_writer_and_no_other`,
+  `::test_every_module_state_write_allowance_is_used_and_is_scoped`,
+  `::test_the_compose_exemption_still_describes_exactly_one_write`).
+- `docs/security-invariants.md` — SI-226 kapsam hücresi ve test atıfları;
+  "Aynı kusurun **on birinci** örneği" ölçüm kaydı.
+- `PROJECT_STATUS.md` — bu bölüm.
+
+Ürün kodunda **hiçbir dosya değişmedi**. `git diff` içinde **silinmiş tek bir
+`assert` yok**; silinen satırlar eski `_state_writers` gövdesi (yerine kesin
+olarak daha geniş olanı geçti) ve iki düzyazı paragrafıdır.
+`OUTBOUND_CLIENT_MODULES` **beşte** kaldı.
+
+### Koşulan kapılar
+
+`ruff check .` (**All checks passed**) ·
+`ruff check apps/station-api/src packages/technocore-conform/src tests`
+(**All checks passed**) · `mypy --config-file apps/station-api/pyproject.toml`
+(**Success: no issues found in 142 source files**) · `pytest ../../tests`
+(**2603 geçti**, 179.27 sn; önceki tur 2584 — fark, bu turun 19 yeni testi) ·
+`npm run lint` (temiz) · `npm run test` (**434 geçti**, 13 dosya) ·
+`npm run build` (**built in 3.57s**). Web kaynağı değişmediği için **SPA
+bundle değişmedi**; paketleme artefaktı yeniden üretilmedi.
+
+Ekimlerin hiçbiri hayatta kalmadı: temizlik `trap` içinde yapıldı ve
+`git status --untracked-files=all` yalnız değişen üç dosyayı `M` olarak
+gösteriyor, untracked girdi yok.
+
+### Nasıl bakıldı, ve bulunan **on ikinci** örnek
+
+Kusur sınıfı şudur: *bir kuralın kapsamı elle yazılmış bir listeden geliyor ve
+o listeyi ağaca karşı denetleyen bir muhafız yok.* Yöntem üç adımdı:
+
+1. `tests/security` altındaki **her** modül düzeyi sabiti sözdizim ağacından
+   çıkarıldı; dosya/dizin adı biçiminde dize taşıyan **69** aday bulundu.
+2. Bunlar ikiye ayrıldı: kuralın **nereye baktığını** belirleyen *kapsam*
+   sabitleri, ve **neyi aradığını** belirleyen *yüklem* sabitleri
+   (`EXECUTION_IMPORTS`, `FORBIDDEN_COLUMN_FRAGMENTS`, `EXPECTED_PATHS` … —
+   bunlar ağaç hakkında bir iddia taşımaz, kusur sınıfının dışındadır).
+3. Her kapsam sabiti için tek soru soruldu: *o sabiti **okumayan**, ağacı
+   `iterdir`/`glob`/`rglob` ile yürüyen ve sonucu sabitle karşılaştıran bir
+   test var mı?* Ayrıca `rglob`/`glob`/`iterdir` çağrılarının **kökleri**
+   ayrı ayrı listelendi, çünkü kapsam bir tuple yerine gömülü bir yolla da
+   yazılabilir.
+
+Kapsam sabiti taşıyan üç dosya (`test_module_registry.py`,
+`test_task_evidence.py`, `test_task_states.py`) artık üçü de hem paket hem
+gevşek modül için böyle bir muhafız taşıyor. Tek paket tarayan sınır
+dosyaları (`test_agent_boundary.py`, `test_planner_boundary.py`,
+`test_proof_boundary.py`) kusur sınıfının dışında: konuları adlandırdıkları
+paketin **kendisi**, ve üçü de taramanın boş olmadığını (`assert paths`,
+`assert len(paths) >= N`) ve ekili ihlali gördüğünü ayrıca sürüyor, yani
+yanlış yazılmış bir dizin adı "hiçbir şeyi tarayıp yeşil vermek" olamıyor.
+`test_packaging_boundary.py` zaten iki yarımı da taşıyor: listeyi süren döngü
+**ve** depoyu yürüyen çapa.
+
+**Fakat bir tane bulundu, ve düzeltilmedi — adı konuldu.**
+
+#### On ikinci örnek: yasak ifade denetiminin kapsamı
+
+Yasak ifade kuralını (`FORBIDDEN_PHRASES`: `degismez kayit`, `sunucu kaniti`,
+`kurcalanamaz kayit` …) uygulayan testler **paket paket** yazılmıştır ve
+kapsam, beş test dosyasına dağılmış elle tutulan **altı paket adıdır**:
+`evidence`, `workscan`, `agent`, `proof`, `routes` (dört `*_language.py`) ve
+`planner` (`test_planner_boundary.py`). Bu altılığın **tamlığını denetleyen
+hiçbir muhafız yok** — kural kapsamını ağaca karşı yürüyen bir test
+bulunmuyor.
+
+Dosyaların kendisi bunu düzyazıda zaten söylüyor: *"Each scan is scoped to its
+own directory, so a new package's wording is covered by nothing at all until it
+brings its own."* Bu, onuncu örneğin birebir şeklidir — kusur bir yoruma
+yazılmış, muhafıza değil.
+
+**Ölçüldü, iddia edilmedi.** `station_api` altındaki on sekiz paketin
+**on dördü** kullanıcıya görünen Türkçe cümle üretiyor; yalnız altısı
+kapsanıyor. Kapsanmayanların en büyükleri: `opencode` (53 cümle, ADR-0012'nin
+`planner` ile birlikte gelen öteki paketi), `modules` (43), `compose` (33),
+`tasks` (26), `cli` (16).
+
+| Ekim | Sonuç |
+|---|---|
+| `planner/service.py`'ye iki yasak ifade | **1 kırmızı** — `test_planner_boundary.py::test_no_string_literal_in_the_planner_carries_a_forbidden_phrase` (yani `planner` kapsanıyor) |
+| `opencode/service.py`'ye **aynı** iki yasak ifade | **2269 geçti, sıfır kırmızı** — bütün güvenlik paketi yeşil |
+
+Aynı iki cümle, bir pakette kırmızı, komşusunda görünmez. Kapsamı belirleyen
+şey kuralın konusu değil, birinin o paket için ayrı bir test dosyası yazmış
+olmasıdır.
+
+Bu turda **düzeltilmedi**: turun kapsamı SI-226'ydı ve yasak ifade kuralını
+altı paketten on dörde genişletmek ürün metinlerinde gerçek bulgular
+çıkarabilecek ayrı bir iştir. Sessizce geçilmedi; **on ikinci örnek** olarak
+buraya ve `docs/security-invariants.md`'ye ölçümüyle birlikte yazıldı.
+
+> **Bu risk kapatıldı.** Bir sonraki bölüme bakın: kural artık ağacın
+> tamamını kapsıyor (SI-344), ve yukarıdaki ölçümler kapatılmadan önce
+> bağımsız olarak tekrarlandı.
+
+---
+
+## Aynı kusurun **on ikinci** örneği kapatıldı: yasak ifade denetiminin kapsamı (6 Eylül 2026)
+
+Bir önceki tur bu örneği **açık** bırakmıştı ve gerekçesi doğruydu: kuralı
+genişletmek ürün metninde bulgu çıkarabilecek ayrı bir işti. Bu tur o iş.
+
+### Önce yeşil-ihlalli durum tekrar ölçüldü
+
+Kayıt bir iddiaya dayanmasın diye önceki turun ölçümü **bağımsız olarak
+tekrarlandı**, sonra genişletildi. Ekimlerin hepsi izlenen dosyalara
+**yerinde** yapıldı (yeni dosya yok, dosya listesi değişmiyor, tracked-sources
+testlerinin tepki vereceği hiçbir şey yok) ve hepsi `finally` içinde geri
+alındı.
+
+| Koşu | `tests/security` |
+|---|---|
+| Temiz temel çizgi | **2269 geçti** (153.83 sn) |
+| `opencode/service.py`'ye `PLANTED_OVERCLAIM = "Testler gecti ve kod calistirildi; otomatik onaylandi."` (üç yasak ifade) | **2269 geçti**, çıkış kodu **0** |
+| Aynı ekim **on iki kapsanmayan paketin** birer dosyasına + `routes/opencode.py`'ye — on üç dosya birden | **2269 geçti**, çıkış kodu **0** |
+
+Üçüncü satır önceki turun ölçmediği kısım: kapsam boşluğu tek bir pakete ait
+değil. `routes` bile yalnız dört dosyasıyla (`agent.py`, `proof.py`,
+`workscan.py`, `planner.py`) kapsanıyordu; kalan dokuz rota dosyası dışarıdaydı.
+
+### Kural neye genişledi
+
+Yeni muhafız `tests/security/test_language_scope.py`. Tarama birimi artık
+paket değil, `station_api` altındaki **her `.py` dosyası** — on sekiz paket,
+on dört gevşek modül, on üç rota dosyası: **136 dosya, 6857 string literal**
+(eski kural 45 dosya açıyordu). Uygulanan registry de en genişi:
+`proof.language`'ın birleştirdiği **yirmi yedi** ifade.
+
+Paket başına yazılmış beş test **olduğu gibi duruyor** ve kendi registry'lerini
+uygulamaya devam ediyor; bu onların altına konan bir taban, yerine geçen bir
+şey değil. `git diff` içinde **silinmiş tek bir `assert` yok**.
+
+Taramanın dışındaki tek şey dört registry'nin kendisidir ve **ad olarak değil,
+tam yol olarak**: `language.py` adını taşıyan herhangi bir dosyayı muaf etmek
+kendini genişleten bir muafiyet olurdu. Her biri ayrıca registry olduğu
+**ölçülerek** muaf: dosya var olmalı, `FORBIDDEN_PHRASES` tanımlamalı ve
+kayıtlı bir ifadeyi gerçekten yazmalıdır.
+
+### "Kullanıcıya görünen Türkçe" nedir, ve iki yönü de nasıl ölçüldü
+
+Her şeyi taramak, hiçbir şey söylemeyen bir pakette bedavaya yeşildir; bu
+yüzden her birim ayrıca **yürüyerek** sınıflandırılıyor. Bir dize sabiti,
+katlanmış biçiminde `TURKISH_MARKERS`'tan bir kelimeyi **tam kelime olarak**
+taşıyorsa Türkçe düzyazıdır. Katlama ürünün kendi `fold`'u — ikinci bir
+normalizasyon, aynı şeyi ikinci kez yanlış yapma fırsatı olurdu.
+
+Liste kapalı sınıf sözcüklerdir (bağlaç, edat, koşaç), çünkü bir cümleyi
+etiketten ayıran şey odur ve konu değişince büyümez. `her`, `once` ve `var`
+bilerek **dışarıda**: üçü de hem Türkçe hem İngilizce kelimedir ve bir
+İngilizce log satırında ateşlerdi.
+
+* **Fazla gevşek değil.** Kırk üç işaretin hiçbiri, bu dosyanın sahibi
+  olmadığı bir derlemde eşleşmiyor: `packages/technocore-conform/src`, 608
+  literal, **4755 kelime belirteci** İngilizce, **sıfır** eşleşme. Derlemin
+  boyutu ayrıca iddia ediliyor, yoksa taşınmış bir dizin testi kendi kanıtını
+  silerek yeşile çevirirdi.
+* **Fazla dar değil.** Ölçüt ürünün kendi yayımladığı cümleler: dört dil
+  modülünün dışa verdiği sabitlerden **sekiz belirteçten uzun olan her biri**
+  yakalanmak zorunda, ve yakalanıyor. Eşik ölçülmüş bir boşluğa oturuyor —
+  yakalanmayan en uzun sabit **yedi** belirteç (`NEUTRALISED_ALL`, cümle değil
+  köşeli bir işaret), yakalanan en kısası **on altı**.
+* Ve 2653 testin tamamı yeşil, yani dedektör mevcut hiçbir şeyin üzerine
+  yanlış ateşlemiyor.
+
+### Dışarıda kalan on bir birim ve üç sabitlenmiş gerekçe
+
+Hiçbiri taramanın dışında **değil** — hepsi taranıyor; kaydedilen şey
+taramanın orada neden bedavaya yeşil olduğu: `conformance`, `security`,
+`__init__.py`, `__main__.py`, `config.py`, `dependencies.py`, `digests.py`,
+`downloads.py`, `launcher.py`, `logging_setup.py`, `strict_json.py`.
+
+Belirli bir olgu iddia eden üç gerekçe **sayıyla sabitlendi**, `compose`'un
+`nonce.py:_settle_once`'ta sabitlenmesiyle aynı biçimde:
+
+| Birim | Sabitlenen olgu |
+|---|---|
+| `conformance` | Dili `routes/conformance.py`'de; o dosya taramanın **içinde** ve Türkçe **taşıyor** |
+| `security` | Altı makine kodu (`host_not_allowed` …) hâlâ pakette ve hâlâ çıplak birer belirteç |
+| `downloads.py` | Tek Türkçe belirteci `DEFAULT_STEM = 'indirme'`, **tek kelime**; en kısa kayıtlı ifade **iki** kelime |
+
+Bir birim konuşmaya başlarsa listede kalması **bayat gerekçe** olarak kırmızı;
+listede olmayan sessiz bir birim de "kimsenin yazmadığı bir karar" olarak
+kırmızı. İki yön de test edilir.
+
+### Mutasyon: muhafız sahte mi
+
+Keşif, ağacı yürümek yerine elle tutulan listeleri okuyacak biçimde çevrildi
+(`_scan_files`, `_units`, `_turkish_speaking_units`), kapsam da kuralın eski
+altı adına daraltıldı. İhlaller yerinde duruyordu.
+
+| Mutasyon | Ekili ihlal | İki başlık testinin sonucu |
+|---|---|---|
+| Keşif ağacı yürüyor (asıl hâli) | `opencode` + `conformance` | **2 kırmızı** |
+| Keşif listeleri okuyor | aynı ihlaller | **2 geçti, çıkış 0** — muhafız kör |
+| Yürüyüş geri alındı | aynı ihlaller | **2 kırmızı** |
+
+Verdict dönüyor, yani muhafızı taşıyan şey yürüyüş. (Dosyanın öteki 48 testi
+bu mutasyonun **kendisini** de yakalıyor: aynı mutasyon tüm dosyaya karşı
+koşulduğunda 31 kırmızı veriyor. Bu ek bir savunma katmanı; yukarıdaki tablo
+kuralın iki başlık testine bakıyor.)
+
+### Ürün metninde bulunan tek şey
+
+Genişletmenin bütün ağaçta bulduğu **tek** ihlal
+`technocore/evidence_client.py`'nin `_error_excerpt` docstring'iydi: kuralı
+anlatırken kayıtlı bir ifadeyi tırnak içinde **yazıyordu**. Kullanıcıya çıkan
+bir aşırı iddia değil, İngilizce geliştirici düzyazısı — ama dışlanmadı, çünkü
+bir taramayı susturmak için eklenen istisna bu kusurun doğduğu yerdir. İfade
+**adlandırıldı** (registry'nin ilk girdisi), yazılmadı; anlatılan şey aynen
+kaldı.
+
+Ürün cümlelerinde başka ihlal **yok**, ve bu ayrıca ölçüldü: f-string ve
+`+` birleştirmesiyle **kurulan** cümleler de yeniden inşa edilip tarandı
+(yer tutucular boşluğa çevrilerek), sonuç **sıfır**. Ayrıca `tighten()` ile
+(kelime içi ayırıcılar atılmış) bir tarama daha koşuldu, o da **sıfır**.
+`packages/technocore-conform` de tarandı: **sıfır**.
+
+### Düzeltilen düzyazı
+
+Üç `*_language.py` modülü kusuru düzyazıda **söylüyordu** ve altında test
+yoktu — onuncu örneğin birebir şekli. Üçünün de kapsam paragrafı düzeltildi:
+
+- `workscan/language.py` — "That scan is scoped to `station_api/evidence`, so
+  a new package's wording is outside it" cümlesi kaldırıldı; yerine ne
+  olduğunu ve neyin kapsadığını söyleyen bölüm geldi.
+- `agent/language.py` — "Both scans are scoped to their own directory, so a
+  new package's wording is covered by nothing at all until it brings its own"
+  aynı biçimde düzeltildi.
+- `proof/language.py` — "Every one of those scans is scoped to its own
+  directory … covered by **nothing at all**" aynı biçimde düzeltildi; ayrıca
+  bu modülün registry'sinin artık **ağacın tamamının** ölçüldüğü liste olduğu
+  yazıldı.
+
+### Değişen dosyalar
+
+- `tests/security/test_language_scope.py` — **yeni**; 50 test.
+- `apps/station-api/src/station_api/technocore/evidence_client.py` —
+  `_error_excerpt` docstring'i (tek ürün metni bulgusu).
+- `apps/station-api/src/station_api/workscan/language.py`,
+  `.../agent/language.py`, `.../proof/language.py` — kapsam düzyazısı.
+- `docs/security-invariants.md` — **SI-344** satırı; "on ikinci örnek"
+  bölümü **(açık)** → **(kapatıldı)** ve ölçüm kaydı.
+- `PROJECT_STATUS.md` — bu bölüm; önceki turun açık risk notuna kapatma
+  bağlantısı.
+
+`FORBIDDEN_PHRASES` ve `PERMITTED_ALTERNATIVES` **değişmedi**.
+`OUTBOUND_CLIENT_MODULES` **beşte** kaldı. `tests/security` altında hiçbir
+test silinmedi, `skip`/`xfail` edilmedi veya zayıflatılmadı.
+
+### Koşulan kapılar
+
+`ruff check .` (**All checks passed**) ·
+`ruff check apps/station-api/src packages/technocore-conform/src tests`
+(**All checks passed**) · `mypy --config-file apps/station-api/pyproject.toml`
+(**Success: no issues found in 142 source files**) · `pytest ../../tests`
+(**2653 geçti**, 186.43 sn; önceki tur 2603 — fark, bu turun 50 yeni testi) ·
+`npm run lint` (temiz) · `npm run test` (**434 geçti**, 13 dosya) ·
+`npm run build` (**built in 3.66s**). Web kaynağı değişmediği için **SPA
+bundle değişmedi**; paketleme artefaktı yeniden üretilmedi.
+
+Ekimlerin hiçbiri hayatta kalmadı: temizlik `finally` içinde yapıldı ve
+`git status --untracked-files=all` yalnız değişen dosyaları `M`, yeni test
+dosyasını `??` olarak gösteriyor — başka untracked girdi yok.
+
+### Sıradaki
+
+Bu, ölçülü süpürmenin bulduğu **son** örnekti. Kapsam sabiti taşıyan dört
+dosyanın (`test_module_registry.py`, `test_task_evidence.py`,
+`test_task_states.py` ve artık `test_language_scope.py`) hepsi ağacı hem
+paketler hem gevşek modüller için yürüyen bir muhafız taşıyor. Açık kalan
+risk yok; insan güvenlik incelemesi ADR-0001 §5'teki hâliyle duruyor.
+
+---
+
+## Kabul listesi ve kılavuz, H4'ün beş yeteneğine yetiştirildi (6 Eylül 2026)
+
+Yalnız belge turu. **Hiçbir ürün kodu ve hiçbir test değişmedi**; iki markdown
+dosyası ve bu bölüm değişti. Kullanıcının bu tur için verdiği talimat şuydu:
+*"Kullanım kılavuzunu, kabul listesini ve proje durumunu gerçek yeteneklerle
+eşleştir."*
+
+### Boşluk
+
+`docs/kullanim-kilavuzu.md` H4'ten sonra iki turda düzeltilmişti;
+`docs/kullanici-kabul-listesi.md` ise **hiç** güncellenmemişti — `af2482b`'de
+tek satırı (G3) değişti ve o kadar. Yani ürün beş yeni yetenek kazanmışken,
+kullanıcıdan bunları kabul etmesini isteyen belgede tek bir madde yoktu.
+
+### Kod okunarak doğrulananlar (iddia → bulgu)
+
+Beş iddianın hepsi belgeye geçmeden önce koda karşı denetlendi. **Dördü
+doğrulandı, biri daraltıldı, biri de daha keskin çıktı:**
+
+| İddia | Bulgu |
+|---|---|
+| Model plan **önerir**, kapalı registry'den geçer, dört onaya girer | Doğrulandı (`planner/service.py`, `opencode/planner.py`) |
+| Kabul koşulları gerçek bir `test_result` üretir, `plan_sha256`'nın içindedir | Doğrulandı (`agent/acceptance.py`, `_plan_digest` `v: 2`) — **ve daha keskin:** `_condition_sentence` yalnız bir **cümle** yazar, yani **model önerisiyle kurulan bir plan koşulsuzdur** ve bir kişi koşul eklemedikçe `not_implemented` raporlar |
+| Gövde teslimi çalışma alanının savunmalarından geçer, per-girdi ret | Doğrulandı (`proof/artifacts.py`) |
+| `/rooms` **ve** `/r/events` arayüzden okunur | Doğrulandı (`workscan/discovery.py`, `routes/workscan.py`) — **ama `workscan/targets.py`'nin modül düzyazısı hâlâ "`/r/events` … kapsam dışı" diyor.** Ürün metni değil, geliştirici düzyazısı; bu turda **dokunulmadı** (kod değişmez kuralı) ve açık not olarak burada duruyor |
+| `ready_to_publish` erişilebilir ama istenemez | Doğrulandı (`routes/agent.py::derive_publish_readiness`, `TaskPublishReadinessRequest`) |
+
+Ayrıca ölçülemeyen bir sayı **yazılmadı**: incelemenin verdiği canlı oda
+sayısı bu depoda hiçbir belgede yok, o yüzden kabul listesi sayı yerine
+**özelliği** ister (künye satırının dört alanı: toplam, tutulan, kırpıldı mı,
+özet).
+
+### Kabul listesine eklenenler
+
+- **E6–E10** (Kanitlar): gövdesi pakete alınan dosya sayısının nereden
+  türediği, tek dosya teslimi ve yanıt başlığındaki özet, tek onayın iki
+  seçenekten yalnız birini karşıladığı, gizli değer taramasının **ret**,
+  dil kaydının **rapor** olduğu.
+- **H4** (9 madde): oda listesinin künyesi, bayatlık beyanı, yabancı yazımı
+  iki alanın ayrı kutusu, on odalık seçim sınırı, keşif günlüğünün manifest
+  ön koşulu, okunamayan satırın ham gösterimi, boş günlük ile okunamayan
+  günlüğün ayrımı, `lobby`/`meta` reddi, ve kendiliğinden yenileme yokluğu.
+- **H5** (10 madde): **her maddenin başında bir tur harcayıp harcamadığı
+  yazılı.** Yedisi hiçbir şey harcamıyor; harcayan tek madde adıyla
+  işaretli. Bölümün başı ölçülü uç ile kaybolan yanıtın da harcanmış
+  olabileceğini söylüyor.
+- **H6** (8 madde): koşulsuz plan → "uygulanmadı", koşullu plan → "geçti",
+  sağlanmayan koşul → "kaldı", serbest metin koşul alanının **olmadığı**,
+  yol benzeri adın plan kaydını reddettirdiği, ve yayın hazırlığının
+  istenmeyip **türetildiği**.
+- **"Nasıl kullanılır"** bloğu düzeltildi: eski "bu listede hiçbir gerçek
+  harcama yoktur" cümlesi H5 ile **yanlış olurdu**; yerine harcamanın nerede
+  olduğunu adıyla söyleyen bir paragraf kondu.
+
+### "İstenmeyecekler"e eklenenler — ve nedenleri
+
+ADR-0011 §6'nın kuralı: liste yalnız kullanıcının **gerçekten
+doğrulayabileceği** şeyi ister. Beş yetenekten dört parça bu testi geçemedi:
+
+1. **"Modelin iyi bir plan önerdiğini doğrulayın"** — ölçülebilir değil ve
+   böyle bir alan yok.
+2. **"Modele kayıtlı olmayan bir araç adı önerdirin"** — ret yolu gerçek,
+   ama kullanıcı onu **tetikleyemez**. Yerine H5-4: kullanıcının kendi
+   seçimiyle üretebildiği, hiçbir istek göndermeyen bir ret.
+3. **"Onaylı bir planın koşulunu düzenleyin"** — bu üründe plan düzenleme
+   **yok**; ekranda ulaşılamayan bir kapı.
+4. **"Bir dosyayı tavanın üstüne çıkarın"** — bir araç çağrısı en çok
+   20 000 karakter yazar, tekil dosya tavanı 512 KiB, çalışma alanı en çok
+   64 dosya: **bu ürünle üretilen bir çalışma alanı tavanı geçemez.** Yerine
+   E9, aynı per-girdi ret mekanizmasını kullanıcının gerçekten
+   üretebileceği bir yoldan (64 karakterlik onaltılık dizi) soruyor.
+
+### Kılavuzda düzeltilenler
+
+- **Giriş paragrafı** hâlâ "OpenCode ile model çalıştırabilirsiniz" cümlesini
+  *söylemediği şeyler* arasında sayıyordu; ADR-0012'den sonra bu bayattı.
+  Çıkarıldı ve yerine neyin değiştiği yazıldı.
+- **§5.2** oda listesinin künyesini, iki kutulu yabancı-yazımı ayrımını ve
+  **keşif günlüğünü hiç anlatmıyordu**; üçü de eklendi. `lobby`/`meta` reddi
+  ve "okunamayan okuma bir rettir" kuralı "yapmadıkları"na girdi.
+- **§5.3** model turunun **para harcadığını hiçbir yerde söylemiyordu.**
+  Eklendi: ölçülü uç, kaybolan yanıtın da harcanmış olabileceği, ve turu
+  harcamadan görülebilen retler. Ayrıca modelin kendi kabul koşulunu
+  yazmadığı eklendi.
+- **§5.8** paketi hâlâ "dosyalar, özetleri ve eksikler" diye anlatıyordu;
+  gövdelerin birebir taşındığı, tek dosya teslimi, ve iki dışlama
+  gerekçesinin (ret ile rapor) farkı yazıldı.
+- **§5.9**'un "(H4 öncesi cümle, tarihsel)" ile başlayan kapanışı, bugün
+  geçerli olanı söyleyen bir cümleyle değiştirildi; eski cümle alıntı olarak,
+  ne zaman yanlış olduğu yazılarak bırakıldı.
+- **§7**'ye model turunun ürünün **para harcamanızı isteyen tek yeri** olduğu
+  eklendi.
+
+### Koşulan kapı
+
+`uv run --directory apps/station-api pytest ../../tests -p no:warnings` iki
+kez koşuldu (belge düzenlemelerinden önce ve sonra): **2653 passed in
+186.19s** ve **2653 passed in 180.36s**. Önceki turla aynı sayı; bu tur test
+eklemedi, silmedi ve zayıflatmadı. `tests/security/` altında hiçbir dosyaya
+dokunulmadı. Ürün kodu değişmediği için lint, type-check ve build yeniden
+koşulmadı.
+
+Kayda değer bir gözlem: `tests/security/` altında **bu iki markdown dosyasını
+okuyan bir belge muhafızı yok.** `docs/security-invariants.md`'yi okuyan
+`test_security_invariants_doc.py` ve `docs/task-modules.md`'ye bakan bir
+iddia var; kılavuz ile kabul listesi hiçbir testin kapsamında değil. Yani bu
+iki dosyanın doğruluğunu bugün **yalnız insan incelemesi** tutuyor.
+
+### Açık kalan iki not
+
+- **`workscan/targets.py`'nin modül düzyazısı `/r/events`'i "kapsam dışı"
+  diye anlatıyor** ve `workscan/discovery.py` onu okuyor. Bu bir ürün metni
+  değil, geliştirici düzyazısıdır ve kullanıcıya çıkmaz; bu tur belge turu
+  olduğu için **düzeltilmedi**, kaydı buraya alındı.
+- **`ModelPlannerService.forget` model turu sayacını sıfırlıyor** —
+  `_sessions.pop` oturumu düşürüyor ve `session_state` eksik oturum için
+  `model_calls_used = 0` döndürüyor
+  (`test_model_planner.py::test_forgetting_a_session_does_not_forget_the_spend`
+  bunu zaten iddia ediyor). Buna karşılık arayüzdeki cümle "tavan
+  sifirlanmaz" diyor ve `routes/planner.py::forget_session`'ın düzyazısı da
+  bunu "tavanın etrafından dolaşmanın yolu değil" diye anlatıyor. **İkisi
+  aynı anda doğru olamaz.** Kabul listesinin H5-10 maddesi bu yüzden yalnız
+  tartışmasız olanı — kayıtlı planların, çalışma alanının ve kanıtların
+  yerinde kaldığını — soruyor; kılavuz da tavan hakkında bir şey söylemiyor.
+  Ayrı bir tur konusudur ve **kod değişikliği ister**.
+  → **KAPANDI** (6 Eylül 2026, ADR-0013): sayaç `model_call_ledger`
+  tablosuna taşındı, `forget` ona dokunmuyor, dört cümlenin dördü de düzeltildi.
+  Ayrıntı aşağıdaki bölümdedir.
+
+---
+
+## Tavan bir düğmeyle sıfırlanıyordu (6 Eylül 2026) — ADR-0013
+
+`ed39521`'in **açık riski kapandı**. Bir önceki tur belge turuydu ve
+kapatamadığı şeyi adıyla kaydetmişti: `ModelPlannerService.forget` model turu
+sayacını sıfırlıyordu. Bu tur onu kapattı ve **kod değiştirdi**.
+
+### Kusur, ölçülerek (önce kırmızı istenen regresyon)
+
+`max_model_calls` bu ürünün **sahip olduğu tek harcama kontrolüdür** —
+ADR-0012 §3 token ve para birimini bilerek reddetti, çünkü ikisi de
+sağlayıcının beyanıdır. O sayı `_Session.model_calls` alanındaydı ve `forget`
+o nesneyi `pop` ediyordu.
+
+Regresyon testleri **düzeltmeden önce** yazıldı ve düzeltmesiz kodda
+sürüldü:
+
+| Test | Düzeltmesiz sonuç |
+|---|---|
+| `::test_forgetting_a_session_does_not_forget_the_spend` (düzeltilmiş iddia) | `AssertionError: assert 0 == 1` — bir tur harcanmıştı, `forget` sonrası 0 |
+| `::test_forget_cannot_be_clicked_for_a_second_ceiling` | `forget #1 handed back a fresh ceiling: finished` — 8/8 dolduktan sonra tek bir "unut" tam tavan geri verdi, `model_calls_used=1` |
+| `::test_the_ceiling_survives_a_restart_of_the_process` | Aynı motora kurulan ikinci servis dokuzuncu turu **gönderdi** (`model_calls_used=1`) |
+
+`3 failed, 4 passed` (`-k "forget or restart or per_task or ceiling"`).
+
+### Karar ve bedeli
+
+Sayaç `model_call_ledger` tablosuna taşındı (migration **`0011`**, yalnız
+ekleme; `task_id` birincil anahtar, `model_calls_used` yalnız artan tamsayı,
+iki zaman damgası). Erişim `station_api/agent/model_calls.py::ModelCallCounter`,
+`AgentService.model_calls` üzerinden — `activity` özelliğinin aynısı gibi.
+
+**Yeniden başlatma da aynı kusur mudur? Evet.** Uygulamayı kapatıp açmak
+kullanıcının zaten sahip olduğu bir kapıdır; süreç belleğindeki bir tavan o
+kapıdan geçilir. Bu yüzden karar "unutmaya dayanıklı" değil **kalıcı**dır.
+Konuşma ise kalıcı **değildir** ve olmamalıdır (SI-224, ADR-0008 §6): iki
+olgunun ömrü baştan beri farklıydı, tek evleri vardı.
+
+**Bedel açıkça yazıldı ve üründe de söyleniyor:** tavanı dolan bir görevin
+turları geri gelmez. Sıfırlama rotası/metodu/aracı **yoktur ve bilerek
+yoktur** — bir sıfırlama `forget`'in başka adla dönmesidir. Yol yeni bir
+görevdir (tavan görev başına). Backfill yoktur: turları hiç kaydedilmemiş bir
+göreve sayı uydurmak tahminden yapılmış bir tavan olurdu.
+
+Reddedilen üç ev, gerekçeleriyle: `task_record` sütunu (SI-225'i koda
+uydurmak olurdu), `activity_event` satırlarını saymak (saklama politikası +
+kullanıcının çağırdığı silme = tavanı temizlemenin ikinci kapısı),
+`budget.py` (sınır ile sayaç farklı şeylerdir).
+
+### Mutasyon — ve mutasyonun bulduğu delik
+
+Yalnız `forget` değişikliği geri alındı (sayacı silen bir `forget_the_spend`
+eklenerek): **2 kırmızı, 51 geçti**. Yerinde duran
+`::test_the_ceiling_survives_a_restart_of_the_process` doğru biçimde yeşil
+kaldı — başka bir kapıyı ölçüyor.
+
+Ama mutasyon bir şey daha gösterdi: revert `session.delete(row)` yazımıyla
+yapıldığında **sözdizimi taraması onu görmedi**. Satırı silmek de sayacı
+düşürür ve yalnız niteliğe bakan bir tarama bunu kaçırır. Muhafız
+güçlendirildi (`::test_the_ledger_row_is_never_deleted_and_reaches_only_two_modules`)
+ve mutasyon tekrarlandı: **3 kırmızı, 51 geçti**. Mutasyon geri alındı;
+`grep -rn "MUTATION\|forget_the_spend" apps/station-api/src/` yalnız bayat
+`.pyc` dosyalarını gösteriyor.
+
+### Düzeltilen dört cümle
+
+1. `TasksPanel.tsx` — "tavan sifirlanmaz" **kaldı** (artık doğru); yanına
+   yeniden başlatma ve "dolan tavan geri gelmez" yarısı eklendi.
+2. `TasksPanel.test.tsx` — cümle pini korundu **ama tek dayanak değil**: onu
+   gerçekten tutan Python testleri adıyla yazıldı, ve bu katmana ait iddia
+   eklendi (ekran sunucunun sayısını gösterir, kendi `0 / 8`'ini uydurmaz).
+   Testin adı da düzeltildi.
+3. `routes/planner.py::forget_session` — düzyazı cümlenin **yazıldığında
+   yanlış** olduğunu ve neyin doğru kıldığını söylüyor; yanıt cümlesi artık
+   harcanan tur sayısının da durduğunu söylüyor.
+4. `test_forgetting_a_session_does_not_forget_the_spend` — **silinmedi,
+   düzeltildi.** Adı doğruydu. Yerine geçen iddia daha fazlasını sabitliyor:
+   harcama duruyor **ve** konuşma gerçekten düşüyor (`pending_run_id` boşalıyor)
+   **ve** kayıtlı çalışma yerinde.
+
+### Değişen dosyalar
+
+- `apps/station-api/src/station_api/agent/model_calls.py` — **yeni**;
+  `ModelCallCounter` (`used`, `record_call`; sıfırlama yok, silme yok).
+- `apps/station-api/src/station_api/db/migrations/versions/0011_model_call_ledger.py`
+  — **yeni**; tek tablo, yalnız ekleme.
+- `apps/station-api/src/station_api/db/models.py` — `ModelCallLedger`.
+- `apps/station-api/src/station_api/agent/service.py` — sayaç kuruluyor ve
+  `model_calls` özelliğiyle veriliyor.
+- `apps/station-api/src/station_api/planner/service.py` — `_Session.model_calls`
+  **kaldırıldı**; tavan denetimi, sayma ve görünüm defteri okuyor; `_view` ile
+  `_refuse_proposal` artık oturum almıyor; modül düzyazısı düzeltildi.
+- `apps/station-api/src/station_api/routes/planner.py` — düzyazı ve yanıt cümlesi.
+- `apps/station-web/src/components/tasks/TasksPanel.tsx` — kural cümlesi.
+- `apps/station-web/src/components/tasks/TasksPanel.test.tsx` — pin gerekçesi
+  ve iki yeni iddia.
+- `tests/security/test_model_planner.py` — yedi yeni test + düzeltilen iddia.
+- `tests/security/test_agent_boundary.py` — `CURRENT_MIGRATION_HEAD = "0011"`,
+  yeni migration testi, iki sütun taramasına `model_call_ledger` eklendi.
+- `tests/security/test_database.py` — `CURRENT_MIGRATION_HEAD = "0011"`.
+- `docs/decisions/0013-...md` — **yeni ADR**; `docs/decisions/README.md`'ye
+  hem 0013 hem de **indekste hiç olmayan 0012** satırı eklendi.
+- `docs/security-invariants.md` — **SI-345**.
+- `docs/architecture.md` — tablo listesi ve migration cümlesi.
+- `docs/kullanim-kilavuzu.md` §5.3, `docs/kullanici-kabul-listesi.md`
+  **H5-11, H5-12, H5-13**.
+- `PROJECT_STATUS.md` — bu bölüm; `ed39521` riski **kapandı** olarak işaretlendi.
+
+### Koşulan kapılar
+
+`ruff check .` (**All checks passed!**) ·
+`ruff check apps/station-api/src packages/technocore-conform/src tests`
+(**All checks passed!**) · `mypy --config-file apps/station-api/pyproject.toml`
+(**Success: no issues found in 144 source files**; önceki tur 142 — iki yeni
+dosya) · `pytest ../../tests` (**2661 passed in 185.88s**; önceki tur 2653,
+sekiz yeni test) · `npm run lint` (temiz) · `npm run test` (**434 passed**,
+13 dosya) · `npm run build` (**built in 3.59s**).
+
+SPA değiştiği için `packaging/build_bundle.py` yeniden koşuldu
+(SHA-256 `caec026961fb5d67e5291f78893b26e7ffc4c14d15bea2b4e608af5d23166889`,
+26 229 144 bayt) ve bayt-birebir denetimler ondan **sonra** koşuldu:
+`pytest ../../tests/security/test_frontend_bundle.py ../../tests/security/test_packaging_boundary.py`
+(**82 passed**).
+
+### Açık risk
+
+`activity_event`'in saklama politikası (`RETAINED_EVENTS = 500`) ve
+kullanıcının çağırdığı silmesi, `model_called` satırlarını timeline'dan
+düşürebilir. Bu **tavanı etkilemez** — tavan artık ayrı bir tabloda — ama
+harcamanın *hikâyesi* (ne zaman, hangi turda ne kadar) budanabilir.
+`model_call_ledger` toplamı ve iki zaman damgasını tutar, tur tur dökümü
+tutmaz; böyle bir döküm istenirse ayrı bir turdur. Bugün bir kusur değil,
+**bilinçli bir kapsam sınırıdır** ve kayda geçirilmiştir.
+
+---
+
+## Ekran yalan söylerse fark eden olur mu? (6 Eylül 2026) — SI-346
+
+Bu tur **yeni yetenek eklemedi**. Sorusu şuydu: üç test katmanı da yeşilken,
+yeni yüzeylerin *güvenlikle ilgili* bir özelliği hakkında **yanlış** bir şey
+söylemeye başlaması hâlinde herhangi bir katman bunu görür mü?
+
+### Yöntem
+
+Yeni yüzeylerde (`TasksPanel` model plan yolu, kabul koşulları ve türetilmiş
+test hükmü, `ProofWorkspacePanel` dosya gövdesi teslimi, `WorkScanPanel` oda
+tarayıcısı ve keşif günlüğü, `ErrorRegion` tanı yükü) **26 mutasyon**
+sürüldü. Her mutasyon için: uygula → `npm run build` → **tam** Vitest → ilgili
+Playwright dosyası → `git restore` ile geri al.
+
+Yöntem notu, bir kez yanlış ölçüm pahasına öğrenildi: `test:e2e` **derlenmiş
+`dist`'i** servis eder. Yeniden derlemeden koşulan bir e2e, mutasyonu hiç
+görmez ve "süite kör" diye okunur. Bu turda her mutasyon derlemeden sonra
+koşuldu (`build=0` her satırda kayıtlı).
+
+### Sonuç: 20 yakalandı, **6 hiçbir katmanda görülmedi**
+
+| # | Mutasyon | Vitest | e2e |
+|---|---|---|---|
+| M01 | onaylar olmadan "Onayli plani calistir" etkin | kırmızı | kırmızı |
+| M02 | `model_can_start_a_run` yok sayıldı | kırmızı | kırmızı |
+| **M03** | **`refused` bitişi `planned` etiketi + `ok` tonu aldı** | **yeşil** | **yeşil** |
+| M04 | `ready_to_publish` kullanıcı geçişi olarak eklendi | kırmızı | kırmızı |
+| **M05** | **yanıttaki muhakeme alanı ekrana basıldı** | **yeşil** | **yeşil** |
+| M06 | harcanan tur sayısı `0 / 8` diye sabitlendi | kırmızı | yeşil |
+| M07 | "oturumu unut" sayacı istemcide sıfırladı | kırmızı | yeşil |
+| **M08** | **`not_implemented` hükmü "Gecti" + `ok` tonu aldı** | **yeşil** | **yeşil** |
+| M09 | "yayıma hazır değil" cümlesi koşulsuz olumluya çevrildi | kırmızı | kırmızı |
+| M10 | yayın hazırlığı isteğine `target` alanı eklendi | kırmızı | yeşil |
+| M11 | sağlayıcı cümlesi `dangerouslySetInnerHTML` ile basıldı | kırmızı (kaynak taraması) | yeşil |
+| M12 | kabul koşulu koşulsuz "sağlanıyor" gösterildi | kırmızı | yeşil |
+| M13 | oda başlığı markup olarak basıldı | kırmızı | kırmızı |
+| M14 | alıntı markup olarak basıldı | kırmızı | kırmızı |
+| M15 | okunamayan günlük satırı seçilebilir yapıldı | kırmızı | kırmızı |
+| M16 | yanıtın kümeyi **daraltması** kabul edildi | kırmızı | yeşil |
+| M17 | tarama kapsamına `lobby` eklendi | kırmızı | kırmızı |
+| M18 | on odalık tavan kaldırıldı | kırmızı | yeşil |
+| M19 | gövdesi dışlanmış dosya indirmeye açıldı | kırmızı | yeşil |
+| M20 | dışlama gerekçesi düşürüldü, rozet "pakette" dedi | kırmızı | yeşil |
+| M21 | teslim edilen dosyanın özeti başlıktan değil listeden alındı | kırmızı | yeşil |
+| M22 | tam 64-hex özet DOM'a basıldı | yeşil | **kırmızı** |
+| M23 | tanı yüküne kullanıcı mesajı eklendi | kırmızı | yeşil |
+| **M24** | **araç çağrısı cümlesi koşulsuz "ölçülmüştür" dedi** | **yeşil** | **yeşil** |
+| **M25** | **"duyurulan adı bir yabancı yazdı" başlığı silindi** | **yeşil** | **yeşil** |
+| **M26** | **yazma reddi cümlesi istemciye sabitlendi** | **yeşil** | **yeşil** |
+
+Altı deliğin **altısı da aynı şekle** sahip: iddiayı taşıyan **okunan cümle**
+test edilmiyor, yanındaki **makine değeri** test ediliyordu. `Sonuc: refused`
+yazan span iddia ediliyordu; yanındaki, kullanıcının gerçekten okuduğu rozet
+"Model bir plan onerdi ve plan kaydedildi" diyebiliyordu, üstelik yeşil tikle.
+Aynısı `Test sonucu: not_implemented` ile yanındaki "Gecti" rozeti için de
+geçerliydi.
+
+M05 ayrı bir sebeple görülmedi: **hiçbir fixture** yanıtta bir muhakeme alanı
+göndermiyordu, yani ihlal edilecek bir şey ekranda hiç oluşmuyordu. Kanarya
+artık testin kendisidir.
+
+### Ürün kusuru **bulunmadı**
+
+Altı delik de **test tarafındadır**. Hiçbir ürün davranışı değiştirilmedi ve
+hiçbir ürün cümlesi düzeltilmedi; `apps/station-web/src` altındaki tek
+değişiklik testlerdedir.
+
+### Eklenen testler (hepsi **bileşen** katmanında, 15 test)
+
+Katman seçimi tek kurala dayanıyor: altı iddianın altısı da bir **render**
+kuralıdır — kapalı bir haritadan çıkan etiket ve ton, bir alanın DOM'a ulaşıp
+ulaşmadığı, bir cümlenin yükten mi istemci sabitinden mi geldiği. Hiçbiri
+gerçek tarayıcı, gerçek backend veya gerçek CSP istemez, o yüzden hiçbiri
+e2e'ye kondu — ve hiçbiri **iki** katmana birden kondu.
+
+| Test | Kapattığı |
+|---|---|
+| `TasksPanel.test.tsx::words and tones the one ending that recorded a plan as the recorded plan` | M03 (pozitif kontrol) |
+| `::does not let the %s ending wear the recorded plan's words or its tone` (6 bitiş) | M03 |
+| `::renders the %s verdict as its own sentence and its own tone` (3 hüküm) | M08 |
+| `::renders nothing from a reasoning field the provider sent` | M05 |
+| `::says the tool-call format was measured only when the wire says it was` | M24 |
+| `WorkScanPanel.test.tsx::labels an announced room name as something a stranger wrote` | M25 |
+| `::shows the payload's own write refusal rather than one of its own` (2 yük) | M26 |
+
+Her yeni test **kırmızı görüldü** (mutasyon yeniden uygulanarak) ve mutasyon
+geri alındıktan sonra **yeşil**:
+
+```
+RED-CHECK M03-refusal-as-success                | FAIL "does not let the refused ending wear the recorded plan's words or its tone"
+  AssertionError: expected 'Sonuc: refused✓Model bir plan onerdi …' not to contain 'plan kaydedildi'
+RED-CHECK M05-reasoning-displayed               | FAIL "renders nothing from a reasoning field the provider sent"
+RED-CHECK M08-not-implemented-as-pass           | FAIL "renders the not_implemented verdict as its own sentence and its own tone"
+  AssertionError: expected 'Test sonucu: not_implemented✓Gecti: p…' to contain 'Uygulanmadi'
+RED-CHECK M24-tool-calls-claimed-measured       | FAIL "says the tool-call format was measured only when the wire says it was"
+RED-CHECK M25-discovery-untrusted-heading-...   | FAIL "labels an announced room name as something a stranger wrote"
+RED-CHECK M26-write-refusal-hardcoded           | FAIL (2) "shows the payload's own write refusal rather than one of its own"
+```
+
+### Bilerek eklenmeyenler
+
+- **e2e'ye tek satır eklenmedi.** Suite disiplini (`discipline.ts`,
+  `suite-discipline.spec.ts`) gevşetilmedi: `.only`/`.skip` yok, `retries` 0,
+  tek worker, yalnız Chromium.
+- `tests/security/` altında hiçbir şey silinmedi, atlanmadı veya zayıflatılmadı.
+- `OUTBOUND_CLIENT_MODULES` **beşte** kaldı.
+- Hiçbir test sağlayıcıya veya Technocore'a gerçek istek atmıyor.
+
+### Değişen dosyalar
+
+- `apps/station-web/src/components/tasks/TasksPanel.test.tsx` — beş yeni test
+  bloğu (12 test) ve iki yardımcı (`outcomePill`, `pillFor`).
+- `apps/station-web/src/components/workscan/WorkScanPanel.test.tsx` — iki yeni
+  test bloğu (3 test).
+- `docs/security-invariants.md` — **SI-346** ve mutasyon kaydı.
+- `PROJECT_STATUS.md` — bu bölüm.
+
+### Koşulan kapılar
+
+`AGENTS.md` §4'ün **tamamı**, paketleme yarısı dâhil:
+
+```
+uv run --directory apps/station-api ruff check .
+  -> All checks passed!
+uv run --project apps/station-api ruff check apps/station-api/src packages/technocore-conform/src tests
+  -> All checks passed!
+uv run --project apps/station-api mypy --config-file apps/station-api/pyproject.toml
+  -> Success: no issues found in 144 source files
+uv run --directory apps/station-api pytest ../../tests
+  -> 2661 passed, 2 warnings in 182.92s (0:03:02)
+npm --prefix apps/station-web run lint
+  -> (cikti yok; 0 hata)
+npm --prefix apps/station-web run test
+  -> Test Files 13 passed (13) / Tests 449 passed (449)      [onceki tur: 434]
+npm --prefix apps/station-web run build
+  -> built in 3.70s; index-BvXmzoH8.css 411.61 kB, index-D-ceerYF.js 565.35 kB
+npm --prefix apps/station-web run test:e2e
+  -> 79 passed (53.2s)
+uv run --project apps/station-api python packaging/build_bundle.py
+  -> 26 229 133 bayt,
+     SHA-256 b6549d5ab5310e1548d06728d55c5712695e9053dc92f5775f1ea776175a63c5
+uv run --directory apps/station-api pytest -p no:warnings     ../../tests/security/test_frontend_bundle.py ../../tests/security/test_packaging_boundary.py
+  -> 82 passed in 5.89s
+```
+
+Bir ara ölçüm kayda değer: mutasyon süpürmesi `dist`'i mutasyonlu hâlde
+bıraktığı için ilk `pytest` koşusunda
+`test_the_shipped_spa_is_byte_for_byte_the_audited_dist` **kırmızıydı**
+(`1 failed, 2660 passed`). Temiz kaynaktan yeniden derlenen `dist` ise
+denetlenen paketle **bayt bayt aynı** çıktı ve test yeniden yeşile döndü —
+yani SPA baytları bu turda hiç değişmedi. `build_bundle.py` yine de yeniden
+koşuldu ve iki bayt denetimi ondan **sonra** çalıştırıldı; zip özetinin
+değişmesi PyInstaller arşivinin bayt-yeniden-üretilebilir olmamasındandır,
+SPA'nın değişmesinden değil.
+
+Süpürme sonrası `git status --short` **boştu**; çalışan ağaçtaki tek
+değişiklik yukarıda listelenen dört dosyadır.
+
+Commit, push veya deploy **yapılmadı** (INV-08).

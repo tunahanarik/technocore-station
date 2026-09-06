@@ -44,12 +44,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
 from station_api.agent.errors import AgentError
 from station_api.agent.service import AgentService, RunView
+from station_api.downloads import safe_download_filename, split_suffix
 from station_api.evidence.service import EvidenceError, EvidenceService
 from station_api.modules.fields import EvidenceField
 from station_api.proof.approvals import SHARE_TOKEN_TTL_SECONDS, ShareApproval
+from station_api.proof.artifacts import (
+    BODY_EMBEDDED,
+    CONTENT_ENCODING,
+    read_workspace_bodies,
+)
 from station_api.proof.bundle import (
     BUNDLE_MEDIA_TYPE,
     BUNDLE_SUFFIX,
@@ -71,6 +78,17 @@ from station_api.tasks.service import TaskError, TaskService, TaskView
 #: anything was published, and reporting those as verified would be the
 #: "presence of a row is success" mistake the whole evidence model refuses.
 ACCEPTED_WRITE_OUTCOME = "accepted"
+
+#: What a single artifact is delivered as, whatever its name says.
+#:
+#: One value, never derived from the file's extension. A workspace may hold a
+#: ``.html`` file - the write tool takes any allow-listed name - and Station is
+#: a same-origin product with no CORS middleware, so serving one as
+#: ``text/html`` would put attacker-authored markup on the application's own
+#: origin. Every artifact is UTF-8 text by construction, so ``text/plain`` is
+#: also simply true; the global ``nosniff`` header and the ``attachment``
+#: disposition close the two ways a browser could decide otherwise.
+ARTIFACT_MEDIA_TYPE = f"text/plain; charset={CONTENT_ENCODING}"
 
 
 class ProofError(Exception):
@@ -95,6 +113,26 @@ class DeliveredBundle:
     delivered_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class DeliveredArtifact:
+    """One artifact on its way to the browser, as the file rather than about it.
+
+    ``sha256`` is the file's own digest and ``bundle_sha256`` is the digest of
+    the bundle the approval was minted against. Both travel, because they
+    answer two different questions: the first is what the reader checks their
+    saved copy against, the second is which reviewed document this delivery
+    belonged to.
+    """
+
+    payload: bytes
+    media_type: str
+    filename: str
+    name: str
+    sha256: str
+    bundle_sha256: str
+    delivered_at: datetime
+
+
 class ProofService:
     """Builds bundles, spends approvals, records two fields. One per process."""
 
@@ -103,11 +141,20 @@ class ProofService:
         *,
         tasks: TaskService,
         agent: AgentService,
+        data_dir: Path,
         evidence: EvidenceService | None = None,
         approvals: SingleUseStore[ShareApproval] | None = None,
     ) -> None:
         self._tasks = tasks
         self._agent = agent
+        # Required and without a default, deliberately. A proof service that
+        # could be built without a workspace root would build bundles that
+        # silently carry no artifact bodies - which is precisely the defect
+        # this package was measured to have, reintroduced as a wiring mistake
+        # nobody would see. The reading itself still goes through the agent
+        # package's own defences; what is passed here is only the root they are
+        # applied under.
+        self._data_dir = data_dir
         self._evidence = evidence
         self._approvals: SingleUseStore[ShareApproval] = (
             approvals
@@ -171,11 +218,24 @@ class ProofService:
         try:
             runs: tuple[RunView, ...] = self._agent.list_runs(task_id)
             files = self._agent.workspace_files(task_id)
+            # Read through ``agent.workspace`` rather than around it: the
+            # reparse-point walk, the containment check and the per-file
+            # ceiling are the same ones the runner writes under. A
+            # ``WorkspaceError`` this package does not know how to report per
+            # file - a junction planted on the directory, say - travels out
+            # here as an ``AgentError`` and becomes the stated refusal the
+            # route already knows how to answer with, exactly as the listing
+            # above does.
+            artifacts = read_workspace_bodies(self._data_dir, task_id, files)
         except AgentError as exc:
             raise ProofError(str(exc), reason=exc.reason) from exc
 
         return build_bundle(
-            task=view, gate=gate, completion=completion, runs=runs, files=files
+            task=view,
+            gate=gate,
+            completion=completion,
+            runs=runs,
+            artifacts=artifacts,
         )
 
     # --- the single-use share approval -------------------------------------
@@ -221,6 +281,35 @@ class ProofService:
         approval falls" stops being a sentence and becomes a comparison
         (ADR-0009 4).
         """
+        bundle = self._spend(task_id, session_id=session_id, share_token=share_token)
+
+        try:
+            payload = render(bundle.document, bundle_format=bundle_format)
+        except BundleFormatError as exc:
+            raise ProofError(str(exc), reason="format_unknown") from exc
+
+        return DeliveredBundle(
+            payload=payload,
+            media_type=BUNDLE_MEDIA_TYPE[bundle_format],
+            suffix=BUNDLE_SUFFIX[bundle_format],
+            sha256=bundle.sha256,
+            bundle_format=bundle_format,
+            delivered_at=datetime.now(UTC),
+        )
+
+    def _spend(
+        self, task_id: str, *, session_id: str, share_token: str
+    ) -> ProofBundle:
+        """Consume one approval and hand back the bundle it was given for.
+
+        Every check the two delivery paths share, in one place, because they
+        are not allowed to differ: an artifact leaving this machine and a
+        bundle leaving this machine are the same event with different bytes.
+        The approval is consumed **before** anything else is checked and on
+        every outcome - :class:`SingleUseStore` removes the entry under its own
+        lock - so a refusal here does not leave a token that can be tried
+        again.
+        """
         accepted, approval = self._approvals.consume(share_token)
         if not accepted or approval is None:
             raise ProofError(
@@ -255,18 +344,66 @@ class ProofService:
                 "Gorevin icerik surumu onaydan bu yana degisti.",
                 reason="content_version_changed",
             )
+        return bundle
 
-        try:
-            payload = render(bundle.document, bundle_format=bundle_format)
-        except BundleFormatError as exc:
-            raise ProofError(str(exc), reason="format_unknown") from exc
+    def deliver_artifact(
+        self, task_id: str, *, session_id: str, share_token: str, name: str
+    ) -> DeliveredArtifact:
+        """Hand one artifact to the browser as the file itself.
 
-        return DeliveredBundle(
+        The surface a person actually wanted. The bundle is the reviewable
+        document *about* a task; this is the report, the note or the JSON the
+        run produced, delivered under its own name with its own digest.
+
+        It shares :meth:`_spend` with the bundle download and therefore shares
+        every refusal: one single-use approval, bound to the session, the task,
+        the content version and the bundle digest. That last binding is what
+        makes this route safe to exist at all - since the bodies are inside the
+        document, ``bundle_sha256`` now covers the artifact's bytes, so an
+        approval a person gave after reading a bundle authorises exactly the
+        bytes they read and nothing that has changed since.
+
+        The body is taken **out of the built document** rather than read again
+        from disk. A second read would be a second answer: the file could
+        change between the digest comparison above and the delivery, and what
+        would leave would be bytes no approval had ever covered.
+
+        No path is opened here and no name from the request reaches the
+        filesystem. ``name`` selects an entry from a document that was built
+        from the workspace listing; a name that is not in that list is a
+        refusal, not a lookup.
+        """
+        bundle = self._spend(task_id, session_id=session_id, share_token=share_token)
+
+        entry = next(
+            (
+                item
+                for item in bundle.document["artifacts"]["files"]
+                if item["name"] == name
+            ),
+            None,
+        )
+        if entry is None:
+            raise ProofError(
+                "Bu adda bir cikti bu gorevin calisma alaninda yok.",
+                reason="artifact_missing",
+            )
+        if entry["content_state"] != BODY_EMBEDDED or not isinstance(
+            entry["content"], str
+        ):
+            raise ProofError(
+                str(entry["content_detail"]), reason="artifact_body_unavailable"
+            )
+
+        payload = str(entry["content"]).encode(CONTENT_ENCODING)
+        stem, suffix = split_suffix(str(entry["name"]))
+        return DeliveredArtifact(
             payload=payload,
-            media_type=BUNDLE_MEDIA_TYPE[bundle_format],
-            suffix=BUNDLE_SUFFIX[bundle_format],
-            sha256=bundle.sha256,
-            bundle_format=bundle_format,
+            media_type=ARTIFACT_MEDIA_TYPE,
+            filename=safe_download_filename(stem, suffix=suffix),
+            name=str(entry["name"]),
+            sha256=str(entry["sha256"]),
+            bundle_sha256=bundle.sha256,
             delivered_at=datetime.now(UTC),
         )
 
@@ -434,6 +571,8 @@ class ProofService:
 
 __all__ = [
     "ACCEPTED_WRITE_OUTCOME",
+    "ARTIFACT_MEDIA_TYPE",
+    "DeliveredArtifact",
     "DeliveredBundle",
     "ProofError",
     "ProofService",

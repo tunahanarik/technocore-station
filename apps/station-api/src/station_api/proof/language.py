@@ -1,10 +1,17 @@
 """The claims the proof workspace may not make, and the ones it makes instead.
 
 Package E built this control for the evidence layer, H1 extended it to the
-work scan and H2 to the agent runtime. Every one of those scans is scoped to
-its own directory, so a new package's wording is covered by **nothing at all**
-until it brings its own - and a rule that does not cover the text being
-written is not a rule (ADR-0007 10, ADR-0008 9, ADR-0009 5).
+work scan and H2 to the agent runtime - a rule that does not cover the text
+being written is not a rule (ADR-0007 10, ADR-0008 9, ADR-0009 5).
+
+Each of those scans is scoped to its own directory, and for three packages
+this docstring said what followed from that: a new package's wording was
+covered by **nothing at all** until it brought its own. The sentence was
+right and nothing tested it, which is how it survived three packages. It is
+now false by construction - ``tests/security/test_language_scope.py`` walks
+``station_api`` and applies the registry this module composes, all
+twenty-seven phrases, to every string literal under it. The registry below is
+therefore the one the whole tree is measured against, not only this package.
 
 Reused rather than reimplemented
 --------------------------------
@@ -21,10 +28,13 @@ to misread as *proven*. Every phrase below is a sentence somebody would
 reasonably write in a proof workspace and that this build cannot support.
 
 ``"bagimsiz olarak dogrulandi"``, ``"ucuncu taraf onayi"``
-    There is no independent check in this release. The model lane is closed
-    (ADR-0008 2), so there is no second opinion, and a run's own output
-    presented as a third party's verdict is the specific dishonesty ADR-0009 6
-    refuses. The field says ``not_implemented`` and says why.
+    There is no independent check in this release. This used to rest on the
+    model lane being closed (ADR-0008 2); ADR-0012 opened it and the two
+    phrases stay refused for a reason opening the lane made **stronger** - the
+    model that proposed a plan is not a third party to the run that carried it
+    out, and a run's own output presented as somebody else's verdict is the
+    specific dishonesty ADR-0009 6 refuses. The field says ``not_implemented``
+    and says why.
 
 ``"ozet icerigi dogrular"``, ``"kanitlanmis cikti"``
     A SHA-256 fixes the bytes of a file. It says nothing about whether those
@@ -110,6 +120,23 @@ BUNDLE_SCOPE_SENTENCE = (
     "Paket bu makinede toplanan malzemenin bir kopyasidir ve hicbir yola "
     "yazilmaz; tarayiciya teslim edilir. Iceriginin bir kismi eksiktir ve "
     "eksik olan her kalem adiyla listelenir."
+)
+
+#: The third, added when the bundle stopped being an inventory of the work and
+#: started carrying the work.
+#:
+#: Two things a reader has to be told the moment a file's own text appears
+#: inside a document this product authored: that the text is **not** this
+#: product's words, and that each digest beside a body describes that body
+#: rather than the package around it. The third sentence is the one that keeps
+#: an absence from reading as an oversight - a body that was left out is named
+#: and explained, never quietly missing.
+BODY_SCOPE_SENTENCE = (
+    "Paket, calisma alanindaki metin dosyalarinin govdesini oldugu gibi "
+    "tasir. Govde kosmanin urettigi metindir, bu urunun cumlesi degildir ve "
+    "degistirilmeden aktarilir. Her govdenin yanindaki SHA-256 o govdenin "
+    "kendi ozetidir. Pakete alinmayan her govde adiyla ve nedeniyle "
+    "listelenir."
 )
 
 #: Precomputed once. Each entry is the folded form of a forbidden phrase.
@@ -201,6 +228,7 @@ def _mask_one(text: str, needle: str) -> str:
 
 
 __all__ = [
+    "BODY_SCOPE_SENTENCE",
     "BUNDLE_SCOPE_SENTENCE",
     "FORBIDDEN_PHRASES",
     "HASH_SCOPE_SENTENCE",
