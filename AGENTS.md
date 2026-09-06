@@ -132,14 +132,56 @@ komutlar, test sonuçları, açık riskler ve sonraki adım yazılır.
 
 Ayrıntı için [`README.md`](README.md) → "Geliştirme komutları".
 
-```bash
-# Backend
-uv run --directory apps/station-api ruff check .
-uv run --directory apps/station-api mypy src
-uv run --directory apps/station-api pytest ../../tests
+Aşağıdaki iki blok, `.github/workflows/` altındaki kapıların **tamamıdır**.
+İki taraf elle eşlenmez: `tests/security/test_gate_parity.py` hem workflow
+dosyalarını hem de bu blokları ayrıştırıp karşılaştırır, ayrışma kırmızıdır.
+Kurulum adımları (`npm ci`, `uv sync --locked`, `uv python install`,
+`playwright install`, PyInstaller sürüm çıktısı) kapı değildir ve o testte
+gerekçesiyle birlikte adlandırılmıştır.
 
-# Frontend
+**CI her PR'da bu listenin tamamını çalıştırır.** Yerelde bir komutu atlamak
+onu ortadan kaldırmaz, yalnız hatanın nerede görüneceğini değiştirir: CI'da.
+
+### Hızlı kapı (her değişiklikte)
+
+Ölçüldü (6 Eylül 2026, iki ardışık koşu, sıcak mypy cache'i): toplam
+**44–45 sn** (ruff 0–1 sn + <1 sn, mypy 1 sn, eslint 8–9 sn, vitest
+23–24 sn, build 11 sn).
+
+```bash
+uv run --directory apps/station-api ruff check .
+uv run --project apps/station-api ruff check apps/station-api/src packages/technocore-conform/src tests
+uv run --project apps/station-api mypy --config-file apps/station-api/pyproject.toml
 npm --prefix apps/station-web run lint
 npm --prefix apps/station-web run test
 npm --prefix apps/station-web run build
 ```
+
+İki ruff komutu **farklı ağaçları** kapsar; biri diğerinin yerine geçmez.
+Birincisi `--directory apps/station-api` ile yalnız o ağacı denetler ve
+`tests/` klasörünü hiç açmaz — `tests/` içindeki bir bulguyu (ölçülmüş örnek:
+`B007`) yalnız ikincisi görür. Aynı şekilde `mypy src` de yeterli değildir:
+CI'ın komutu **142** dosya denetler, `mypy src` **140**.
+
+### Tam kapı (push öncesi)
+
+Hızlı kapının tamamı, **artı** aşağıdakiler. Ölçüldü (6 Eylül 2026, iki
+ardışık koşu): bu dört komut **4 dk 50 sn – 5 dk 11 sn** (pytest 179–182 sn,
+e2e 67–72 sn, bundle 35–53 sn, bundle pytest'i 6–7 sn); hızlı kapıyla
+birlikte ~6 dk.
+
+```bash
+uv run --directory apps/station-api pytest ../../tests
+npm --prefix apps/station-web run test:e2e
+uv run --project apps/station-api python packaging/build_bundle.py
+uv run --directory apps/station-api pytest -p no:warnings ../../tests/security/test_frontend_bundle.py ../../tests/security/test_packaging_boundary.py
+```
+
+Son iki komut sıralıdır: `test_frontend_bundle.py` ve
+`test_packaging_boundary.py` diskte bir bundle yoksa erken döner, yani onları
+yalnız `build_bundle.py`'den **sonra** çalıştırmak bir şey doğrular. Bu satır
+`packaging.yml`'den birebir alınmıştır ve orada da bir `-q` taşıyordu.
+`pytest.ini` zaten `-q` verdiği için ikisi toplanıp `-qq` oluyor ve **özet
+satırını bastırıyordu** — ADR-0011 §1'in teşhis ettiği tuzağın CI'da hayatta
+kalmış örneği. O karar `-q`'yu kapı komutundan düşürmüştü; bu adımdan da
+düştü, yani artık `N passed` satırı görünüyor.

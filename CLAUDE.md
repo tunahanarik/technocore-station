@@ -59,13 +59,55 @@ Gerekçe + lisans yaz, `README.md` bağımlılık tablosuna satır ekle, lockfil
 güncelle. Bağımlılıkları minimumda tut.
 
 ### Aşama sonu kontrol listesi
+
+Kanonik liste [`AGENTS.md`](AGENTS.md) §4'tedir; aşağısı birebir aynı
+olmak zorundadır (`tests/security/test_gate_parity.py` iki dosyayı
+karşılaştırır) ve `.github/workflows/` altındaki kapıların tamamıdır.
+Kurulum adımları (`npm ci`, `uv sync --locked`, `uv python install`,
+`playwright install`, PyInstaller sürüm çıktısı) kapı değildir.
+
+**CI her PR'da bu listenin tamamını çalıştırır.** Yerelde bir komutu atlamak
+onu ortadan kaldırmaz, yalnız hatanın nerede görüneceğini değiştirir: CI'da.
+
+#### Hızlı kapı (her değişiklikte)
+
+Ölçüldü (6 Eylül 2026, iki ardışık koşu, sıcak mypy cache'i): toplam
+**44–45 sn** (ruff 0–1 sn + <1 sn, mypy 1 sn, eslint 8–9 sn, vitest
+23–24 sn, build 11 sn).
+
 ```bash
 uv run --directory apps/station-api ruff check .
-uv run --directory apps/station-api mypy src
-uv run --directory apps/station-api pytest ../../tests
+uv run --project apps/station-api ruff check apps/station-api/src packages/technocore-conform/src tests
+uv run --project apps/station-api mypy --config-file apps/station-api/pyproject.toml
 npm --prefix apps/station-web run lint
 npm --prefix apps/station-web run test
 npm --prefix apps/station-web run build
 ```
+
+İki ruff komutu farklı ağaçları kapsar; biri diğerinin yerine geçmez.
+Birincisi `tests/` klasörünü hiç açmaz — oradaki bir bulguyu (ölçülmüş örnek:
+`B007`) yalnız ikincisi görür. `mypy src` de yeterli değildir: CI'ın komutu
+**142** dosya denetler, `mypy src` **140**.
+
+#### Tam kapı (push öncesi)
+
+Hızlı kapının tamamı, **artı** aşağıdakiler. Ölçüldü (6 Eylül 2026, iki
+ardışık koşu): bu dört komut **4 dk 50 sn – 5 dk 11 sn** (pytest 179–182 sn,
+e2e 67–72 sn, bundle 35–53 sn, bundle pytest'i 6–7 sn); hızlı kapıyla
+birlikte ~6 dk.
+
+```bash
+uv run --directory apps/station-api pytest ../../tests
+npm --prefix apps/station-web run test:e2e
+uv run --project apps/station-api python packaging/build_bundle.py
+uv run --directory apps/station-api pytest -p no:warnings ../../tests/security/test_frontend_bundle.py ../../tests/security/test_packaging_boundary.py
+```
+
+Son iki komut sıralıdır: `test_frontend_bundle.py` ve
+`test_packaging_boundary.py` diskte bir bundle yoksa erken döner. Son satır
+`packaging.yml`'den birebir alınmıştır. Orada bir `-q` vardı; `pytest.ini`
+zaten `-q` verdiği için `-qq` oluyor ve özet satırını bastırıyordu (ADR-0011
+§1'in tuzağı). CI adımından da düştü.
+
 Başarısız testi gizleme veya atlama. Ortam nedeniyle çalışmayan bir test
 varsa sebebini ve yeniden çalıştırma komutunu `PROJECT_STATUS.md` içine yaz.
