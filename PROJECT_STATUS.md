@@ -2454,3 +2454,77 @@ ki bu doğru bir cümledir. `docs/work-scan.md`'deki "model çağrısı yoktur" 
 `npm run lint` · `npm run test` (**434 geçti**) · `npm run build`, ardından
 SPA bundle değiştiği için `pytest` tekrar koşuldu.
 
+
+---
+
+## Aynı kusurun yedinci ve sekizinci örneği: iki tarama, iki üçlü liste
+
+**Durum:** kapandı. Commit edilmedi (INV-08).
+
+### Kusur, ölçülerek
+
+Bu depoda dokuz kez bulunan kalıbın iki örneği daha duruyordu: *koruduğu
+şeyle aynı listeyi okuyan, bu yüzden bir boşluğu asla göremeyen muhafız.*
+
+- `test_task_evidence.py::BUDGET_SCANNED_DIRS` = `("modules", "tasks", "proof")`
+- `test_module_registry.py::REGISTRY_SCANNED_DIRS` = aynı üçlü
+
+İkisi de ADR-0012'nin açtığı model yolunun paketlerini — `planner` ve
+`opencode` — kapsamıyordu. İddia edilmedi, **ekili ihlalle ölçüldü**:
+
+| Ekilen ihlal | Eski tarama | Yeni tarama |
+|---|---|---|
+| `planner/` içine `estimated_budget = 10` + `run.budget_left` | **55 test yeşil** | **1 kırmızı** (`test_the_task_layer_opens_no_budget_field`) |
+| `planner/` ve `opencode/` içine `import importlib` + `loader = importlib.import_module` | **37 test yeşil** | **1 kırmızı** (`test_no_module_is_ever_loaded_from_disk`) |
+
+İkincisi charter ADR-017'nin yasakladığı tek şeydir — diskten kod yükleme
+yolu — ve en yeni kodda hiçbir test görmüyordu.
+
+### Düzeltme
+
+`test_task_states.py`'nin `STATE_WRITER_DIRS` +
+`PACKAGES_OUTSIDE_THE_STATE_WRITE_SCAN` kalıbı iki dosyaya da uygulandı;
+dördüncü bir kalıp uydurulmadı.
+
+- **Bütçe taraması** on dört paketi kapsıyor (`planner` ve `opencode` dâhil).
+  Dışarıda kalan dört paket — `agent` (tavanın evi), `evidence` (denetim
+  olayının adı), `routes` ve `workscan` (tel) — `PACKAGES_OUTSIDE_THE_BUDGET_SCAN`
+  içinde gerekçesiyle sayılıdır. `planner` ve `opencode` taramanın içindedir ve
+  yalnız adlandırılmış birer muafiyet taşır (`budget`, `BUDGET_EXHAUSTED`,
+  `BUDGET_AVAILABLE`) — bu isimler `tasks`/`modules`'a **verilmedi**, yani
+  kuralın en eski yarısı hiç gevşemedi.
+- **Registry taraması** tek liste olmaktan çıktı: üç kural (`dynamic-loading`,
+  `outbound`, `secret-boundary`) ayrı ayrı kapsanıyor. Sebebi somut: `planner`
+  giden yüzey kuralının **dışında**, diğer ikisinin **içinde** olmalı ve tek
+  bir liste bunu söyleyemediği için en gevşek şeyi söylüyordu. Dinamik yükleme
+  kuralının **hiç muafiyeti yok** ve on sekiz paketin tamamını kapsıyor.
+
+### Gerekçeler düzyazıda bırakılmadı
+
+Üç sabitleme, `test_task_states.py`'nin `TaskRecord` sabitlemesinin şekliyle:
+`station_api.agent.budget` tam **üç** modül tarafından import edilir, `httpx`
+tam **beş** (`OUTBOUND_CLIENT_MODULES` beşte kalır, ADR-0012 §4),
+`compose.signer` tam **iki**. İlki daha ilk koşuda bir gerekçeyi yanlış
+çıkardı — `workscan` tavanı hiç import etmiyor — ve gerekçe düzeltildi.
+
+### Muhafızlar mutasyonla sürüldü
+
+İkisi de listeyi değil ağacı yürüyor. `_packages` iki listeyi okuyan bir
+sürüme çevrildiğinde, iki listede de adı geçmeyen ekili bir paket
+(`station_api/spend_probe/`) **görünmez** oluyor: muhafız kırmızıdan yeşile
+dönüyor. Mutasyon kararı tersine çevirdiği için muhafızlar gerçektir.
+
+### Koşulan kapılar
+
+`ruff check .` · `ruff check apps/station-api/src packages/technocore-conform/src tests`
+· `mypy --config-file apps/station-api/pyproject.toml` (**142 dosya**) ·
+`pytest ../../tests` (**2523 geçti**) · `npm run lint` · `npm run test`
+(**434 geçti**) · `npm run build`. SPA bundle **değişmedi**.
+
+### Açık risk
+
+Tarama birimi **paket**tir (`station_api` altındaki dizinler), üst düzey tek
+dosyalık modüller (`app.py`, `schemas.py`, `resources.py`, …) değil.
+`resources.py` paketlenmiş varlıklar için `importlib.resources` kullanır ve
+bu meşrudur; ama yeni bir üst düzey modül bu üç taramanın da dışında kalır ve
+muhafız bunu söylemez. Bir sonraki tur için kayda geçirildi.

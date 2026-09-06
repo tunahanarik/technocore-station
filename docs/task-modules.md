@@ -275,8 +275,12 @@ Bu erteleme sessiz değildir:
 - `TaskStatusResponse.budget_available` `Literal[False]`'tur ve
   `budget_detail` ertelemeyi cümleyle söyler — composer'ın
   `note_lane_available` alanıyla aynı kalıp;
-- `test_the_task_layer_opens_no_budget_field` görev/registry paketlerinde
-  bütçe biçimli bir sütun veya tanımlayıcı olmadığını denetler;
+- `test_the_task_layer_opens_no_budget_field` artık görev/registry
+  paketleriyle sınırlı değildir: `station_api` altındaki paketlerin
+  tamamında bütçe biçimli bir sütun veya tanımlayıcı olmadığını denetler.
+  Dışarıda kalan dördü — tavanın evi `agent`, denetim olayını adlandıran
+  `evidence` ve teli taşıyan `routes` ile `workscan` — gerekçesiyle
+  yazılıdır; `planner` ve `opencode` taramanın **içindedir**;
 - `test_the_deferral_is_recorded_in_the_documents` bu bölümün varlığını
   denetler.
 

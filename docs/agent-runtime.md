@@ -191,9 +191,12 @@ birimler `refused_units` alanında **adıyla** yayımlanır.
 
 ### 3.1 Neden `agent/`, `tasks/` değil
 
-`test_the_task_layer_opens_no_budget_field`, `station_api/tasks` ve
-`station_api/modules` ağaçlarında `budget|cost|spend|quota|credit` içeren
-**hiçbir tanımlayıcıya** izin vermez. SI-225'in "görev katmanında bütçe yok"
+`test_the_task_layer_opens_no_budget_field`, `station_api` altındaki
+paketlerin tamamında — tavanın evi `agent` ve teli taşıyan üç paket dışında,
+ki dördü de gerekçesiyle yazılıdır — `budget|cost|spend|quota|credit` içeren
+**hiçbir tanımlayıcıya** izin vermez. Kural H4'te `tasks`+`modules`+`proof`
+üçlüsünden çıkarıldı: üç adlık bir liste, ADR-0012'nin eklediği `planner` ve
+`opencode` paketlerini kapsamıyordu ve kapsamadığını da söylemiyordu. SI-225'in "görev katmanında bütçe yok"
 iddiasının **harfiyen** doğru kalması istendiği için tavan bu pakete girdi;
 görev katmanında bir tane bile alan yoktur. `budget_available` hâlâ
 `Literal[False]`'tır — bir görev tavan taşımaz, **bir çalışma taşır**.
