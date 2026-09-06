@@ -366,7 +366,7 @@ def test_a_claim_planted_in_a_file_no_list_names_is_seen(repo_root: Path) -> Non
             ");\n"
         ),
     }
-    for path, body in probes.items():
+    for path in probes:
         assert path.parent.is_dir(), path.parent
         assert not path.exists(), path
     try:
