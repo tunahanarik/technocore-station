@@ -72,6 +72,7 @@ from station_api.planner.service import (
     ModelPlannerService,
     ProposalOutcome,
 )
+from station_api.schemas import ModelProposeRequest
 from station_api.tasks.service import TaskService, TaskView
 from station_api.tasks.sources import TaskSourceId
 from station_api.tasks.states import TaskState
@@ -1779,3 +1780,81 @@ def test_the_brief_promises_no_request_file_when_there_is_none(
     assert REQUEST_FILE_NAME not in brief
     assert "read_workspace_file" not in brief
     assert "Calisma alanindaki dosyalar: yok" in brief
+
+
+# ---------------------------------------------------------------------------
+# The criterion is the person's, and it rides with the turn
+# ---------------------------------------------------------------------------
+
+
+def test_a_proposal_without_conditions_still_reports_not_implemented(
+    planner, agent, task: TaskView  # type: ignore[no-untyped-def]
+) -> None:
+    """The default is unchanged, and it is not an oversight.
+
+    A plan nobody wrote a machine-decidable criterion for cannot be judged by
+    one, and this build says so rather than inventing a pass. The model is
+    never asked for the criterion: a proposer that writes what it will be
+    judged by has not been given a criterion at all.
+    """
+    service, _ = planner([_tool_call_body([_write_call()]), _closing_body()])
+    view = service.propose(task.id)
+
+    assert view.outcome is ProposalOutcome.PLANNED
+    run = agent.get_run(view.run_id)
+    assert run.acceptance == ()
+    assert run.test_result_state == "not_implemented"
+
+
+def test_the_conditions_a_person_chose_reach_the_recorded_plan(
+    planner, agent, task: TaskView  # type: ignore[no-untyped-def]
+) -> None:
+    """Chosen before the turn, judged after the run.
+
+    Before this, ``propose`` recorded every plan with an empty condition list
+    and the only way to attach one was to hand-write the whole plan, so a
+    model-proposed plan could never earn a verdict. The conditions are the
+    person's own and are picked *before* the turn is spent, which is why they
+    travel with the request rather than being edited onto an approved plan:
+    they live inside ``plan_sha256``, and editing one afterwards would
+    invalidate the approval it was attached to.
+    """
+    service, _ = planner([_tool_call_body([_write_call()]), _closing_body()])
+    view = service.propose(
+        task.id,
+        acceptance_conditions=(("artifact_exists", {"name": "rapor.json"}),),
+    )
+
+    assert view.outcome is ProposalOutcome.PLANNED
+    run = agent.get_run(view.run_id)
+    assert [item.kind for item in run.acceptance] == ["artifact_exists"]
+    # Before the run the verdict is ``failed``, not ``not_implemented``, and
+    # the difference is the whole point: the condition is re-decided against
+    # the workspace on every read, and right now the promised file is genuinely
+    # absent. ``not_implemented`` would claim there is nothing to decide.
+    assert run.test_result_state == "failed"
+
+    started = agent.start_run(view.run_id)
+    assert started.phase is RunPhase.COMPLETED
+    assert agent.get_run(view.run_id).test_result_state == "passed"
+
+
+def test_the_wire_cap_on_an_instruction_is_the_service_cap(
+    planner, task: TaskView  # type: ignore[no-untyped-def]
+) -> None:
+    """Two numbers that must be one, pinned because they were not.
+
+    ``MAX_INSTRUCTION_CHARS`` was raised to 32 000 while
+    ``ModelProposeRequest.instruction`` stayed at 2 000, so the raise never
+    reached a request: anything longer was refused by the model before the
+    service was entered, and the constant that read like the limit was not
+    the limit. A test that only read the service constant would still be
+    green today.
+    """
+    field = ModelProposeRequest.model_fields["instruction"]
+    caps = [
+        item.max_length
+        for item in field.metadata
+        if getattr(item, "max_length", None) is not None
+    ]
+    assert caps == [MAX_INSTRUCTION_CHARS]

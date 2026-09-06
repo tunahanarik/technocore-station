@@ -16,7 +16,14 @@ import type {
   TaskStatusResponse,
 } from "../../api/types";
 import { AppShell } from "../AppShell";
-import { STATE_LABEL, TRANSITIONS, TasksPanel, deriveNextStep } from "./TasksPanel";
+import type { StatusTone } from "../StatusPill";
+import {
+  STATE_LABEL,
+  TRANSITIONS,
+  TasksPanel,
+  deriveNextStep,
+  deriveRunEnding,
+} from "./TasksPanel";
 
 /**
  * These assertions encode the product rules of the task surface, not its
@@ -859,13 +866,19 @@ describe("Gorevler: approval and control", () => {
   });
 
   it("says a change of scope needs a new approval, and a new plan is unapproved", async () => {
+    // Approvals are keyed to a run id, so a second plan cannot inherit the
+    // first plan's approvals. The second plan used to be hand-written here;
+    // the hand-written composer is gone, so it comes from the model - which
+    // is the same claim about the same rule, made where a person can still
+    // make it. The model proposing is exactly the case that matters: a plan
+    // nobody typed must not arrive pre-approved.
     const sent: Recorded[] = [];
-    // The second POST records a *different* run; approvals are keyed to a run
-    // id, so the new plan cannot inherit the old plan's approvals.
     stub(runsFor([PLANNED_RUN]), {
       sent,
       onPost: (url) =>
-        url === `/api/tasks/${TASK.id}/runs` ? jsonOk(runsFor([SECOND_RUN])) : null,
+        url.includes("/model-plan") || url === "/api/opencode/status"
+          ? jsonOk(proposal({ runs: [SECOND_RUN] }))
+          : null,
     });
     await bootstrapSession();
     const user = userEvent.setup();
@@ -880,30 +893,15 @@ describe("Gorevler: approval and control", () => {
     await approveAll(user);
     expect(screen.getByRole("button", { name: "Onayli plani calistir" })).toBeEnabled();
 
-    // Record a different plan: one step and a success criterion.
-    await user.click(screen.getByRole("radio", { name: /validate_json_file/ }));
-    await user.type(screen.getByLabelText(/^name /), "rapor.md");
-    await user.click(screen.getByRole("button", { name: "Adimi plana ekle" }));
-    await user.type(
-      screen.getByLabelText(/Basari olcutu/),
-      "TEST-ONLY: dosya iyi bicimli JSON olmali.",
-    );
-    await user.click(screen.getByRole("button", { name: "Plani kaydet (calistirmaz)" }));
+    await user.click(screen.getByRole("button", { name: /Modelden plan oner/ }));
+    await screen.findByTestId("tasks-model-outcome");
 
     // The new run is on screen and its start control is disabled again.
     await screen.findByText(new RegExp(SECOND_RUN.id.slice(0, 12)));
     expect(screen.getByRole("button", { name: "Onayli plani calistir" })).toBeDisabled();
 
-    // Recording a plan ran nothing: the only write was the plan itself.
-    expect(sent.map((entry) => entry.url)).toEqual([`/api/tasks/${TASK.id}/runs`]);
-    // Explicit headroom, and the reason rather than a round number. This test
-    // types a 41-character criterion one keystroke at a time, and every
-    // keystroke re-renders the whole panel; Paket H4 added the model region
-    // and the acceptance composer to that panel, which roughly doubled the
-    // cost of each of those renders and took the test from ~2s to ~4.5s.
-    // Under the full suite it crossed the 5s default and failed as a timeout
-    // - a slow test reported as a broken one. Nothing about what is asserted
-    // has changed.
+    // Proposing ran nothing: the only write was the turn itself.
+    expect(sent.map((entry) => entry.url)).toEqual([`/api/tasks/${TASK.id}/model-plan`]);
   }, 20_000);
 
   it("stops a run, and shows that the late result produced no side effect", async () => {
@@ -1516,10 +1514,16 @@ describe("Gorevler: the model proposes and cannot approve or start", () => {
 
     const turn = sent.find((entry) => entry.url === `/api/tasks/${TASK.id}/model-plan`);
     expect(turn, "the turn must have been requested").toBeDefined();
-    // Exactly one key. A body that could carry a model, a tool list, a system
-    // prompt or a temperature would be a body that could widen what a
-    // proposal is allowed to be.
-    expect(turn?.body).toEqual({ instruction: "TEST-ONLY yonerge" });
+    // Exactly two keys, and the assertion stays an exact equality. A body
+    // that could carry a model, a tool list, a system prompt or a temperature
+    // would be a body that could widen what a proposal is allowed to be.
+    //
+    // `acceptance` is the person's own criterion, chosen before the turn is
+    // spent and empty here because nothing was chosen. It widens nothing: the
+    // model is never told about it and never asked for one, which is the
+    // point - a proposer that writes the criterion it will be judged by has
+    // not been given a criterion.
+    expect(turn?.body).toEqual({ instruction: "TEST-ONLY yonerge", acceptance: [] });
   });
 
   it("shows the proposed plan, the provider's own usage, and that it started nothing", async () => {
@@ -2055,29 +2059,25 @@ describe("Gorevler: the verdict comes from the plan's own conditions", () => {
     );
   });
 
-  it("records the acceptance conditions a person composed, from the published registry", async () => {
+  it("sends the acceptance conditions a person chose with the model turn", async () => {
+    // The criterion is chosen **before** the turn is spent, and it travels
+    // with the request rather than being edited onto an approved plan: the
+    // conditions live inside `plan_sha256`, so attaching one afterwards would
+    // invalidate the approval it was attached to.
+    //
+    // This used to be driven through a hand-written plan composer. That
+    // surface is gone - the model writes the plan now - so the same claim is
+    // driven where a person can still make it.
     const sent: Recorded[] = [];
-    stub(runsFor([]), {
-      sent,
-      onPost: (url) => (url === `/api/tasks/${TASK.id}/runs` ? jsonOk(runsFor([PASSED_RUN])) : null),
-    });
+    modelStub(proposal(), sent);
     await bootstrapSession();
     const user = userEvent.setup();
     render(<TasksPanel />);
     await ready();
     await openTask(user);
 
-    // One step, so the plan is recordable at all.
-    await user.click(screen.getByRole("radio", { name: /write_workspace_file/ }));
-    await user.click(screen.getByRole("button", { name: "Adimi plana ekle" }));
-    await user.type(
-      screen.getByRole("textbox", { name: /Basari olcutu/ }),
-      "TEST-ONLY olcut",
-    );
-
-    // The condition chooser is built from `acceptance_checks`, so a registry
-    // the backend publishes and this screen does not know about would still
-    // be offered.
+    // The chooser is built from `acceptance_checks`, so a registry the
+    // backend publishes and this screen does not know about is still offered.
     await user.click(screen.getByRole("radio", { name: /artifact_exists/ }));
     await user.type(screen.getAllByRole("textbox", { name: /^name/ }).slice(-1)[0]!, "rapor.md");
     await user.click(screen.getByRole("button", { name: "Kosulu plana ekle" }));
@@ -2085,13 +2085,11 @@ describe("Gorevler: the verdict comes from the plan's own conditions", () => {
       "Plandaki kabul kosulu sayisi: 1",
     );
 
-    await user.click(screen.getByRole("button", { name: /Plani kaydet/ }));
-    await waitFor(() => {
-      expect(sent.some((entry) => entry.url === `/api/tasks/${TASK.id}/runs`)).toBe(true);
-    });
+    await user.click(screen.getByRole("button", { name: /Modelden plan oner/ }));
+    await screen.findByTestId("tasks-model-outcome");
 
-    const plan = sent.find((entry) => entry.url === `/api/tasks/${TASK.id}/runs`);
-    expect(plan?.body).toMatchObject({
+    const turn = sent.find((entry) => entry.url === `/api/tasks/${TASK.id}/model-plan`);
+    expect(turn?.body).toMatchObject({
       acceptance: [{ kind: "artifact_exists", arguments: { name: "rapor.md" } }],
     });
   });
@@ -2145,6 +2143,217 @@ describe("Gorevler: the verdict comes from the plan's own conditions", () => {
       }
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// A run that promised nothing and produced nothing is not an accomplishment.
+// ---------------------------------------------------------------------------
+//
+// The measured defect. A model-proposed plan ran three steps, all reads -
+// `read_workspace_file`, `read_approved_snapshot`, `read_run_status` - and the
+// screen answered, in green: "Bitti: her adim yapildi, soz verilen her cikti
+// var". Both halves were literally true and the second was **vacuous**: the
+// plan promised no artifact, so "every promised artifact exists" holds over an
+// empty set and establishes nothing. The owner's reaction was that they could
+// not tell whether the plan had run at all.
+
+/** One read step, which by construction leaves no artifact behind. */
+function readStep(
+  ordinal: number,
+  toolId: string,
+  scope: AgentRunStatus["steps"][number]["scope"],
+): AgentRunStatus["steps"][number] {
+  return {
+    ordinal,
+    tool_id: toolId,
+    scope,
+    arguments_sha256: `0011223344556${String(ordinal)}`,
+    phase: "ran",
+    started_at: "2026-09-05T09:07:00Z",
+    finished_at: "2026-09-05T09:07:01Z",
+    artifact_name: "",
+    artifact_sha256: "",
+    detail: `TEST-ONLY: ${toolId} okundu.`,
+  };
+}
+
+/** The run from the owner's screen: three reads, no promise, no output. */
+const READ_ONLY_RUN: AgentRunStatus = {
+  ...PLANNED_RUN,
+  id: "cc33dd44ee55ff6677889900aa11bb22",
+  phase: "completed",
+  started_at: "2026-09-05T09:07:00Z",
+  finished_at: "2026-09-05T09:07:01Z",
+  tool_calls_used: 3,
+  elapsed_ms: 640,
+  expected_artifacts: [],
+  steps: [
+    readStep(1, "read_workspace_file", "read_approved_input"),
+    readStep(2, "read_approved_snapshot", "read_approved_input"),
+    readStep(3, "read_run_status", "read_run_state"),
+  ],
+  detail: "TEST-ONLY: Plan tamamlandi: 3 adim.",
+};
+
+/** The inverse: nothing promised, and a step wrote a file regardless. */
+const UNPROMISED_OUTPUT_RUN: AgentRunStatus = {
+  ...READ_ONLY_RUN,
+  id: "dd44ee55ff6677889900aa11bb22ee66",
+  steps: [
+    {
+      ordinal: 1,
+      tool_id: "write_workspace_file",
+      scope: "write_workspace",
+      arguments_sha256: "abcdef0123456789",
+      phase: "ran",
+      started_at: "2026-09-05T09:07:00Z",
+      finished_at: "2026-09-05T09:07:01Z",
+      artifact_name: "notlar.md",
+      artifact_sha256: "99887766554433",
+      detail: "TEST-ONLY: bir dosya uretildi.",
+    },
+  ],
+};
+
+/** The pill's own tone, as a reader without colour vision receives it. */
+const SPOKEN_TONE: Record<StatusTone, string> = {
+  ok: "durum: iyi",
+  pending: "durum: bekliyor",
+  inactive: "durum: etkin degil",
+  problem: "durum: sorunlu",
+};
+
+describe("Gorevler: a completion is not automatically an accomplishment", () => {
+  it("refuses the success sentence and the success tone to a run that made nothing", async () => {
+    // `runsFor` puts `rapor.md` in the workspace listing, and that is the
+    // point: the file belongs to the *task*, not to this run, and a
+    // derivation that read the task's workspace would credit this run with
+    // somebody else's output. Nothing here is inferred from a missing field.
+    stub(runsFor([READ_ONLY_RUN]));
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    const ending = screen.getByTestId(`tasks-run-ending-${READ_ONLY_RUN.id}`);
+    // The vacuous clause, and the green tick that carried it.
+    expect(ending).not.toHaveTextContent("soz verilen her cikti var");
+    expect(ending).not.toHaveTextContent(SPOKEN_TONE.ok);
+    // The honest half stays, and stays said.
+    expect(ending).toHaveTextContent("her adim yapildi");
+    expect(ending).toHaveTextContent("hicbir dosya uretmedi");
+  });
+
+  it("keeps the sentence a run that actually kept its promise earned", async () => {
+    stub(runsFor([PASSED_RUN]));
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    const ending = screen.getByTestId(`tasks-run-ending-${PASSED_RUN.id}`);
+    expect(ending).toHaveTextContent("Bitti: her adim yapildi, soz verilen her cikti var");
+    expect(ending).toHaveTextContent(SPOKEN_TONE.ok);
+  });
+
+  it("does not tell a run that wrote an unpromised file that it produced nothing", async () => {
+    // `artifact_missing` is not the inverse of this: that phase says a named
+    // file is absent, and says nothing about a file nobody named. Folding
+    // this run into the previous reading would print "hicbir dosya uretmedi"
+    // about a run that produced one - the same defect, mirrored.
+    stub(runsFor([UNPROMISED_OUTPUT_RUN]));
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    const ending = screen.getByTestId(`tasks-run-ending-${UNPROMISED_OUTPUT_RUN.id}`);
+    expect(ending).not.toHaveTextContent("hicbir dosya uretmedi");
+    expect(ending).not.toHaveTextContent("soz verilen her cikti var");
+    expect(ending).not.toHaveTextContent(SPOKEN_TONE.ok);
+    expect(ending).toHaveTextContent("denetlenmedi");
+  });
+
+  it("derives the three completions from the run, not from the phase", () => {
+    // One phase, three answers. A derivation that ignored the promised-artifact
+    // list would collapse this set and fail here as well as in the DOM.
+    const promised = deriveRunEnding(PASSED_RUN);
+    const nothing = deriveRunEnding(READ_ONLY_RUN);
+    const unpromised = deriveRunEnding(UNPROMISED_OUTPUT_RUN);
+
+    expect(promised.tone).toBe("ok");
+    // Neither of the other two is a failure: nothing refused, no ceiling was
+    // reached and no promise was broken. They are endings that establish
+    // nothing, which is what this surface tones `inactive`.
+    expect(nothing.tone).toBe("inactive");
+    expect(unpromised.tone).toBe("inactive");
+    expect(new Set([promised.label, nothing.label, unpromised.label]).size).toBe(3);
+  });
+
+  it("gives every run phase the wire can carry a sentence and a tone", () => {
+    // `AgentRunPhaseName` is the closed set of phases this screen can be
+    // handed, and it lives on the other side of the wire. The union is parsed
+    // out of the type module and walked at runtime rather than left to the
+    // compiler alone, so a ninth phase fails on the sentence it is missing
+    // rather than on a blank pill nobody notices.
+    const types = readFileSync(join(resolveSrcDir(), "api", "types.ts"), "utf8");
+    const declaration = /export type AgentRunPhaseName =([^;]*);/.exec(types);
+    expect(declaration, "AgentRunPhaseName is no longer a union of literals").not.toBeNull();
+    const phases = [...declaration![1]!.matchAll(/"([a-z_]+)"/g)].map((match) => match[1]!);
+
+    for (const phase of phases) {
+      const ending = deriveRunEnding({
+        ...READ_ONLY_RUN,
+        phase: phase as AgentRunStatus["phase"],
+      });
+      expect(typeof ending.label, `${phase} has no sentence`).toBe("string");
+      expect(ending.label, `${phase} has no sentence`).not.toBe("");
+      expect(Object.keys(SPOKEN_TONE), `${phase} has no tone`).toContain(ending.tone);
+    }
+    // Checked after the loop on purpose: a ninth phase must fail on the gap it
+    // opened, and only then on the fact that it is a ninth phase.
+    expect(phases).toHaveLength(8);
+  });
+
+  it("warns before the four approvals rather than after the run", async () => {
+    // The card already prints "Bu plan bir cikti dosyasi soz vermedi", which
+    // is a fact about the promise and not about the plan: a plan may promise
+    // nothing and still write something. The stronger reading is derived from
+    // the step scopes, and it sits in the card being approved, above the four
+    // checkboxes - so a person meets it before spending four approvals and a
+    // run rather than after.
+    const planned: AgentRunStatus = { ...READ_ONLY_RUN, phase: "planned" };
+    stub(runsFor([planned]));
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    const warning = screen.getByTestId(`tasks-writes-nothing-${planned.id}`);
+    expect(warning).toHaveTextContent("hicbir dosya olusturmaz");
+    // Above the approvals it belongs to, in document order.
+    const fieldset = screen.getByRole("group", { name: "Bu plan icin dort onay" });
+    expect(
+      warning.compareDocumentPosition(fieldset) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("says nothing about a plan whose steps can write, even with no promise", async () => {
+    const writes: AgentRunStatus = { ...UNPROMISED_OUTPUT_RUN, phase: "planned" };
+    expect(writes.expected_artifacts).toEqual([]);
+    stub(runsFor([writes]));
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    expect(screen.queryByTestId(`tasks-writes-nothing-${writes.id}`)).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2383,11 +2592,12 @@ describe("Gorevler: what to do next", () => {
 
   it("reads the same plan two ways: write one, or run the one already written", () => {
     // Derived from the task *and* its runs, not from the state alone: in
-    // `awaiting_approval` the next thing to do is write a plan, unless a plan
-    // is already recorded, in which case it is to approve and run that one.
+    // `awaiting_approval` the next thing to do is ask the model for a plan,
+    // unless a plan is already recorded, in which case it is to approve and
+    // run that one.
     const empty = deriveNextStep("awaiting_approval", []);
     const planned = deriveNextStep("awaiting_approval", [PLANNED_RUN]);
-    expect(empty.control).toBe("Plani kaydet (calistirmaz)");
+    expect(empty.control).toBe("Modelden plan oner (calistirmaz)");
     expect(planned.control).toBe("Onayli plani calistir");
   });
 
@@ -2447,13 +2657,13 @@ describe("Gorevler: what to do next", () => {
     await openTask(user);
 
     // The line moved with the state: in `suggested` it named "Onaya al", and
-    // here it names the composer. A literal written into the JSX would agree
-    // with one of the two and fail the other.
+    // here it names the model turn. A literal written into the JSX would
+    // agree with one of the two and fail the other.
     expect(screen.getByTestId("tasks-next-step")).toHaveTextContent(
-      "Plani kaydet (calistirmaz)",
+      "Modelden plan oner (calistirmaz)",
     );
 
-    for (const label of ["Plan olustur", "Modelden plan onerisi"]) {
+    for (const label of ["Basari olcutu", "Modelden plan onerisi"]) {
       const open = screen.getByRole("region", { name: label }).querySelector("details")?.open;
       expect(open, `${label} must be open where it can act`).toBe(true);
     }

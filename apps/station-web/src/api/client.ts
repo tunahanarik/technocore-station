@@ -1335,11 +1335,30 @@ export const MODEL_PLAN_TIMEOUT_MS = 60000;
 export async function proposeModelPlan(input: {
   readonly taskId: string;
   readonly instruction?: string;
+  /**
+   * The conditions the recorded plan will be judged by, chosen by the person
+   * before the turn is spent.
+   *
+   * The model is never asked for these. A proposer that also writes the
+   * criterion it will be judged by has not been given a criterion, so the
+   * only way a model-proposed plan can earn a verdict is for a person to say
+   * in advance what would count.
+   */
+  readonly acceptance?: readonly {
+    readonly kind: string;
+    readonly arguments: Readonly<Record<string, string>>;
+  }[];
 }): Promise<ModelProposalResponse> {
   return mutate(
     `/api/tasks/${encodeURIComponent(input.taskId)}/model-plan`,
     isModelProposalResponse,
-    { instruction: input.instruction ?? "" },
+    {
+      instruction: input.instruction ?? "",
+      acceptance: (input.acceptance ?? []).map((entry) => ({
+        kind: entry.kind,
+        arguments: { ...entry.arguments },
+      })),
+    },
     MODEL_PLAN_TIMEOUT_MS,
   );
 }

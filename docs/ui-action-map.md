@@ -1017,7 +1017,7 @@ Görev ayrıntısının **ilk** satırı (`tasks-next-step`, kontrol adı
 | Durum | Sonraki adım (özet) | Kontrol | Bölüm |
 |---|---|---|---|
 | `suggested` | Görevi onaya al | "Onaya al" | Durum degisikligi |
-| `awaiting_approval` (kayıtlı plan yok) | Plan yaz ve kaydet | "Plani kaydet (calistirmaz)" | Plan olustur |
+| `awaiting_approval` (kayıtlı plan yok) | Modelden plan iste | "Modelden plan oner (calistirmaz)" | Modelden plan onerisi |
 | `awaiting_approval` (kayıtlı plan **var**) | Dört onayı ver, sonra çalıştır | "Onayli plani calistir" | Calismalar |
 | `running` | Durdur | "Durdur" | Calismalar |
 | `paused` | Onaylı kapsamda sürdür | "Devam et" | Calismalar |
@@ -1052,9 +1052,9 @@ kendi kuralıdır:
 |---|---|---|
 | Yurutme durumu, Butce ve tavan, Guven siniri, Kesilen calismalar, Dort alan, Calisma alani | hiçbiri | bu bloklarda **kontrol yoktur** |
 | Yayin hazirligi | `review_needed` | kapı `transition(READY_TO_PUBLISH)` çağırır; bu kenar yalnız `review_needed`'dan tanımlı |
-| Modelden plan onerisi, Plan olustur | `awaiting_approval` | planlayıcı bu durum dışındaki öneriyi bütünüyle reddeder |
+| Modelden plan onerisi, Basari olcutu | `awaiting_approval` | planlayıcı bu durum dışındaki öneriyi bütünüyle reddeder |
 | Calismalar | `awaiting_approval`, `running`, `paused` | başlat / durdur / devam, üç çalışma durumuna aittir |
-| Kullanici kabulu, Public paylasim isareti | her durumda | rotaların **hiçbir durum ön koşulu yoktur**; alanı yazıp dururlar |
+| Kullanici kabulu, Public paylasim isareti | `suggested` ve `awaiting_approval` **dışında** | rotaların hiçbir durum ön koşulu **yoktur** ve bu satır bir ön koşul iddiası değildir: iki blok o iki durumda kapanır çünkü orada kabul edilecek bir paket ve paylaşılacak bir gönderim henüz yoktur. İkisi de her durumda açılabilir |
 
 Son iki satır bilerek öyle: ilk denemede "kayıtlı çalışma yoksa kabul
 katlansın" kuralı yazılmıştı ve `review_needed` + boş çalışma listesi tam da
@@ -1089,7 +1089,6 @@ Testler iki katmanda ve **bilerek farklı şeyleri** ölçer:
 | (mount) | `fetchAgentSurface` `GET /api/tasks/surface` + `fetchTasks` `GET /api/tasks` | 15 sn (varsayılan) | "Gorev yuzeyi okunuyor..." | `ErrorRegion` + "Yeniden dene" |
 | Görev seçimi (radio) | `fetchTaskRuns` `GET /api/tasks/{id}/runs` | 15 sn | (radio devre dışı) | `ErrorRegion`, retry yok |
 | Durum düğmeleri (5) | `transitionTask` `POST /transition` | 15 sn | (düğmeler devre dışı) | `ErrorRegion`, retry yok |
-| Plani kaydet (calistirmaz) | `planTaskRun` `POST /runs` | 15 sn | "Kaydediliyor..." | `ErrorRegion`, retry yok |
 | Onayli plani calistir | `startTaskRun` `POST /runs/{id}/start` | **150 sn** | "Calistiriliyor..." | `ErrorRegion`, retry yok |
 | Durdur | `stopTaskRun` `POST /runs/{id}/stop` | 15 sn | "Durduruluyor..." | `ErrorRegion`, retry yok |
 | Devam et | `resumeTaskRun` `POST /runs/{id}/resume` | **150 sn** | "Surduruluyor..." | `ErrorRegion`, retry yok |
@@ -1199,11 +1198,16 @@ istenmez; bu, ekranda `tasks-scope-change-<run>` satırında yazılıdır.
 
 ### 13.6 Plan yazmak çalıştırmak değildir
 
-Plan bestecisi kayıtlı araç registry'sinden bir araç seçtirir, aracın
-**tiplenmiş parametrelerini** alan alan sorar, adımı taslağa ekler; sonra söz
-verilen çıktılar ve başarı ölçütü yazılır. "Plani kaydet (calistirmaz)"
-yalnızca `POST /runs` yapar. Çalıştırmak ayrı bir istektir — besteci'nin iki
-onay kalıbının aynısı (ADR-0002 §2).
+Planı **model yazar**. Elle adım adım plan kuran besteci kaldırıldı: sahibi
+onu hiç kullanmadı ve ekranın en uzun yarısıydı. Geriye kalan tek elle seçim
+**başarı ölçütüdür** ve o bilerek elle kalıyor — kendi yargılanacağı ölçütü de
+yazan bir öneri sahibine bir ölçüt vermiş olmaz. Ölçüt tur harcanmadan
+**önce** seçilir ve istekle birlikte gider; koşullar `plan_sha256`'nın
+içindedir, yani onaylanmış bir plana sonradan eklemek onayı geçersiz kılardı.
+
+"Modelden plan oner (calistirmaz)" bir tur harcar ve `POST /model-plan` yapar.
+Çalıştırmak ayrı bir istektir — bestecinin iki onay kalıbının aynısı
+(ADR-0002 §2).
 
 Registry'de `path` ve `url` tipinde parametre yoktur: bir araca adres
 verilemez. Ekranda gösterilen parametre tipleri bunu doğrudan gösterir

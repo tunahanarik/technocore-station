@@ -160,7 +160,13 @@ def propose_plan(
     tasks = _tasks(request)
     agent = _agent(request)
     try:
-        view = planner.propose(task_id, instruction=body.instruction)
+        view = planner.propose(
+            task_id,
+            instruction=body.instruction,
+            acceptance_conditions=tuple(
+                (item.kind, dict(item.arguments)) for item in body.acceptance
+            ),
+        )
     except RunError as exc:
         raise _refuse(exc) from exc
     except (ModelNotSelectableError, OpenCodeConfigurationError) as exc:

@@ -11,7 +11,6 @@ import {
   fetchTaskRuns,
   fetchTasks,
   forgetModelPlanSession,
-  planTaskRun,
   proposeModelPlan,
   recordProofAcceptance,
   recordProofPublicShare,
@@ -225,6 +224,58 @@ const RUN_PHASE_LABEL: Record<AgentRunPhaseName, string> = {
   artifact_missing: "Soz verilen cikti uretilmedi",
 };
 
+/** Scopes a step can hold that put bytes in the workspace. */
+const WRITING_SCOPES: ReadonlySet<string> = new Set(["write_workspace"]);
+
+/** Whether any step of this run is one that can write. */
+function writesAnything(run: AgentRunStatus): boolean {
+  return run.steps.some((step) => WRITING_SCOPES.has(step.scope));
+}
+
+/**
+ * What a finished run actually established, as a sentence and a tone.
+ *
+ * `completed` is one phase and three different findings, and the screen used
+ * to print the best of them for all three. "Bitti: her adim yapildi, soz
+ * verilen her cikti var" is **vacuously true** of a plan that promised
+ * nothing: zero artifacts were promised, so every promised artifact exists,
+ * and the reader is handed a green tick for a run that made nothing. The
+ * owner met exactly that and could not tell whether anything had happened.
+ *
+ * The three are separated by what the run itself carries - the promise it
+ * recorded and the scopes its steps hold - never by a new phase invented for
+ * this screen and never by reading the task's workspace, which holds files
+ * this run did not write.
+ *
+ * The honest half is kept and kept said: "her adim yapildi" is true in all
+ * three, and only the clause claiming an achievement nobody made is withheld.
+ * Neither of the two quieter endings is a failure - nothing was refused, no
+ * ceiling was hit and no promise was broken - so they are toned `inactive`
+ * rather than `problem`, which stays what `artifact_missing` and the two
+ * refusals mean.
+ */
+export function deriveRunEnding(run: AgentRunStatus): {
+  readonly label: string;
+  readonly tone: "ok" | "pending" | "inactive" | "problem";
+} {
+  if (run.phase !== "completed") {
+    return { label: RUN_PHASE_LABEL[run.phase], tone: RUN_PHASE_TONE[run.phase] };
+  }
+  if (run.expected_artifacts.length > 0) {
+    return { label: RUN_PHASE_LABEL.completed, tone: RUN_PHASE_TONE.completed };
+  }
+  if (writesAnything(run)) {
+    return {
+      label: "Bitti: her adim yapildi, bir dosya uretildi ama plan onu soz vermedi, o yuzden denetlenmedi",
+      tone: "inactive",
+    };
+  }
+  return {
+    label: "Bitti: her adim yapildi, ama plan bir cikti soz vermedi ve hicbir dosya uretmedi",
+    tone: "inactive",
+  };
+}
+
 const RUN_PHASE_TONE: Record<AgentRunPhaseName, "ok" | "pending" | "inactive" | "problem"> = {
   planned: "inactive",
   running: "pending",
@@ -398,9 +449,9 @@ const NEXT_STEP: Record<TaskStateName, TaskNextStep> = {
   },
   awaiting_approval: {
     action:
-      "Gorev icin bir plan yazin ve kaydedin. Kaydetmek hicbir seyi calistirmaz; calistirmak dort onaydan sonra ayri bir islemdir.",
-    control: "Plani kaydet (calistirmaz)",
-    where: "Plan olustur",
+      "Modelden bir plan isteyin. Bu bir tur harcar; oneri hicbir seyi calistirmaz ve calistirmak dort onaydan sonra ayri bir islemdir. Sonucun 'gecti' veya 'kaldi' olabilmesi icin once bir basari olcutu secin - yoksa sonuc 'uygulanmadi' kalir.",
+    control: "Modelden plan oner (calistirmaz)",
+    where: "Modelden plan onerisi",
   },
   running: {
     action:
@@ -535,8 +586,20 @@ const BLOCK_ACTS: Record<
   fields: () => false,
   workspace: () => false,
   readiness: (task) => task?.state === "review_needed",
-  acceptance: () => true,
-  share: () => true,
+  // Neither route carries a state precondition - they write a field and stop -
+  // so neither is ever *unable* to act, and an earlier pass that folded
+  // acceptance whenever a task had no recorded run was caught by a
+  // `review_needed` test and was right to be: claiming a precondition the
+  // backend does not have is the same class of lie as hiding one it does.
+  //
+  // What folds them here is not a precondition but an order. In `suggested`
+  // and `awaiting_approval` there is nothing to accept yet and nothing to
+  // mark shared, and putting both between a person and the one control that
+  // can act is how this screen became unreadable. They open from
+  // `review_needed` onward, which is where the earlier test lives, and they
+  // expand on demand everywhere else.
+  acceptance: (task) => task?.state !== "suggested" && task?.state !== "awaiting_approval",
+  share: (task) => task?.state !== "suggested" && task?.state !== "awaiting_approval",
   model: (task) => task?.state === "awaiting_approval",
   composer: (task) => task?.state === "awaiting_approval",
   runs: (task) =>
@@ -737,12 +800,6 @@ const CANNOT_DO: readonly string[] = [
   "kendi arac listesine yeni bir arac eklemek",
   "kendi butce tavanini yukseltmek",
 ];
-
-/** A single draft step: a registered tool id and its typed arguments. */
-interface DraftStep {
-  readonly toolId: string;
-  readonly args: Readonly<Record<string, string>>;
-}
 
 /** A single draft acceptance condition: a registered kind and its arguments. */
 interface DraftCondition {
@@ -1085,7 +1142,9 @@ function RunCard({
         <span className="text-sm font-medium text-foreground">
           {`Calisma ${shortId(run.id)}`}
         </span>
-        <StatusPill label={RUN_PHASE_LABEL[run.phase]} tone={RUN_PHASE_TONE[run.phase]} />
+        <span data-testid={`tasks-run-ending-${run.id}`}>
+          <StatusPill label={deriveRunEnding(run).label} tone={deriveRunEnding(run).tone} />
+        </span>
         {run.stop_requested && <StatusPill label="Durdurma istendi" tone="pending" />}
       </div>
 
@@ -1219,6 +1278,21 @@ function RunCard({
         )} saniye tavan · eszamanlilik ${String(run.concurrency)}`}
       </p>
 
+      {/* The card already says "Bu plan bir cikti dosyasi soz vermedi", which
+          is a fact about the promise; a plan may promise nothing and still
+          write something. This is the stronger reading, taken from the step
+          scopes, and it sits above the four approvals so a person meets it
+          before spending them rather than after the run. */}
+      {run.phase === "planned" && run.expected_artifacts.length === 0 && !writesAnything(run) && (
+        <p
+          className="text-xs text-muted"
+          data-testid={`tasks-writes-nothing-${run.id}`}
+        >
+          Bu planin hicbir adimi yazma yetkisi tasimiyor: onaylanip
+          calistirilsa da hicbir dosya olusturmaz.
+        </p>
+      )}
+
       {/* --- the four approvals, keyed to this run --------------------- */}
       <fieldset className="flex flex-col gap-2 rounded-lg border border-border p-2">
         <legend className="text-xs font-semibold text-foreground">
@@ -1294,13 +1368,6 @@ export function TasksPanel() {
   const [error, setError] = useState<ApiError | null>(null);
   const [step, setStep] = useState<Step>("read");
 
-  // The plan being composed. Plain React state: never a browser store, and
-  // never seeded from one (SI-24).
-  const [toolId, setToolId] = useState("");
-  const [args, setArgs] = useState<Readonly<Record<string, string>>>({});
-  const [draft, setDraft] = useState<readonly DraftStep[]>([]);
-  const [artifacts, setArtifacts] = useState("");
-  const [condition, setCondition] = useState("");
 
   // The machine-checkable half of a plan. Optional by construction: leaving
   // it empty records a plan whose verdict is `not_implemented`, which is the
@@ -1381,13 +1448,8 @@ export function TasksPanel() {
     setSelected(taskId);
     setBusy("task");
     setError(null);
-    // A different task is a different workspace and a different plan; the
-    // half-composed draft would otherwise be recorded against the new one.
-    setDraft([]);
-    setArgs({});
-    setToolId("");
-    setArtifacts("");
-    setCondition("");
+    // A different task is a different workspace; a criterion chosen for the
+    // old one would otherwise ride along to the new one.
     setCheckKind("");
     setCheckArgs({});
     setCheckDraft([]);
@@ -1432,36 +1494,6 @@ export function TasksPanel() {
     }
   }
 
-  async function recordPlan(): Promise<void> {
-    if (busy !== null || selected === "" || draft.length === 0 || condition.trim() === "") return;
-    setBusy("plan");
-    setError(null);
-    try {
-      const next = await planTaskRun({
-        taskId: selected,
-        steps: draft.map((item) => ({ tool_id: item.toolId, arguments: item.args })),
-        expectedArtifacts: artifacts
-          .split(",")
-          .map((name) => name.trim())
-          .filter((name) => name !== ""),
-        testCondition: condition,
-        acceptance: checkDraft.map((item) => ({ kind: item.kind, arguments: item.args })),
-      });
-      setDetail(next);
-      setDraft([]);
-      setArgs({});
-      setToolId("");
-      setCheckDraft([]);
-      setCheckArgs({});
-      setCheckKind("");
-      setList(await fetchTasks());
-    } catch (caught) {
-      setError(toApiError(caught));
-      setStep("plan");
-    } finally {
-      setBusy(null);
-    }
-  }
 
   async function act(
     runId: string,
@@ -1551,7 +1583,11 @@ export function TasksPanel() {
     setBusy("modelTurn");
     setError(null);
     try {
-      const next = await proposeModelPlan({ taskId: selected, instruction });
+      const next = await proposeModelPlan({
+        taskId: selected,
+        instruction,
+        acceptance: checkDraft.map((item) => ({ kind: item.kind, arguments: item.args })),
+      });
       setProposal(next);
       setDetail((current) =>
         current === null ? current : { ...current, task: next.task, runs: [...next.runs] },
@@ -1744,12 +1780,6 @@ export function TasksPanel() {
     setApprovals((current) => ({ ...current, [key]: !current[key] }));
   }
 
-  function addStep(): void {
-    if (toolId === "") return;
-    setDraft((current) => [...current, { toolId, args }]);
-    setArgs({});
-  }
-
   function addCondition(): void {
     if (checkKind === "") return;
     setCheckDraft((current) => [...current, { kind: checkKind, args: checkArgs }]);
@@ -1779,7 +1809,6 @@ export function TasksPanel() {
     );
   }
 
-  const chosenTool = surface.tools.find((tool) => tool.id === toolId) ?? null;
   const chosenCheck =
     surface.acceptance_checks.find((check) => check.kind === checkKind) ?? null;
   const task = detail?.task ?? null;
@@ -2056,129 +2085,17 @@ export function TasksPanel() {
 
             <Separator />
 
-            <ModelPlanRegion
-              busy={busy}
-              instruction={instruction}
-              lane={lane}
-              onForget={() => void forgetModelSession()}
-              onInstruction={setInstruction}
-              onPropose={() => void proposeFromModel()}
-              onReadLane={() => void readModelLane()}
-              open={opened("model")}
-              proposal={proposal}
-              summary={whyClosed("model")}
-            />
-
-            <Separator />
-
-            {/* --- the plan composer ---------------------------------- */}
+            {/* --- the success criterion, chosen before the turn ----- */}
             <DisclosureBlock
-              label="Plan olustur"
+              label="Basari olcutu"
               level={3}
               open={opened("composer")}
               summary={blockSummary(
-                "Plan kaydetmek hicbir seyi calistirmaz; calistirmak dort onaydan sonra ayri bir islemdir.",
+                "Kosul yazmazsaniz sonuc 'uygulanmadi' kalir ve gorev yayima hazir sayilmaz.",
                 whyClosed("composer"),
               )}
               summaryTestId="tasks-composer-summary"
             >
-              {/* The state is named from `STATE_LABEL` rather than spelled
-                  out here. This sentence was the one place that still said
-                  "onay bekliyor" after the vocabulary was fixed, and a screen
-                  that calls one state two things is the defect in a smaller
-                  place. */}
-              <p className="text-xs text-muted">
-                {`Plan kaydetmek hicbir seyi calistirmaz. Kaydedilen plan dondurulur: farkli bir plan yeni bir calismadir ve eskisi yargilandigi olcutu korur. Plan kaydetmek icin gorev '${STATE_LABEL.awaiting_approval}' durumunda olmalidir.`}
-              </p>
-
-              <fieldset className="flex flex-col gap-2">
-                <legend className="text-xs font-semibold text-foreground">
-                  Adim icin arac secin
-                </legend>
-                {surface.tools.map((tool) => (
-                  <label className="flex items-start gap-2" key={tool.id}>
-                    <input
-                      checked={toolId === tool.id}
-                      disabled={busy !== null}
-                      name={`${ids}-tool`}
-                      onChange={() => {
-                        setToolId(tool.id);
-                        setArgs({});
-                      }}
-                      type="radio"
-                      value={tool.id}
-                    />
-                    <span className="text-xs text-muted">
-                      <span className="font-mono text-foreground">{tool.id}</span>
-                      {` — ${SCOPE_LABEL[tool.scope]}`}
-                    </span>
-                  </label>
-                ))}
-              </fieldset>
-
-              {chosenTool !== null &&
-                chosenTool.params.map((param) => (
-                  <TextField
-                    className="w-full"
-                    key={param.name}
-                    onChange={(next: string) =>
-                      setArgs((current) => ({ ...current, [param.name]: next }))
-                    }
-                    value={args[param.name] ?? ""}
-                  >
-                    <Label>
-                      {`${param.name} (${param.type}${param.required ? ", zorunlu" : ", istege bagli"})`}
-                    </Label>
-                    {param.type === "text" ? (
-                      <TextArea rows={4} variant="secondary" />
-                    ) : (
-                      <Input autoComplete="off" variant="secondary" />
-                    )}
-                  </TextField>
-                ))}
-
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  isDisabled={busy !== null || toolId === ""}
-                  onPress={addStep}
-                  size="sm"
-                  variant="secondary"
-                >
-                  Adimi plana ekle
-                </Button>
-                <span className="text-xs text-muted">
-                  {`Plandaki adim sayisi: ${String(draft.length)}`}
-                </span>
-              </div>
-
-              {draft.length > 0 && (
-                <ul className="flex flex-col gap-1" data-testid="tasks-draft-steps">
-                  {draft.map((item, index) => (
-                    <li
-                      className="font-mono text-xs text-muted"
-                      key={`${item.toolId}-${String(index)}`}
-                    >
-                      {`${String(index + 1)}. ${item.toolId} · argumanlar: ${
-                        Object.keys(item.args).length === 0
-                          ? "(yok)"
-                          : Object.keys(item.args).join(", ")
-                      }`}
-                    </li>
-                  ))}
-                </ul>
-              )}
-
-              <TextField className="w-full" onChange={setArtifacts} value={artifacts}>
-                <Label>Soz verilen cikti dosyalari (virgulle ayrilmis)</Label>
-                <Input autoComplete="off" variant="secondary" />
-              </TextField>
-
-              <TextField className="w-full" onChange={setCondition} value={condition}>
-                <Label>Basari olcutu (kaydedilir, bu surumde kosulmaz)</Label>
-                <TextArea rows={3} variant="secondary" />
-              </TextField>
-
-              {/* --- the machine-checkable half of the plan ------------- */}
               <fieldset className="flex flex-col gap-2" data-testid="tasks-acceptance-composer">
                 <legend className="text-xs font-semibold text-foreground">
                   Kabul kosullari (istege bagli, ama yazilmazsa sonuc &quot;uygulanmadi&quot; olur)
@@ -2263,22 +2180,23 @@ export function TasksPanel() {
                   </ul>
                 )}
               </fieldset>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  isDisabled={
-                    busy !== null || draft.length === 0 || condition.trim() === ""
-                  }
-                  onPress={() => void recordPlan()}
-                >
-                  {busy === "plan" ? "Kaydediliyor..." : "Plani kaydet (calistirmaz)"}
-                </Button>
-                <span className="text-xs text-muted">
-                  Kaydetmek calistirmaz. Calistirmak, dort onaydan sonra ayri
-                  bir islemdir.
-                </span>
-              </div>
             </DisclosureBlock>
+
+            <Separator />
+
+            <ModelPlanRegion
+              busy={busy}
+              instruction={instruction}
+              lane={lane}
+              onForget={() => void forgetModelSession()}
+              onInstruction={setInstruction}
+              onPropose={() => void proposeFromModel()}
+              onReadLane={() => void readModelLane()}
+              open={opened("model")}
+              proposal={proposal}
+              summary={whyClosed("model")}
+            />
+
 
             <Separator />
 
@@ -2619,13 +2537,7 @@ function ModelPlanRegion({
           the relaunch, because "a ceiling a restart clears" and "a ceiling a
           restart does not clear" are different promises. */}
       <p className="text-xs text-muted" data-testid="tasks-model-turn-rule">
-        Bir istek bir tur harcar ve tur istegin icinde biter: zamanlayici, arka
-        plan gorevi ve otomatik ikinci tur yoktur. Oturumu unutmak yalnizca
-        bellekteki konusmayi duser; kaydedilmis planlar, calisma alani ve
-        kanitlar oldugu gibi kalir ve tavan sifirlanmaz. Harcanan tur sayisi
-        goreve yazilir: ne oturumu unutmak ne de uygulamayi yeniden baslatmak
-        onu geri verir. Tavani dolan bir gorevin turu geri gelmez; yeni bir
-        gorev kendi tavaniyla baslar.
+        Bir istek bir tur harcar; arka plan gorevi ve otomatik ikinci tur yoktur. Oturumu unutmak konusmayi duser, tavan sifirlanmaz — yeniden baslatmak da geri vermez.
       </p>
 
       {proposal === null ? (
@@ -2672,10 +2584,8 @@ function ModelPlanRegion({
             }`}
           </p>
           <p className="text-xs text-muted" data-testid="tasks-model-usage-rule">
-            Bu kullanim ve maliyet degerleri saglayicinin kendi bildirimidir,
-            bizim olcumumuz degildir ve tavan olarak kullanilmaz. Tavan, bu
-            istasyonun kendi sayabildigi bir birimdedir: model cagrisi sayisi.
-          </p>
+        Bu degerler saglayicinin bildirimidir: bizim olcumumuz degildir ve tavan olarak kullanilmaz.
+      </p>
 
           {proposal.tool_call_provenance !== "" && (
             <p className="text-xs text-muted" data-testid="tasks-model-turn-provenance">
@@ -2788,10 +2698,7 @@ function AcceptanceRegion({
       </div>
 
       <p className="text-xs text-muted" data-testid="tasks-acceptance-rule">
-        Kabul, gecisin girdisidir; ciktisi degil. Kabul kaydetmek gorevi hicbir
-        duruma tasimaz ve hicbir sey yayimlamaz. Kabul, o an gordugunuz paketin
-        ozetine baglanir: paket bu arada degistiyse istek reddedilir ve yeni
-        paketi okuyup tekrar kabul etmeniz gerekir.
+        Kabul kaydetmek gorevi hicbir duruma tasimaz ve hicbir sey yayimlamaz. Kabul o an okudugunuz paketin ozetine baglanir; paket degisirse yeniden okumaniz gerekir.
       </p>
 
       <div>

@@ -4573,3 +4573,88 @@ npm --prefix apps/station-web run test:e2e -- e2e/tests/composer.spec.ts
 ```
 
 Commit, push veya deploy **yapılmadı** (INV-08).
+
+---
+
+## Ekranı sahibinin kullanabileceği hâle getirmek (6 Eylül 2026)
+
+Sahibi ürünü kullandı ve şunu yazdı: *"çok fazla koşul eklemişsin çok fazla
+şey var abi bırak modeli yapsın kendisi tıkırında ya bu kadar zor olmasına
+gerek yok"*. Üç istek çıktı ve üçü de burada; **testler ajanlara değil, bu
+turda elle yapıldı** (yine sahibinin isteği).
+
+### 1. Elle plan bestecisi kaldırıldı
+
+Planı model yazar. Araç radyoları, "Adimi plana ekle", söz verilen çıktılar
+alanı, başarı ölçütü metin alanı ve "Plani kaydet (calistirmaz)" gitti — 207
+satır JSX ve onu besleyen beş React state'i (`toolId`, `args`, `draft`,
+`artifacts`, `condition`), `recordPlan`, `addStep`, `chosenTool`, `DraftStep`
+ve `planTaskRun` import'u. Rota **duruyor**: `POST /runs` hâlâ var ve
+testlerle sabitli; kaldırılan şey arayüzün onu sunması.
+
+### 2. Kabul koşulu artık modelin planına biniyor
+
+`plan_run` `acceptance_conditions` parametresini zaten kabul ediyordu;
+`_record_plan` onu geçirmiyordu. Yani **model önerisiyle kaydedilen hiçbir
+plan bir verdi kazanamıyordu** — koşul eklemenin tek yolu planın tamamını
+elle yazmaktı, ve o yol da şimdi kalkıyordu.
+
+`propose(..., acceptance_conditions=...)` → `_record_plan` → `plan_run`
+bağlandı, `ModelProposeRequest` alanı kazandı, seçici modelin **üstüne**
+taşındı. Koşullar tur harcanmadan önce seçilir ve istekle gider: koşullar
+`plan_sha256`'nın içindedir, onaylanmış bir plana sonradan eklemek onayı
+geçersiz kılardı.
+
+Modelden koşul **istenmiyor** ve bu bilinçli: kendi yargılanacağı ölçütü de
+yazan bir öneri sahibine bir ölçüt vermiş olmaz.
+
+### 3. Telde duran bir limit yükseltmesi ortaya çıktı
+
+`MAX_INSTRUCTION_CHARS` 32 000'e çıkarılmıştı ama
+`ModelProposeRequest.instruction` **2 000**'de kalmıştı. Yükseltme hiçbir
+isteğe ulaşmıyordu: daha uzun bir yönerge servise girmeden 422 alıyordu, ve
+limit gibi okunan sabit limit değildi. İkisi eşitlendi ve
+`test_the_wire_cap_on_an_instruction_is_the_service_cap` ikisini birbirine
+bağladı — yalnız servis sabitini okuyan bir test bugün de yeşil olurdu.
+
+### 4. Tamamlanma bir başarı değildir
+
+`RUN_PHASE_LABEL.completed` şunu diyordu: *"Bitti: her adim yapildi, soz
+verilen her cikti var"*, tonu `ok`. Sıfır çıktı söz veren bir plan için bu
+cümle **boş yere doğrudur** ve sahibi tam olarak buna baktı: üç okuma aracı
+koşmuş, hiçbir dosya yazılmamış, ekran yeşil tik göstermişti.
+
+`deriveRunEnding` bir fazı üç bulguya ayırıyor — söz verip tutan, hiçbir şey
+söz vermeyip hiçbir şey üretmeyen, ve söz vermeyip yine de bir dosya yazan.
+Ayrım koşunun kendi kaydından türetiliyor (söz verilen liste + adım
+kapsamları), ekrana özel yeni bir fazdan veya görevin çalışma alanından
+değil — o alan bu koşunun yazmadığı dosyaları da tutar. Dürüst yarısı
+kalıyor: "her adim yapildi" üçünde de doğru ve üçünde de söyleniyor.
+
+Aynı okuma **onaylardan önce** de duruyor: hiçbir adımı yazma yetkisi
+taşımayan bir plan, dört onay ve bir koşu harcanmadan önce bunu söylüyor.
+
+### 5. Yazı hacmi
+
+Görevler ekranındaki 40 karakterden uzun paragraflar: **6967 → 6485**. Asıl
+kazanç kısaltmada değil: `awaiting_approval`'da açık kalan blok sayısı
+**5'ten 3'e** indi. Kabul ve public paylaşım blokları `suggested` ve
+`awaiting_approval`'da kapanıyor — bir ön koşul iddiası değil, bir sıra
+iddiası: orada henüz kabul edilecek bir paket ve paylaşılacak bir gönderim
+yok. `review_needed`'dan itibaren ikisi de açık; daha önce bir e2e testi
+bunları koşulsuz kapatan bir denemeyi yakalamıştı ve haklıydı.
+
+### Kapılar
+
+ruff ×2 temiz · mypy 153 dosya · **2794 pytest** · **486 Vitest** · **91
+Playwright** · 82 paketleme. SPA değişti, paketleme artefaktı yeniden
+derlendi. `tests/security/` altında hiçbir test atlanmadı, silinmedi veya
+gevşetilmedi.
+
+### Kayda geçen iki şey
+
+- `deriveRunEnding` testlerini bir ajan yazmıştı ve uygulaması yokken
+  durduruldu; testler okundu, doğru bulundu ve uygulama elle yazıldı.
+- Elle plan yolunu süren üç bileşen testi silinmedi, **model yolundan
+  sürecek şekilde yeniden yazıldı**: aynı kural, hâlâ yapılabilen bir eylemle
+  kanıtlanıyor.

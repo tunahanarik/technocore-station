@@ -55,6 +55,7 @@ timestamps.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -428,7 +429,13 @@ class ModelPlannerService:
 
     # --- one turn ----------------------------------------------------------
 
-    def propose(self, task_id: str, *, instruction: str = "") -> ProposalView:
+    def propose(
+        self,
+        task_id: str,
+        *,
+        instruction: str = "",
+        acceptance_conditions: Sequence[tuple[str, dict[str, str]]] = (),
+    ) -> ProposalView:
         """Spend one model turn and record what it proposed, if anything.
 
         The order below is the order the refusals have to happen in for the
@@ -512,7 +519,9 @@ class ModelPlannerService:
         if not proposal.wants_tools:
             return self._turn_without_calls(task_id, session, proposal, usage)
 
-        return self._record_plan(task, session, proposal, usage)
+        return self._record_plan(
+            task, session, proposal, usage, acceptance_conditions
+        )
 
     # --- a turn that proposed nothing --------------------------------------
 
@@ -593,6 +602,7 @@ class ModelPlannerService:
         session: _Session,
         proposal: PlanProposal,
         usage: str,
+        acceptance_conditions: Sequence[tuple[str, dict[str, str]]] = (),
     ) -> ProposalView:
         """Resolve every proposed call, or refuse the turn whole."""
         if task.state is not TaskState.AWAITING_APPROVAL:
@@ -624,6 +634,7 @@ class ModelPlannerService:
                 steps=steps,
                 expected_artifacts=_promised_artifacts(steps),
                 test_condition=_condition_sentence(steps),
+                acceptance_conditions=acceptance_conditions,
             )
         except (ToolRegistryError, ToolArgumentError) as exc:
             # ``plan_run`` has already recorded the permission denial and has

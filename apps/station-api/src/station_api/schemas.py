@@ -1941,7 +1941,25 @@ class ModelProposeRequest(StrictModel):
     proposal is allowed to be.
     """
 
-    instruction: str = Field(default="", max_length=2000)
+    #: The wire cap and :data:`~station_api.planner.service.MAX_INSTRUCTION_CHARS`
+    #: are the same number on purpose. They were not: the service raised its
+    #: bound to 32 000 and this field stayed at 2 000, so the raise never
+    #: reached a request - anything longer was a 422 before the service was
+    #: entered, and the constant that looked like the limit was not the limit.
+    instruction: str = Field(default="", max_length=32_000)
+    #: The conditions the recorded plan is judged by, chosen by the person
+    #: **before** the turn is spent.
+    #:
+    #: The model does not write these and is not asked to: a proposer that
+    #: also writes the criterion it will be judged by has not been given a
+    #: criterion. Without them a proposal is recorded exactly as it was and
+    #: reports ``not_implemented``, which is what an unchecked plan has
+    #: earned; with them the same plan gets a real verdict. Same closed
+    #: registry and same cap as :class:`AgentPlanRequest`, because it is the
+    #: same field reaching the same recorder.
+    acceptance: list[AgentAcceptanceConditionRequest] = Field(
+        default_factory=list, max_length=8
+    )
 
 
 class ModelProposalResponse(StrictModel):
