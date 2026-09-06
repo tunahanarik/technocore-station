@@ -404,7 +404,8 @@ kullanıcının eylemidir ve olağan `transition` yolundan geçer.
 
 Görev satırı içeriğin **özetini** tutar, baytlarını değil. Bu ölçülen bir
 kusur üretti: bir modele taranmış istekten gösterilebilen tek okunur şey
-`title` idi — tek bir satırın ilk `MAX_TITLE_CHARS` (120) karakteri — ve
+`title` idi — tek bir satırın ilk `MAX_TITLE_CHARS` (o gün 120; bugün 2 000,
+ama fiilen bağlayıcı olan `tasks.service.MAX_TITLE_CHARS` = 200'dür) karakteri — ve
 ADR-0007 §8'in sekiz ögesiyle birebir alıntı hash'lenip atılıyordu.
 
 Düzeltme **veritabanına sütun eklemez**. Yeni bir sütun yeni bir depolama,

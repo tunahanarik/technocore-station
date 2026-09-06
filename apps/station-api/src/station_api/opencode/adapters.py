@@ -58,9 +58,32 @@ SHAPE_PROVENANCE = (
     "hesabin sahibine aittir."
 )
 
-#: Cap on a request body. Small on purpose: this lane carries a credential
-#: and a metered call, and neither benefits from an unbounded body.
-MAX_REQUEST_BYTES = 256 * 1024
+#: Cap on a request body. Bounded on purpose: this lane carries a credential
+#: and a metered call, and neither benefits from an *unbounded* body.
+#:
+#: It was ``256 KiB``, and that stopped being a bound on nothing the day the
+#: planner's own truncation guards were raised. **Measured** with the raised
+#: guards in place: a session's second turn - one full-size instruction plus
+#: the eight tool results one turn may produce - builds a body of about
+#: 293 000 bytes and was refused here, which is a hard
+#: ``OpenCodeResponseError`` in the middle of a working session rather than
+#: any kind of protection. A cap that fires on ordinary use is a defect
+#: wearing a limit's clothes.
+#:
+#: 2 MiB is derived from the worst case the ceilings above it permit rather
+#: than picked: eight turns at ``MAX_INSTRUCTION_CHARS`` (32 000) plus the
+#: 32 tool results ``RunCeiling.max_tool_calls`` allows at
+#: ``MAX_TOOL_RESULT_CHARS`` (32 000) plus the tool-registry envelope is
+#: about 1.3 MB, and 2 MiB is the next power of two above it with room for
+#: the JSON escaping of non-ASCII text. It stays below
+#: :data:`MAX_RESPONSE_BYTES` (4 MiB), which is the ordering that was already
+#: here.
+#:
+#: What did **not** change: this is still the only thing that keeps a body
+#: bounded at all, it is still checked before a single byte leaves, and the
+#: ceilings that decide what a session may *spend* - ``max_model_calls`` and
+#: ``max_wall_clock_seconds`` - are untouched.
+MAX_REQUEST_BYTES = 2 * 1024 * 1024
 
 #: Cap on a parsed response document.
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
@@ -88,22 +111,28 @@ MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 #: reasoning is charged against this same ceiling, so the budget was gone
 #: before the part we asked for began.
 #:
-#: ``4096`` is derived from the two figures this repository can point at
-#: rather than picked for roundness:
+#: It was then ``4096``, derived by adding the observed 1024 of reasoning to
+#: the token-equivalent of one full-size ``arguments`` string and rounding up
+#: to a power of two. That arithmetic was sound and the number it produced was
+#: still a guess dressed as a derivation - it assumed one call, of the
+#: maximum size, after the amount of reasoning that happened to be measured
+#: once.
 #:
-#: * **1024** output tokens were observed to go by before any call appeared,
-#:   so the ceiling has to sit above that with room left over;
-#: * one proposed call's ``arguments`` are capped by this build itself at
-#:   :data:`station_api.opencode.planner.MAX_ARGUMENTS_CHARS` = 8000
-#:   characters, which is on the order of 2000 tokens.
+#: **It is now ``131072``, and the reason is that this number should stop
+#: being interesting.** ``max_tokens: 200000`` was sent to this provider and
+#: accepted (``200``), so the request is not refused for asking; unused output
+#: tokens are not billed, so asking for headroom costs nothing; and a ceiling
+#: whose only job is to keep an answer from being cut off mid-sentence does
+#: that job best when it is far above any answer. 131072 is the largest power
+#: of two below the accepted 200000.
 #:
-#: 1024 + 2000 is about 3072, and 4096 is the next power of two above it, so a
-#: turn that reasons as much as the measured one can still emit a full-size
-#: call. It is **not** a claim that 4096 is always enough: a turn that reaches
-#: it is now reported as *truncated* instead of as finished
-#: (:class:`station_api.planner.service.ProposalOutcome`), which is the half
-#: of the fix that does not depend on guessing this number correctly.
-DEFAULT_MAX_OUTPUT_TOKENS = 4096
+#: **Past this point the number is not the binding constraint and should not
+#: be read as one.** What actually stops a runaway turn is the 120-second read
+#: timeout in :data:`station_api.opencode.client.TIMEOUT`: a response still
+#: arriving after two minutes is abandoned whatever this says. What bounds
+#: spend is still ``max_model_calls``, unchanged at 8. Lowering this constant
+#: buys nothing and reintroduces the truncation it was raised to remove.
+DEFAULT_MAX_OUTPUT_TOKENS = 131_072
 
 #: Status codes we can name. Anything else is ``PROVIDER_ERROR``: an error we
 #: can see and will not pretend to have classified.

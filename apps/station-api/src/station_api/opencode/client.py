@@ -21,11 +21,16 @@ bounded retry and no more.
 that writes an ``Authorization`` header, and it says in one line that the
 scheme is **not published**. When the contract appears, one line changes.
 
-*Response text.* An upstream error body can echo back what was sent. The
-credential is registered for redaction by the service before any call, and
-:func:`station_api.logging_setup.redact` is applied to every excerpt this
-module produces, so a reflected key cannot reach a log line, an exception or
-the UI.
+*Response text.* An upstream error body can echo back what was sent, and it
+can also carry what the model was thinking. Two scrubs are therefore applied
+to every excerpt this module produces, in the same function and for the same
+reason: :func:`station_api.logging_setup.redact`, so a reflected credential
+cannot reach a log line, an exception or the UI; and
+:data:`DISCARDED_MESSAGE_FIELDS`, so a ``reasoning_content`` member cannot
+either. The second one is newer than the first and was missing: a ``200``
+carrying an ``error`` member is quoted **whole** into the sentence the surface
+shows, which made "not shown" (ADR-0012 1) false on that one path while it was
+true everywhere else.
 
 Transport rules, unchanged from the reviewed clients
 ----------------------------------------------------
@@ -49,6 +54,7 @@ import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
@@ -70,6 +76,7 @@ from station_api.opencode.registry import (
     get_endpoint,
     protocol_endpoint,
 )
+from station_api.strict_json import StrictJsonError, canonical_json_bytes, loads_strict
 
 #: Our own, and deliberately free of anything identifying. The documentation
 #: asks clients not to use a broad user agent; it does not ask us to pretend
@@ -156,9 +163,44 @@ ALLOWED_RESPONSE_HEADERS = ("content-type", "retry-after")
 #: Read granularity for the streaming size check.
 _CHUNK_BYTES = 64 * 1024
 
-#: How much of an error body may be quoted back to the user. Bounded, swept
-#: and redacted; it is data, never an assertion.
+#: How much of an error body may be quoted back to the user. Bounded, swept,
+#: redacted and stripped of the fields below; it is data, never an assertion.
 MAX_EXCERPT_CHARS = 240
+
+#: Fields a provider may send whose values must never leave this module.
+#:
+#: ``reasoning_content`` is the one that was measured; the other two are the
+#: spellings the same idea travels under elsewhere.
+#: :mod:`station_api.opencode.planner` imports this tuple rather than keeping
+#: its own copy, but it **lives here**, beside :func:`_excerpt`, because this
+#: is where the leak was.
+#:
+#: The parser cannot leak one of these: :class:`PlanProposal` has no field
+#: that could hold it, so a value read out of a message has nowhere to go.
+#: The excerpt is the other door and it was standing open. A provider failure
+#: quotes the body back into a sentence a person reads
+#: (``planner._failed(..., quote=True)`` and ``adapters._with_excerpt``), and
+#: a ``200`` carrying an ``error`` member is quoted **whole** - reasoning
+#: field included. ADR-0012 1 says the field is not read, not used, not
+#: stored, not **shown** and not logged; four of those five held.
+#:
+#: So the tuple is applied here, in the same function as the credential
+#: redaction and for the same reason: this is the last point at which an
+#: upstream body is still bytes we control, and the first at which it becomes
+#: a string somebody else may render.
+DISCARDED_MESSAGE_FIELDS: tuple[str, ...] = (
+    "reasoning_content",
+    "reasoning",
+    "thinking",
+)
+
+#: How deep :func:`_pruned` will walk a body before refusing to quote it.
+#:
+#: A response nested deeper than this is not a shape anything measured
+#: produces, and a recursion that stops early would silently stop pruning -
+#: which is the failure mode this whole constant exists to prevent. Exceeding
+#: it drops the quotation instead.
+MAX_EXCERPT_DEPTH = 12
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,9 +226,89 @@ class RawResponse:
     excerpt: str = ""
 
 
+class _TooDeepToPruneError(Exception):
+    """A body nested past :data:`MAX_EXCERPT_DEPTH`. Not quotable."""
+
+
+def _pruned(value: Any, depth: int = 0) -> tuple[Any, bool]:
+    """``value`` with every discarded field gone, and whether one was there.
+
+    The flag is what keeps this from rewriting bodies it did not need to
+    touch: a quotation is more useful the closer it is to what the provider
+    actually sent, so a body carrying no reasoning field is returned to the
+    caller untouched rather than re-serialised into our own spelling of
+    itself.
+    """
+    if depth > MAX_EXCERPT_DEPTH:
+        raise _TooDeepToPruneError
+    if isinstance(value, dict):
+        kept: dict[str, Any] = {}
+        removed = False
+        for key, member in value.items():
+            if key in DISCARDED_MESSAGE_FIELDS:
+                removed = True
+                continue
+            kept[key], hit = _pruned(member, depth + 1)
+            removed = removed or hit
+        return kept, removed
+    if isinstance(value, list):
+        items: list[Any] = []
+        removed = False
+        for member in value:
+            item, hit = _pruned(member, depth + 1)
+            items.append(item)
+            removed = removed or hit
+        return items, removed
+    return value, False
+
+
+def _quotable(text: str) -> str:
+    """``text`` with no reasoning field in it, or ``""`` if that is not certain.
+
+    Three outcomes, and the third is the point:
+
+    * a body that parses and carries none of the fields is returned **as it
+      arrived**, so every failure sentence this build already produces is
+      unchanged;
+    * a body that parses and carries one is re-serialised without it. The
+      provider's own error text survives - that is what the quotation is for,
+      and a diagnostic that shows nothing is a diagnostic nobody keeps - and
+      only the discarded members are gone;
+    * a body that does **not** parse, or is nested absurdly, is dropped
+      entirely if it so much as names one of the fields. Text we cannot take
+      apart is text we cannot prove is safe to show, and the fail-closed
+      answer costs a sentence. ``evidence.language`` drops a whole excerpt on
+      the same reasoning when neutralisation is not certain.
+
+    Note the ``in`` test is over the raw text, not the parse: a truncated body
+    whose reasoning value ran past the byte cap never parses, and that is
+    exactly the body most likely to be mostly reasoning.
+    """
+    try:
+        document = loads_strict(text)
+    except StrictJsonError:
+        document = None
+    if document is None:
+        lowered = text.lower()
+        if any(field in lowered for field in DISCARDED_MESSAGE_FIELDS):
+            return ""
+        return text
+
+    try:
+        kept, removed = _pruned(document)
+    except _TooDeepToPruneError:
+        return ""
+    if not removed:
+        return text
+    # ``canonical_json_bytes`` is used only as a fixed-options serialiser here
+    # - sorted keys, no whitespace, non-ASCII intact. Nothing is signed.
+    return canonical_json_bytes(kept).decode("utf-8")
+
+
 def _excerpt(body: bytes) -> str:
     text = body.decode("utf-8", errors="replace")
-    swept = "".join(" " if character < " " else character for character in text)
+    quotable = _quotable(text)
+    swept = "".join(" " if character < " " else character for character in quotable)
     return redact(swept.strip())[:MAX_EXCERPT_CHARS]
 
 
@@ -492,8 +614,10 @@ __all__ = [
     "AUTH_HEADER_CAVEAT",
     "AUTH_HEADER_NAME",
     "AUTH_SCHEME",
+    "DISCARDED_MESSAGE_FIELDS",
     "MAX_CATALOG_ATTEMPTS",
     "MAX_EXCERPT_CHARS",
+    "MAX_EXCERPT_DEPTH",
     "MAX_METERED_ATTEMPTS",
     "MAX_RETRY_AFTER_SECONDS",
     "RETRYABLE_STATUSES",

@@ -93,7 +93,24 @@ MAX_ROOMS_PER_SCAN = 10
 
 #: Longest title carried onto a suggested task. Bounded here as well as in the
 #: task service, because the value is remote content either way.
-MAX_TITLE_CHARS = 120
+#:
+#: A **truncation guard, not a defence**. What makes a remote title safe is
+#: ``sweep_untrusted`` and the projection rules, which are unchanged; the
+#: number only decides where the quote is cut. 120 characters cut it in the
+#: middle of most real room posts, so the one readable thing a scanned
+#: suggestion carried was usually a fragment.
+#:
+#: **What actually binds is measured and is not this number.**
+#: ``tasks.service.MAX_TITLE_CHARS`` is 200 and ``TaskRecord.title`` is
+#: declared ``String(200)``, so a title longer than 200 characters is cut
+#: there whatever this says. Raising this to 2 000 buys the 80 characters
+#: between the two caps and states the intent; going past 200 needs a schema
+#: migration, which is a different change from a friction bound and is
+#: deliberately not made here.
+#: ``test_work_scan_candidates.py::test_the_title_cap_that_actually_binds_is_the_task_services``
+#: holds the two numbers against each other so the pair cannot drift apart
+#: quietly.
+MAX_TITLE_CHARS = 2_000
 
 #: The module a scanned candidate is filed under. Compile-time, never derived
 #: from what a room said.

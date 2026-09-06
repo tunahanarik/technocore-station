@@ -24,9 +24,8 @@ code rather than into a comment:
 * ``function.arguments`` is a **JSON string**, not an object. Parsing it is a
   step that can fail, and a failure is a refusal rather than an empty
   argument map;
-* the assistant message carried a ``reasoning_content`` field. It is
-  **dropped**, here, before anything else in this application can see it -
-  see below;
+* the assistant message carried a ``reasoning_content`` field. Nothing this
+  module returns can hold it - see below;
 * the body carried a ``cost`` member alongside ``usage``. Both are read as
   the provider sent them and neither is invented when absent (SI-250).
 
@@ -38,16 +37,29 @@ address from the compile-time table, so a model whose row says another family
 cannot be used for planning at all - it is refused by name rather than sent to
 an endpoint whose contract nobody has read.
 
-``reasoning_content`` is dropped, not redacted
------------------------------------------------
+``reasoning_content`` has nowhere to go, which is not the same as being deleted
+-------------------------------------------------------------------------------
 ADR-0008 6 and the H2 schema rule: there is **no column** in this application
 that can hold a model's reasoning, and
 ``test_agent_boundary.py::test_no_agent_table_can_hold_a_model_reasoning_trace``
-enforces that against the database rather than against a promise. This module
-is the only place such a field is ever in memory, and it is discarded in the
-same expression that reads the message: :func:`parse_plan_response` never
-puts it into a :class:`PlanProposal`, so no caller can log it, store it or
-show it even by mistake.
+enforces that against the database rather than against a promise.
+
+What holds it *here* is narrower than this paragraph used to claim, and the
+difference matters because the claim was load-bearing. This module used to
+pop the field off the decoded message and the comment beside the loop called
+that the enforcement. It was not: every field below is taken out of the
+mapping **by name** from an allow-list, and :class:`PlanProposal` has no
+member the value could land in even if the pop were deleted - which was
+measured, by turning the loop into a no-op and finding nothing red anywhere.
+A deletion nothing depends on reads like a control and is not one.
+
+So the type is the control on this path, and it is stated as the type: the
+allow-list above and the shape of :class:`PlanProposal` below. The deny-list
+itself moved to where it is genuinely load-bearing -
+:data:`station_api.opencode.client.DISCARDED_MESSAGE_FIELDS`, applied to the
+bounded excerpt of an error body. That is the path where the value could
+reach a person, because a failure quotes the body back into a sentence the
+surface shows, and it is the half of ADR-0012 1's "not shown" that was open.
 
 A proposal is not a plan and is certainly not a run
 ----------------------------------------------------
@@ -71,6 +83,9 @@ from station_api.opencode.adapters import (
     MAX_REQUEST_BYTES,
     MAX_RESPONSE_BYTES,
     STATUS_FAILURES,
+)
+from station_api.opencode.client import (
+    DISCARDED_MESSAGE_FIELDS as _DISCARDED_MESSAGE_FIELDS,
 )
 from station_api.opencode.client import RawResponse
 from station_api.opencode.errors import OpenCodeResponseError
@@ -115,7 +130,34 @@ TOOL_CHOICE = "auto"
 MAX_CALLS_PER_TURN = 8
 
 #: Longest ``function.arguments`` string accepted before parsing.
-MAX_ARGUMENTS_CHARS = 8_000
+#:
+#: A **truncation guard, not a budget**. What a call may actually contain is
+#: decided by the closed registry: every parameter is typed and bounded by
+#: :mod:`station_api.agent.tools`, whose largest is ``MAX_TEXT_CHARS`` at
+#: 20 000 characters, and those bounds are applied *after* parsing and are
+#: unchanged. This number only decides whether the envelope is read at all.
+#:
+#: Measured, for a maximal ``write_workspace_file`` call - a 120-character
+#: name and a 20 000-character body:
+#:
+#: * as the provider sends it, UTF-8 with no escaping: **20 144** characters.
+#:   8 000 refused this outright, so a legitimate maximal call was being
+#:   rejected for its envelope rather than for its content;
+#: * with ``ensure_ascii`` escaping and an all-Turkish body: 120 144;
+#:   all-emoji: 240 144.
+#:
+#: 64 000 covers the first case three times over, which is the case the
+#: measured provider produces. It does **not** cover a maximal body that
+#: arrives fully ``\uXXXX``-escaped, and that is a deliberate stopping point
+#: rather than an oversight: the outcome there is this build's ordinary
+#: bounded refusal - the whole proposal is dropped and the person is told -
+#: not a crash or a truncated call, and sizing an envelope for the worst
+#: imaginable encoding of the largest imaginable payload is how a guard stops
+#: being one.
+#:
+#: No tension with the workspace ceilings: 64 000 characters is an eighth of
+#: the 512 KiB per-file cap.
+MAX_ARGUMENTS_CHARS = 64_000
 
 #: Longest ``tool_call.id`` kept. It is echoed back verbatim in the following
 #: turn's ``role: "tool"`` message, so it is bounded rather than trusted.
@@ -161,17 +203,18 @@ FINISH_REASON_ABSENT = ""
 #: way in like every other imported value on this lane.
 MAX_FINISH_REASON_CHARS = 64
 
-#: Fields the provider may send that this application must never keep.
+#: Re-exported from :mod:`station_api.opencode.client`, where the tuple now
+#: lives because that is the one place it is consulted.
 #:
-#: ``reasoning_content`` is the one that was actually measured; the other two
-#: are the spellings the same idea travels under elsewhere. Named as a
-#: constant so a test can assert the list is *used* rather than merely
-#: written - a deny-list nothing consults is decoration.
-DISCARDED_MESSAGE_FIELDS: tuple[str, ...] = (
-    "reasoning_content",
-    "reasoning",
-    "thinking",
-)
+#: It was defined here, and the comment beside it said a deny-list nothing
+#: consults is decoration. It was right and it was describing itself: the pop
+#: loop that read it in :func:`parse_plan_response` could be turned into a
+#: no-op with nothing going red. The tuple is kept importable from this module
+#: so ``docs/security-invariants.md``'s SI-331 and its tests still have one
+#: name to point at, and so the protocol layer can say which fields it means -
+#: but the code that acts on it is
+#: :func:`station_api.opencode.client._excerpt`.
+DISCARDED_MESSAGE_FIELDS = _DISCARDED_MESSAGE_FIELDS
 
 MessageRole = Literal["system", "user", "assistant", "tool"]
 
@@ -404,13 +447,15 @@ def parse_plan_response(raw: RawResponse) -> PlanProposal:
     if not isinstance(message, dict):
         return _failed(FailureKind.MALFORMED_BODY, raw)
 
-    # The whole of ADR-0008 6's enforcement in this direction: the fields that
-    # may not be kept are read out of the mapping and thrown away *here*, in
-    # the one function that ever holds them, and every field below is taken by
-    # name from an allow-list rather than by copying the message.
-    for discarded in DISCARDED_MESSAGE_FIELDS:
-        message.pop(discarded, None)
-
+    # ADR-0008 6's enforcement in this direction is the two lines below and
+    # the class they build, not a deletion: every member is taken out of
+    # ``message`` and ``first`` **by name**, the mapping is never copied, and
+    # ``PlanProposal`` has no field a reasoning value could land in. A pop
+    # loop stood here and was removed rather than kept as reassurance - it
+    # was measured to be a no-op, and a control that can be deleted without
+    # anything noticing is one a reader will trust when they should be
+    # reading the allow-list instead. Where the deny-list does work is
+    # ``client._excerpt``, on the error body this function quotes below.
     calls = _tool_calls(message.get("tool_calls"))
     if calls is None:
         return _failed(FailureKind.MALFORMED_BODY, raw)

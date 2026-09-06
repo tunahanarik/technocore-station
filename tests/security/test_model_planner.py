@@ -23,9 +23,12 @@ What this file holds
 * **model output is validated against the closed registry, not executed.** An
   unregistered tool name, an argument of the wrong type and a traversal
   attempt are three separate refusals, and each drops the **whole** proposal;
-* **``reasoning_content`` is never kept.** Not redacted - discarded, in the
-  one function that ever holds it, and there is no column anywhere it could
-  have been written to;
+* **``reasoning_content`` is never kept and never shown.** There is no column
+  anywhere it could be written to and no field on the parsed proposal it could
+  land in - and, since the review that found the hole, no way for it to ride
+  out inside the quotation of a provider error body either. That last one was
+  a real leak on a real path: a ``200`` carrying an ``error`` member is quoted
+  whole into the sentence a person reads;
 * **the ceiling is enforced in a unit Station counts itself.** ``usage`` and
   ``cost`` are recorded verbatim beside the call and neither is read as a
   limit;
@@ -43,9 +46,11 @@ import pytest
 from station_api.agent.budget import CEILING
 from station_api.agent.service import AgentService, RunPhase
 from station_api.agent.workspace import ensure_workspace, write_text
+from station_api.opencode.adapters import MAX_REQUEST_BYTES
 from station_api.opencode.client import OpenCodeClient
 from station_api.opencode.planner import (
     DISCARDED_MESSAGE_FIELDS,
+    MAX_CALLS_PER_TURN,
     MAX_FINISH_REASON_CHARS,
     PLAN_MAX_OUTPUT_TOKENS,
     Message,
@@ -53,9 +58,13 @@ from station_api.opencode.planner import (
     build_plan_request,
     parse_plan_response,
 )
+from station_api.opencode.registry import Protocol
 from station_api.opencode.service import OpenCodeService
 from station_api.planner.service import (
+    MAX_INSTRUCTION_CHARS,
+    MAX_TOOL_RESULT_CHARS,
     REQUEST_FILE_BRIEF,
+    SYSTEM_PROMPT,
     TRUNCATED_DETAIL,
     ModelPlannerService,
     ProposalOutcome,
@@ -82,6 +91,11 @@ MEASURED_REASONING_FIELD = "reasoning_content"
 #: What the model "thought". If any of this ever appears in a view, a row or a
 #: timeline entry, the test that finds it has caught a real leak.
 REASONING_MARKER = "TEST-ONLY-REASONING-MUST-NOT-BE-KEPT"
+
+#: The provider's own words in an error body. A quotation exists so a
+#: person can see this; a fix for the reasoning leak that also removed this
+#: would be a regression wearing a green test.
+PROVIDER_ERROR_SENTENCE = "TEST-ONLY provider said the model id is unknown"
 
 
 def _tool_call_body(
@@ -302,9 +316,15 @@ def test_the_reasoning_field_is_dropped_rather_than_carried() -> None:
     The measured response carried ``reasoning_content``. ADR-0008 6 says this
     application has nowhere to put a model's reasoning and the schema tests
     enforce that against the database - but a value that reached a view could
-    still be logged or shown. So it is discarded in the one function that ever
-    holds it, and the proposal that comes out is checked field by field rather
-    than by looking for the marker in a repr that might not include it.
+    still be logged or shown. So the proposal that comes out is checked field
+    by field rather than by looking for the marker in a repr that might not
+    include it.
+
+    What holds this is the **type**, not a deletion. ``parse_plan_response``
+    used to pop the field off the decoded message and that pop was measured to
+    be a no-op: every member is taken by name from an allow-list and
+    ``PlanProposal`` has no field the value could land in. The pop is gone and
+    this test is unchanged, which is the point.
     """
     raw = _raw(_tool_call_body([_write_call()]))
     proposal = parse_plan_response(raw)
@@ -316,6 +336,96 @@ def test_the_reasoning_field_is_dropped_rather_than_carried() -> None:
         assert REASONING_MARKER not in call.arguments_json
         assert REASONING_MARKER not in call.name
     assert MEASURED_REASONING_FIELD in DISCARDED_MESSAGE_FIELDS
+
+
+def test_a_quoted_provider_error_body_carries_no_reasoning() -> None:
+    """The leak the type-level protection above does not cover.
+
+    ``PlanProposal`` has no field for reasoning, so the parsed *proposal* is
+    clean - and that is what the test above checks, and it is why this one was
+    missing. A failure does not come out of the parsed message. It comes out
+    of the **body**: ``_failed(..., quote=True)`` folds ``raw.excerpt`` into
+    the sentence, and a ``200`` whose body carries an ``error`` member is
+    quoted whole. Whole includes ``reasoning_content``.
+
+    Driven through the real client rather than through ``_raw``, because the
+    excerpt is computed at read time inside ``OpenCodeClient`` - a fixture
+    that passes ``excerpt=""`` cannot see this path at all, which is the other
+    half of why it went unnoticed.
+
+    Both directions are asserted. The marker must be gone, and the provider's
+    own error text must still be there: a fix that dropped the quotation
+    entirely would pass the first assertion while removing the reason the
+    quotation exists.
+    """
+    # Deliberately compact. ``MAX_EXCERPT_CHARS`` is 240, so a body padded out
+    # with the ``id``/``model``/``index``/``finish_reason`` members the real
+    # shape carries pushes the marker past the cut and the test passes because
+    # of *truncation* - which is not the property being asserted and would go
+    # on passing with the whole scrub deleted. Both strings sit inside the cap
+    # here, and the marker is nested two levels down so a pruner that only
+    # walked the top level would still be caught.
+    body = {
+        "error": {"message": PROVIDER_ERROR_SENTENCE},
+        "choices": [{"message": {MEASURED_REASONING_FIELD: REASONING_MARKER}}],
+    }
+    transport, _ = recording_transport(
+        lambda _: httpx.Response(
+            200,
+            content=json.dumps(body).encode(),
+            headers={"content-type": "application/json"},
+        )
+    )
+    raw = OpenCodeClient(transport=transport, sleep=lambda _: None).post_completion(
+        Protocol.CHAT_COMPLETIONS,
+        b"{}",
+        api_key=TEST_ONLY_OPENCODE_CREDENTIAL,
+    )
+    proposal = parse_plan_response(raw)
+
+    assert proposal.failure is not None
+    assert REASONING_MARKER not in raw.excerpt
+    assert REASONING_MARKER not in proposal.failure.detail
+    assert PROVIDER_ERROR_SENTENCE in proposal.failure.detail
+
+
+def test_an_unreadable_body_that_names_a_reasoning_field_is_not_quoted() -> None:
+    """The fail-closed half, driven.
+
+    A body that does not parse cannot be taken apart, and the one most likely
+    not to parse is the one truncated by the byte cap in the middle of a long
+    reasoning value. Text we cannot prove is safe to show is not shown: the
+    quotation is dropped rather than trimmed, and the named failure survives
+    without it.
+
+    The second half of the test is what keeps that from being a licence to
+    drop everything - an unreadable body that names none of the fields is
+    still quoted, so a person debugging a garbled response still sees it.
+    """
+    truncated = (
+        b'{"choices":[{"message":{"role":"assistant","'
+        + MEASURED_REASONING_FIELD.encode()
+        + b'":"'
+        + REASONING_MARKER.encode()
+    )
+    transport, _ = recording_transport(
+        lambda _: httpx.Response(500, content=truncated)
+    )
+    raw = OpenCodeClient(transport=transport, sleep=lambda _: None).post_completion(
+        Protocol.CHAT_COMPLETIONS, b"{}", api_key=TEST_ONLY_OPENCODE_CREDENTIAL
+    )
+
+    assert raw.excerpt == ""
+    assert REASONING_MARKER not in parse_plan_response(raw).failure.detail  # type: ignore[union-attr]
+
+    transport, _ = recording_transport(
+        lambda _: httpx.Response(500, content=b"<html>" + PROVIDER_ERROR_SENTENCE.encode())
+    )
+    plain = OpenCodeClient(transport=transport, sleep=lambda _: None).post_completion(
+        Protocol.CHAT_COMPLETIONS, b"{}", api_key=TEST_ONLY_OPENCODE_CREDENTIAL
+    )
+
+    assert PROVIDER_ERROR_SENTENCE in plain.excerpt
 
 
 def test_arguments_are_a_json_string_and_a_bad_one_is_refused() -> None:
@@ -743,6 +853,71 @@ def test_the_planning_lane_asks_for_a_ceiling_above_the_burn_that_was_measured(
     sent = json.loads(recorder.requests[0].content)
     assert sent["max_tokens"] == PLAN_MAX_OUTPUT_TOKENS
     assert sent["max_tokens"] > 1024
+
+
+def test_a_full_session_still_fits_inside_the_request_cap() -> None:
+    """The interaction that made a raise into a defect, pinned.
+
+    Every tool result stays in the session and is re-sent on the next turn, so
+    ``MAX_TOOL_RESULT_CHARS`` is not a per-message bound - it is multiplied by
+    ``RunCeiling.max_tool_calls`` inside one request body. When the friction
+    guards were raised this was measured rather than assumed, and the
+    arithmetic had gone wrong: at 32 000 characters a session's **second**
+    turn built a body of about 293 000 bytes against a 256 KiB cap and was
+    refused with ``OpenCodeResponseError`` in the middle of ordinary use.
+    ``MAX_REQUEST_BYTES`` was raised to 2 MiB to match.
+
+    Nothing pinned that relationship, which is why it broke silently. This
+    builds the largest conversation those ceilings permit - every turn's
+    instruction at full length, every tool call answered at full length - and
+    requires the request to be built rather than refused.
+
+    It is the *shape* of the worst case, not a byte count: it re-derives
+    itself from whichever ceilings are in force, so raising any one of them
+    again without raising the cap turns this red instead of a live session.
+    """
+    functions = ModelPlannerService.functions()
+    messages = [Message(role="system", content=SYSTEM_PROMPT)]
+    emitted = 0
+
+    for turn in range(CEILING.max_model_calls):
+        messages.append(Message(role="user", content="i" * MAX_INSTRUCTION_CHARS))
+        build_plan_request(
+            model=PLANNING_MODEL,
+            messages=tuple(messages),
+            functions=functions,
+            max_output_tokens=PLAN_MAX_OUTPUT_TOKENS,
+        )
+        calls = tuple(
+            ProposedCall(
+                call_id=f"call_-TEST-ONLY-{turn}-{index}",
+                name="read_workspace_file",
+                arguments_json='{"name":"rapor.json"}',
+            )
+            for index in range(
+                min(MAX_CALLS_PER_TURN, CEILING.max_tool_calls - emitted)
+            )
+        )
+        emitted += len(calls)
+        messages.append(Message(role="assistant", content="", tool_calls=calls))
+        for call in calls:
+            messages.append(
+                Message(
+                    role="tool",
+                    tool_call_id=call.call_id,
+                    content="r" * MAX_TOOL_RESULT_CHARS,
+                )
+            )
+
+    body = build_plan_request(
+        model=PLANNING_MODEL,
+        messages=tuple(messages),
+        functions=functions,
+        max_output_tokens=PLAN_MAX_OUTPUT_TOKENS,
+    )
+
+    assert emitted == CEILING.max_tool_calls
+    assert len(body) <= MAX_REQUEST_BYTES
 
 
 def test_the_output_ceiling_is_not_the_thing_that_bounds_the_spend(

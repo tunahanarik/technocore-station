@@ -69,11 +69,20 @@ edemez.
 Yanıt `station_api/opencode/planner.py` içinde **tek** bir fonksiyonda
 ayrıştırılır ve orada üç şey olur:
 
-1. **`reasoning_content` atılır.** Redakte edilmez — okunur ve düşürülür.
-   Uygulamada onu yazabilecek bir sütun zaten yoktur
-   (`test_no_agent_table_can_hold_a_model_reasoning_trace`), fakat bir
-   görünüme ulaşan değer loglanabilir veya gösterilebilirdi. Bu yüzden alan,
-   onu elinde tutan tek fonksiyonda yok edilir.
+1. **`reasoning_content` hiçbir yere gidemez.** Uygulamada onu yazabilecek bir
+   sütun yoktur (`test_no_agent_table_can_hold_a_model_reasoning_trace`) ve
+   ayrıştırıcının ürettiği `PlanProposal`'ın onu tutabilecek bir alanı yoktur:
+   her üye mesajdan **adıyla**, bir izin listesinden alınır, sözlük hiç
+   kopyalanmaz. Bu bir silme değil, **tip düzeyinde** bir koruma — burada bir
+   zamanlar duran `pop` döngüsü ölçülerek no-op olduğu görüldüğü için
+   kaldırıldı (ADR-0012 §1).
+
+   Değerin gerçekten bir insana ulaşabildiği yol ayrıştırıcı değil, **hata
+   alıntısıydı**: sağlayıcı hatası gösterilirken gövdeden sınırlı bir alıntı
+   cümleye eklenir ve `error` üyesi taşıyan bir `200` bütünüyle alıntılanırdı.
+   Deny-list bu yüzden `opencode/client.py::DISCARDED_MESSAGE_FIELDS`'te
+   yaşar ve kimlik bilgisi redaksiyonuyla aynı fonksiyonda uygulanır; alıntı
+   sağlayıcının hata metnini korur, yalnız muhakeme üyelerini kaybeder.
 2. **`function.arguments` bir JSON dizesidir** ve ayrıştırılması başarısız
    olabilir. Başarısızlık bir **rettir**, "argümansız çağrı" değil.
 3. **`usage` ve `cost` olduğu gibi alınır.** Yoksa `unknown`; sıfır
@@ -148,12 +157,38 @@ Bu yüzden çağrı önermeyen bir tur artık **nedene göre** ayrılır:
   sağlayıcının kendi yazımıyla; tanınmayan bir değer **olduğu gibi**
   aktarılır ve anlamı uydurulmaz. Oturum kapatılmaz.
 
-Çıktı tavanı `1024`ten `4096`ya çıkarıldı. Bu bir **maliyet** kontrolü
+Çıktı tavanı `1024` → `4096` → **`131072`**. Bu bir **maliyet** kontrolü
 değildir — harcamayı sınırlayan şey hâlâ model çağrısı sayısıdır (ADR-0008
-§4, ADR-0012 §3) — **kesilmeyi önleme** ayarıdır. Sayının gerekçesi
-ölçümdür: bir turun çağrı üretmeden harcadığı **1024** token, artı bu
-build'in kendi koyduğu argüman tavanı (8000 karakter, ~2000 token); toplamı
-~3072, bir üst iki kuvveti 4096.
+§4, ADR-0012 §3) — **kesilmeyi önleme** ayarıdır. `4096`nın gerekçesi bir
+ölçüm artı bir aritmetikti (bir turun çağrı üretmeden harcadığı **1024**
+token, artı argüman tavanının token karşılığı), ve o aritmetik "bir çağrı,
+azami boyda, bir kez ölçülmüş muhakemeden sonra" varsayımını taşıyordu —
+yani türetme kılığında bir tahmindi.
+
+Yeni sayının gerekçesi bu sayının **bağlayıcı olmaktan çıkması**dır:
+sağlayıcıya `max_tokens: 200000` gönderildi ve **kabul edildi** (`200`),
+kullanılmayan çıkış token'ı ücretlenmiyor, ve kesilmeyi önlemek tek işi olan
+bir tavan her yanıtın çok üstündeyken bu işi en iyi yapar. `131072`, kabul
+edilen `200000`in altındaki en büyük iki kuvvetidir.
+
+Bu noktadan sonra gerçek sınır bu sayı değildir: **120 saniyelik okuma zaman
+aşımıdır** (`client.TIMEOUT`). İki dakika sonra hâlâ gelmekte olan bir yanıt,
+bu sabit ne derse desin bırakılır.
+
+Aynı turda üç "sürtünme" tavanı daha yükseltildi ve hepsi aynı cümleyi
+taşır — bunlar **kesilme** ayarıdır, **bütçe** değil: `MAX_INSTRUCTION_CHARS`
+(2 000 → 32 000), `MAX_TOOL_RESULT_CHARS` (500 → 32 000),
+`MAX_CLOSING_CHARS` (1 000 → 16 000), `MAX_DETAIL_CHARS` (500 → 4 000) ve
+`MAX_ARGUMENTS_CHARS` (8 000 → 64 000). Bütçe hâlâ `max_model_calls` (8) ve
+`max_wall_clock_seconds` (120); `usage`/`cost` sağlayıcının beyanıdır ve
+tavan olarak okunmaz.
+
+Bunlardan biri **ölçülen** bir çatışma çıkardı: her araç sonucu oturumda
+kalır ve sonraki turda yeniden gönderilir, yani `MAX_TOOL_RESULT_CHARS`
+`max_tool_calls` (32) ile çarpılır. 32 000'de en kötü gövde ~1,3 MB, ve
+`MAX_REQUEST_BYTES` 256 KiB idi — sıradan bir oturumun **ikinci turu**
+reddediliyordu (ölçüldü: ~293 000 bayt). O tavan 2 MiB'ye çıkarıldı;
+aritmetiği sabitin yanında yazılıdır.
 
 Oturum **süreç belleğindedir** ve yeniden başlatmada kaybolur. Bu eksiklik
 değil karardır: SI-224 yeniden başlatmanın hiçbir şeyi sürdürmediğini söyler

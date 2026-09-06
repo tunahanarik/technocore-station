@@ -2246,7 +2246,13 @@ ve o olgulara dayanan cümleleri düzeltti.
       çalışmadır; `plan_run` yolu bir kişinin yazdığı planla aynıdır.
       `start_run`/`resume_run`/`request_stop` adları planner ağacında **hiç
       geçmiyor** ve bu sözdizim ağacından okunuyor.
-- [x] **`reasoning_content` düşürülüyor**, redakte edilmiyor.
+- [x] **`reasoning_content` hiçbir yere gidemiyor.** Düzeltildi (bağımsız
+      inceleme): korumanın tip düzeyinde olduğu ölçüldü — `PlanProposal`'ın
+      böyle bir alanı yok — ve ölü `pop` döngüsü kaldırıldı. **"Gösterilmez"**
+      yarısı tutmuyordu: sağlayıcı hata gövdesinin alıntısı `error` üyeli bir
+      `200`'de tüm gövdeyi taşıyordu. Deny-list, kimlik bilgisi
+      redaksiyonuyla aynı fonksiyona taşındı (`client._excerpt`); alıntı
+      sağlayıcının hata metnini korur, muhakeme üyelerini kaybeder.
 - [x] **Dördüncü tavan birimi:** `model_call_count`. `usage` ve `cost`
       olduğu gibi kaydediliyor, **tavan olarak okunmuyor**.
 - [x] **Kabul koşulları** (yedinci kapalı registry) ve gerçek bir

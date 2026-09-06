@@ -80,19 +80,50 @@ from station_api.tasks.states import TaskState
 from station_api.technocore.projection import sweep_untrusted
 from station_api.workscan.request_file import REQUEST_FILE_NAME
 
+# ---------------------------------------------------------------------------
+# Four truncation guards, and what they are not
+# ---------------------------------------------------------------------------
+#
+# Every ceiling in this block is a **friction bound**: it decides where a
+# string is cut, and nothing else. None of them is a budget. What a session
+# may spend is ``max_model_calls`` (8) and ``max_wall_clock_seconds`` (120) in
+# ``station_api.agent.budget``; ``usage`` and ``cost`` are recorded as the
+# provider's own statement and are never read as a limit (ADR-0008 4,
+# ADR-0012 3). Raising one of these numbers buys nothing back from the
+# provider and costs nothing to the ceiling that matters.
+#
+# They were all set an order of magnitude too low for the product that grew
+# around them. Each was sized when the thing it bounded was a status line;
+# each now bounds something a person or a model actually reads. The sweeping,
+# neutralising and never-storing rules are untouched - only the cut moved.
+
 #: Longest instruction a person may attach to a turn. Their own words, swept
 #: and neutralised, never stored, and the only free text that reaches the
 #: model besides the task's own recorded facts.
-MAX_INSTRUCTION_CHARS = 2_000
+#:
+#: Raised from 2 000. 2 000 characters is about a page: enough for "produce
+#: the report", not enough to paste the paragraph of context that makes the
+#: request answerable, and a person who pastes one gets it silently cut in
+#: half. Nothing about a longer instruction is less safe - it goes through the
+#: same sweep and is still never written to a row.
+MAX_INSTRUCTION_CHARS = 32_000
 
 #: Longest sentence this module writes into the timeline or a view.
-MAX_DETAIL_CHARS = 500
+#:
+#: Raised from 500, which was chosen when this only ever held a sentence of
+#: ours. It also carries the provider's quoted failure text, and a truncated
+#: provider error is the one message a person needs whole.
+MAX_DETAIL_CHARS = 4_000
 
 #: Longest quotation of what the model said in words when it finished. It is
 #: **data**, so it is swept and neutralised rather than checked - a person who
 #: gets a model to write a forbidden phrase must not be able to make the
 #: product refuse to show them their own session (Package E's split).
-MAX_CLOSING_CHARS = 1_000
+#:
+#: Raised from 1 000. This is the model's closing answer - frequently the
+#: actual deliverable of a session - and 1 000 characters cut it off mid
+#: paragraph. It is data either way, so the cut was buying nothing.
+MAX_CLOSING_CHARS = 16_000
 
 #: Longest quotation of the provider's own ``cost`` member. It is already
 #: capped where it is parsed; the cap is named again here because this is
@@ -103,7 +134,27 @@ MAX_COST_CHARS = 64
 #: sentence and its artifact digest, bounded: the *file* never goes back, only
 #: what the runner said about it, so a workspace document cannot be sent to a
 #: provider as a side effect of continuing a session.
-MAX_TOOL_RESULT_CHARS = 500
+#:
+#: **The most consequential of the four.** Raised from 500. That sentence
+#: above is still exactly true - what goes back is the runner's description
+#: and a digest, never the bytes of a file - but 500 characters is half a
+#: page, so a model that asked to read something got back a description
+#: truncated before it said anything useful and then had to guess. The whole
+#: point of a tool loop is that the next turn knows what the last one found.
+#:
+#: 32 000 does not widen the boundary by a single byte: the *kind* of thing
+#: that may cross it is decided by the runner's step record, not by this
+#: number.
+#:
+#: It does interact with one other ceiling, and the interaction was
+#: **measured** rather than assumed. Every tool result stays in the session
+#: and is re-sent on the next turn, so this number is multiplied by
+#: ``RunCeiling.max_tool_calls`` (32) in the request body. At 32 000 the
+#: worst-case body is about 1.3 MB, and ``adapters.MAX_REQUEST_BYTES`` was
+#: 256 KiB - the second turn of an ordinary session was refused outright.
+#: That cap was raised to 2 MiB, with the arithmetic written beside it. If
+#: either number moves again, they move together.
+MAX_TOOL_RESULT_CHARS = 32_000
 
 #: What the brief says when the scan left a request file in the workspace.
 #:

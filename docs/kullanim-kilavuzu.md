@@ -364,17 +364,26 @@ arşivinizi bu ürünün dışında bir kez siz açarsınız.
   Dolayısıyla **bu sürüm kod çalıştıramaz** ve çalıştırma gerektiren iş
   `blocked`/`review_needed`'da **durur**. Bu bir eksiklik değil, kayıtlı bir
   karardır (ADR-0008 §1).
-- **Model çağrısı yoktur.** "Model çıktısı doğrudan yürütülmez" burada boş
-  bir vaat değil, yapısal bir gerçektir: bu sürümde model çıktısı diye bir
-  şey yoktur. Bir "adım", bir kişinin yazdığı, kayıtlı bir araç kimliği ve
-  tipleri denetlenmiş argümanlardır.
-- **Başarı ölçütü kaydedilir ama koşulmaz.** Bu yüzden `test_result` alanı
-  `not_implemented` kalır ve görev `ready_to_publish`'e **geçemez**.
-  Çalıştırılmış ama test edilmemiş kod, test edilmiş kod değildir.
-- **`ready_to_publish`'e HTTP üzerinden geçilemiyor.** Kullanıcı geçişleri
-  onu taşımıyor; bu kapatılmış bir karar değil, **açık bir boşluktur** ve
-  [`proof-workspace.md`](proof-workspace.md) §10'da yazılıdır. Kullanıcının
-  isteyebileceği beş geçiş şunlardır: onaya al, incelemeye al, engellendi,
+- **Model plan önerir, çalıştırmaz.** Bu üç madde önce "model çağrısı
+  yoktur", "test sonucu hep `not_implemented` kalır" ve
+  "`ready_to_publish`'e geçilemez" diyordu; **üçü de artık yanlış** ve
+  ölçülerek düzeltildi (ADR-0012). Bugünkü gerçek şudur: model **öneri**
+  üretir, ve önerdiği her araç adı **kapalı registry'de** aranır, her
+  argüman **tipli doğrulamadan** geçer, hiçbir araç `path`/`url` almaz.
+  Öneri, elle yazılmış bir planın geçtiği **aynı dört onaydan** geçer ve
+  **model kendi planını onaylayamaz**. Yani "model çıktısı doğrudan
+  yürütülmez" hâlâ yapısal bir gerçektir — ama artık "model çıktısı diye bir
+  şey yok" diyerek değil, çıktıyı kapalı bir registry'den geçirerek.
+- **Başarı ölçütü artık koşulabiliyor.** Planınız kabul koşulu taşıyorsa
+  çalışma sonrası **gerçekten değerlendirilir** ve `test_result`
+  `passed`/`failed` üretir. `not_implemented` yalnız **koşulsuz** bir plan
+  için kalır, ve gerekçesini söyler. Koşullar planın özetinin **içindedir**:
+  onaydan sonra bir koşulu düzenlemek planı geçersiz kılar.
+- **`ready_to_publish` erişilebilir, ama istenebilir değil.** Yayın
+  hazırlığını değerlendiren bir yol vardır; fakat o isteğin gövdesinde
+  **hedef alanı yoktur**, yani hiçbir istek bu durumu **adıyla
+  isteyemez** — kapı kanıttan türetir. Kullanıcının doğrudan
+  isteyebileceği geçişler değişmedi: onaya al, incelemeye al, engellendi,
   başarısız, yayımlandı olarak işaretle.
 - **Yeniden başlatma hiçbir şeyi sürdürmez.** Kesilen çalışmalar listelenir;
   devam etmek bir kişinin işidir ve yalnız zaten onaylanmış kapsamda ilerler.

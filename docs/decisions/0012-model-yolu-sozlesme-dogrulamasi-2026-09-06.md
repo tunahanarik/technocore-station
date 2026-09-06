@@ -56,7 +56,40 @@ ayrıştırılması gerekir. Ve yanıt bir `reasoning_content` alanı taşır.
 H2 ve ADR-0009 §6 "modelin muhakemesi veya ham provider payload'ı için sütun
 yok" kuralını koydu. Sağlayıcının böyle bir alan **gönderiyor** olması bu
 kuralı değiştirmez: alan **okunur, kullanılmaz, saklanmaz, gösterilmez,
-loglanmaz**. Bunu bir test sabitler.
+loglanmaz**.
+
+**Bunu neyin sabitlediği düzeltildi (bağımsız inceleme).** İlk yazımda bu
+bölüm "bunu bir test sabitler" diyordu ve iki yerde birden yanlıştı.
+
+*Birincisi, kodun kendisi.* `parse_plan_response` içinde alanı sözlükten
+`pop` eden bir döngü vardı ve yorumu bu döngüyü **koruma** diye adlandırıyordu.
+Değildi: döngü no-op'a çevrildiğinde hiçbir test kırmızı olmadı — çünkü her
+üye sözlükten **adıyla**, bir izin listesinden alınıyor, sözlük hiç
+kopyalanmıyor ve `PlanProposal`'ın değerin düşebileceği bir alanı yok. Silinince
+kimsenin fark etmediği bir kontrol, okuyanı asıl korumadan (tipten) uzaklaştırır.
+Döngü **kaldırıldı** ve yerine korumanın ne olduğu yazıldı.
+
+*İkincisi, "gösterilmez" yarısı tutmuyordu.* Sağlayıcı hatası kullanıcıya
+gösterilirken yanıt gövdesinden **sınırlı bir alıntı** cümleye ekleniyor
+(`planner._failed(..., quote=True)`, `adapters._with_excerpt`), ve `error`
+üyesi taşıyan bir `200` gövdesi **bütünüyle** alıntılanıyor — `reasoning_content`
+dahil. Kimlik bilgisi redaksiyonu bu alıntıya uygulanıyordu, muhakeme alanı
+uygulanmıyordu.
+
+**Karar:** deny-list, tüketildiği yere taşındı —
+`opencode/client.py::DISCARDED_MESSAGE_FIELDS`, kimlik bilgisi redaksiyonuyla
+**aynı fonksiyonda** (`_excerpt`) uygulanıyor. Alıntının teşhis değeri korunur:
+sağlayıcının kendi hata metni kalır, yalnız muhakeme üyeleri çıkarılır.
+Ayrıştırılamayan bir gövde (örneğin bayt tavanında ortasından kesilmiş uzun bir
+muhakeme değeri) bu alanlardan birini **adıyla anıyorsa** alıntı bütünüyle
+düşürülür — `evidence/language.py`'nin nötrleştirme kesin olmadığında yaptığının
+aynısı.
+
+Şunu sabitleyen testler: `test_model_planner.py::test_the_reasoning_field_is_dropped_rather_than_carried`
+(tip düzeyi), `::test_a_quoted_provider_error_body_carries_no_reasoning` ve
+`::test_an_unreadable_body_that_names_a_reasoning_field_is_not_quoted`
+(gösterim yolu), `test_agent_boundary.py::test_no_agent_table_can_hold_a_model_reasoning_trace`
+(şema).
 
 ## 2. Model plan **önerir**, çalıştırmaz
 
