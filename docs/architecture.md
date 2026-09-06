@@ -27,13 +27,21 @@ Uygulanan paketler ve hangi aşamada geldikleri:
 | `station_api/modules/` | 6 | **Derleme zamanı modül registry'si** ve dört alanlı kanıt sözlüğü |
 | `station_api/tasks/` | 6 | Görev kayıtları, dokuz durumlu makine, salt-okuma uzlaştırma |
 | `station_api/opencode/` | 7 (G) | Sağlayıcı bağlantısı: kapalı uç/model registry'si, katalog, kimlik bilgisi deposu, protokol adaptörleri |
-| `station_api/workscan/` | 8 (H1) | İş taraması ve aday üretimi |
+| `station_api/workscan/` | 8 (H1) | İş taraması ve aday üretimi. Model'e erişmez ve erişemez: okuma lane'ini bir **protokolle** (`reading.py::LineReader`) alır |
 | `station_api/agent/` | 9 (H2) | Çalışma alanı, kapalı araç registry'si, koşu tavanı, aktivite; H4'te kabul koşulları registry'si |
 | `station_api/proof/` | 10 (H3) | Kanıt paketi, artifact gövdeleri, tek kullanımlık paylaşım onayı |
 | `station_api/planner/` | H4 | Model plan önerisi. `agent` ve `opencode`'u içe alan, ikisinin de içe **almadığı** üçüncü paket |
+| `station_api/workreader/` | ADR-0014 | Oda satırlarının model'e okutulması. `workscan` ve `opencode`'u içe alan, ikisinin de içe **almadığı** paket — ve kendi evinde durmasının sebebi tam olarak budur: `workscan`'in bir sağlayıcıya ulaşamadığını söyleyen güvenlik testi doğrudur ve öyle kalmalıdır (ADR-0013 §2'nin kalıbı: kural koda uydurulmaz) |
 
 Tablo aşama 6'da bitiyordu ve beş paket eksikti; sayı taşımayan bir mimari
 belgesi bayatlamaz ama **paket listesi** bayatlar.
+
+`workreader` ile birlikte iki paket bir sağlayıcıya ulaşabiliyor ve ikisi de
+aynı muafiyetle: `opencode.service`, `opencode.planner` ve `opencode.errors` —
+**tam liste**, `opencode.client` dâhil değil. Yani ikisi de *incelenmiş
+bağlantıdan bir tur isteyebilir*, ikisi de yanında kendi isteğini kuramaz, ve
+`OUTBOUND_CLIENT_MODULES` beşte kalır (`test_planner_boundary.py` ve
+`test_work_reader_boundary.py`, aynı taramalar, iki ağaç).
 
 **Secret sınırı:** `station_api/vault/` paketini yalnız `identity` servisi,
 `compose/signer.py`, `evidence` zarfı ve CLI import eder; sınır paket

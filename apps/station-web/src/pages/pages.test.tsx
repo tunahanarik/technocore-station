@@ -363,6 +363,9 @@ const OPENCODE_UNCONFIGURED: OpenCodeStatus = {
     state: "not_configured",
     reasons: ["Anahtar kaydedilmedi."],
     detail: "Saglayici anahtari kaydedilmedi.",
+    checked_at: null,
+    probes_used: 0,
+    probe_ceiling: 8,
   },
   selected_model: "",
   auth_header_caveat:

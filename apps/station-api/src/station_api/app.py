@@ -66,6 +66,7 @@ from station_api.technocore.service import TechnocoreService
 from station_api.technocore.write_client import SignedWriteClient
 from station_api.vault import DpapiVault
 from station_api.vault.errors import VaultError
+from station_api.workreader.service import WorkReaderService
 from station_api.workscan.service import WorkScanService
 
 _log = logging.getLogger(__name__)
@@ -420,8 +421,18 @@ def create_app(
     # every guard on that surface - the name allow-list, containment, the
     # reparse walk and the three ceilings - applies unchanged, and the secret
     # scans that walk this root already cover the file.
+    #
+    # ``reader`` is the model lane ADR-0014 opened, and it is passed **in**
+    # rather than built inside the scan: ``station_api/workscan`` imports
+    # nothing that can reach a provider, and that property is worth keeping
+    # (ADR-0014 7). Building the reader contacts nobody either - it holds the
+    # OpenCode service and asks it for a turn only inside a scan a person
+    # started. A scan still runs when there is no connection; every line comes
+    # back refused by name rather than as an empty list.
     app.state.workscan = workscan or WorkScanService(
-        tasks=app.state.tasks, data_dir=settings.data_dir
+        tasks=app.state.tasks,
+        data_dir=settings.data_dir,
+        reader=WorkReaderService(opencode=app.state.opencode),
     )
 
     # The model planning lane (Package H4). Built when the agent runtime, the

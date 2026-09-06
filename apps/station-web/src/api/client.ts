@@ -163,6 +163,26 @@ export const CREDENTIAL_TIMEOUT_MS = 20000;
  */
 export const CATALOG_TIMEOUT_MS = 90000;
 
+/**
+ * Probing the stored key, and the longest deadline in the app.
+ *
+ * The check is a real metered request (ADR-0015), so the server's own budget
+ * is the metered client's: connect 5s plus a **120-second** read, which is
+ * `client.py::TIMEOUT` and is itself a measured number - two of six live
+ * proposals exceeded the previous 30s ceiling against this provider.
+ *
+ * A client deadline below that would abandon a request the server was still
+ * waiting on and report `timeout` - a claim about the *local* service - while
+ * the metered call may already have been made and charged. That is the one
+ * failure this whole feature is careful about: the backend's answer
+ * distinguishes "the provider refused" from "we never found out", and a
+ * stopwatch on this side must not collapse the two.
+ *
+ * 135 seconds sits above connect + read with room for the local write that
+ * records the verdict, and still bounds the UI.
+ */
+export const CHECK_TIMEOUT_MS = 135000;
+
 // Memory only. Cleared when the page unloads, exactly like the server session.
 let csrfToken: string | null = null;
 let csrfHeader: string = DEFAULT_CSRF_HEADER;
@@ -747,14 +767,16 @@ export async function exportEvidence(input: {
 
 // --- OpenCode Go connection (Paket G) --------------------------------------
 //
-// Five calls, and the shape of the set is the point. There is one way in for
+// Six calls, and the shape of the set is the point. There is one way in for
 // the provider key and **no way back out**: no read route, no masked echo, no
 // "show for verification". After `storeOpenCodeCredential` returns, the only
 // thing this app can learn about the key is a twelve-character fingerprint.
 //
-// There is also no completion call here. Sending a metered request belongs to
-// the executor package, and a button for it on this surface would have made
-// "Station never spends money on its own" a claim with a footnote.
+// One of the six spends money, and exactly one: `checkOpenCodeConnection`
+// (ADR-0015). It is the sixth because the fifth arrangement had a button whose
+// only honest description was "reads the same thing the page already read" -
+// and it carries no caller-supplied field, so "Station never spends on its
+// own" survives as a claim about presses rather than a claim about absence.
 
 /** The whole connection, read-only. Contacts nobody outside this machine. */
 export async function fetchOpenCodeStatus(): Promise<OpenCodeStatus> {
@@ -780,6 +802,26 @@ export async function storeOpenCodeCredential(apiKey: string): Promise<OpenCodeS
 /** Remove the stored key. Empty body: there is nothing here to steer. */
 export async function forgetOpenCodeCredential(): Promise<OpenCodeStatus> {
   return mutate("/api/opencode/credential/forget", isOpenCodeStatus, {});
+}
+
+/**
+ * Probe the stored key. **The one call in this app that spends money.**
+ *
+ * Nothing calls this on mount, on a timer or as a step of anything else: it
+ * runs inside a click and nowhere else, which is what makes "Station never
+ * spends on its own" still true with a metered button on the page.
+ *
+ * `POST` and not `GET`, and the reasons all point the same way: a navigation,
+ * a prefetch or a reload must not be able to repeat it, and it changes stored
+ * state so it belongs behind the CSRF header every other write here carries.
+ *
+ * The body is empty. There is no prompt, no model and no address parameter -
+ * the model is the one already chosen in the backend and the sentence sent is
+ * a compile-time constant there, so nothing typed on this surface reaches
+ * what the provider is asked.
+ */
+export async function checkOpenCodeConnection(): Promise<OpenCodeStatus> {
+  return mutate("/api/opencode/check", isOpenCodeStatus, {}, CHECK_TIMEOUT_MS);
 }
 
 /**

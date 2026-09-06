@@ -1348,6 +1348,14 @@ const LANE = {
     state: "key_saved_unverified",
     reasons: ["TEST-ONLY: katalog anahtarsiz da cevap veriyor."],
     detail: "TEST-ONLY: anahtar kayitli, dogrulanmadi.",
+    // The probe fields (ADR-0015). This lane never presses the check, but the
+    // response validator is the same one the connection panel uses, and a
+    // fixture missing a field the wire now carries fails at the boundary
+    // rather than in the assertion - which is how a screen that renders fine
+    // looks broken here.
+    checked_at: null,
+    probes_used: 0,
+    probe_ceiling: 8,
   },
   selected_model: "test-only/model-flash",
   auth_header_caveat: "TEST-ONLY: baslik varsayimi dogrulanmadi.",

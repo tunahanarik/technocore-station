@@ -6,6 +6,7 @@ import {
   ApiError,
   bootstrapSession,
   captureEvidenceLine,
+  checkOpenCodeConnection,
   createComposeDraft,
   createIdentity,
   deleteActivity,
@@ -516,6 +517,10 @@ const JSON_PROBES: readonly Probe[] = [
     call: () => storeOpenCodeCredential("test-only-not-a-real-key"),
   },
   { name: "forgetOpenCodeCredential", call: () => forgetOpenCodeCredential() },
+  // The metered one (ADR-0015). It is here for exactly the reason the others
+  // are - a document comes back and it has to be validated - and its body is
+  // empty like the other two: nothing a caller types reaches the provider.
+  { name: "checkOpenCodeConnection", call: () => checkOpenCodeConnection() },
   { name: "refreshOpenCodeCatalog", call: () => refreshOpenCodeCatalog() },
   {
     name: "selectOpenCodeModel",

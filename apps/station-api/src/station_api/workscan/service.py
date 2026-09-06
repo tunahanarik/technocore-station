@@ -43,6 +43,7 @@ from pathlib import Path
 
 from station_api.agent import workspace
 from station_api.agent.errors import WorkspaceError
+from station_api.agent.model_calls import ScanModelCallCounter
 from station_api.modules.registry import ModuleId
 from station_api.tasks.service import TaskError, TaskService, TaskView
 from station_api.tasks.sources import TaskSourceId
@@ -54,6 +55,7 @@ from station_api.workscan.candidates import (
     candidate_content,
     capability_for,
     derive_from_room,
+    readable_lines,
 )
 from station_api.workscan.client import RoomScanClient
 from station_api.workscan.discovery import (
@@ -67,7 +69,19 @@ from station_api.workscan.errors import (
     WorkScanError,
 )
 from station_api.workscan.kibble import ADAPTERS, AdapterRecord
-from station_api.workscan.language import DERIVATION_HONESTY_SENTENCE
+from station_api.workscan.language import (
+    DERIVATION_HONESTY_SENTENCE,
+    MODEL_READING_COST_SENTENCE,
+)
+from station_api.workscan.reading import (
+    MAX_LINES_PER_TURN,
+    MODEL_UNAVAILABLE_DETAIL,
+    LineReader,
+    ReadableLine,
+    ReadingRefusal,
+    ReadingRefusalReason,
+    RoomReading,
+)
 from station_api.workscan.request_file import (
     REQUEST_FILE_NAME,
     render_request_file,
@@ -254,6 +268,11 @@ class ScanResult:
     failures: tuple[RoomFailure, ...]
     #: What each scanned room's class markers mean for what was read.
     notes: tuple[RoomNote, ...] = ()
+    #: Model turns this whole scan spent, against the ceiling in
+    #: ``agent/budget.py``. Reported so the spend is visible after the fact as
+    #: well as stated before it (ADR-0014 4, 6).
+    model_calls_used: int = 0
+    max_model_calls: int = 0
     honesty: str = DERIVATION_HONESTY_SENTENCE
 
     @property
@@ -274,6 +293,10 @@ class WorkScanView:
     #: Never ``None`` in a useful sense: the sentence is shown on every read,
     #: not only beside a result.
     honesty: str
+    #: What a scan costs, with both numbers in it, on every read - so it is on
+    #: screen beside the button rather than only in the result that already
+    #: spent the money (ADR-0014 6).
+    reading_cost: str
     adapters: tuple[AdapterRecord, ...]
     #: The last room overview, if a person asked for one this process.
     room_index: RoomIndexSnapshot | None
@@ -310,9 +333,18 @@ class WorkScanService:
         client: RoomScanClient | None = None,
         tasks: TaskService | None = None,
         data_dir: Path | None = None,
+        reader: LineReader | None = None,
     ) -> None:
         self._client = client if client is not None else RoomScanClient()
         self._tasks = tasks
+        # The reading lane, as a **protocol**. This class never imports the
+        # implementation, so ``station_api/workscan`` still reaches nothing
+        # that can contact a provider and
+        # ``test_the_package_calls_no_model_and_imports_no_completion_path``
+        # stays true (ADR-0014 7). ``None`` is a real state rather than a
+        # degraded one: a build with no provider connection scans, refuses
+        # every line by name and says why.
+        self._reader = reader
         # The same root the agent writes under, passed the way
         # ``ProofService`` takes it and for the same reason: this is not a
         # second file lane, it is the root that
@@ -338,6 +370,7 @@ class WorkScanService:
         """
         return WorkScanView(
             honesty=DERIVATION_HONESTY_SENTENCE,
+            reading_cost=self._reading_cost(),
             adapters=ADAPTERS,
             room_index=self._room_index,
             discovery=self._discovery,
@@ -420,6 +453,11 @@ class WorkScanService:
         """
         started_at = datetime.now(UTC)
         capability = capability_for(SCAN_MODULE_ID, write_gate_open=write_gate_open)
+        # One counter for the whole scan, deliberately. The ceiling bounds a
+        # user action, and a counter built per room would turn a ten-room scan
+        # into ten ceilings - which is the shape of every budget defect this
+        # repository has recorded (ADR-0014 4).
+        counter = ScanModelCallCounter()
 
         wanted, dropped = self._bounded(rooms)
         results: list[DerivationResult] = []
@@ -461,7 +499,11 @@ class WorkScanService:
             # backstop for anything it does not anticipate, so that "failures
             # are per room" holds on the derivation half too.
             try:
-                derived = derive_from_room(snapshot, capability=capability)
+                derived = derive_from_room(
+                    snapshot,
+                    capability=capability,
+                    reading=self._read_lines(snapshot, counter=counter),
+                )
             except CandidateError as exc:
                 failures.append(
                     RoomFailure(
@@ -484,6 +526,8 @@ class WorkScanService:
             results=tuple(results),
             failures=tuple(failures),
             notes=tuple(notes),
+            model_calls_used=counter.used,
+            max_model_calls=counter.max_model_calls,
         )
         self._last_scan = result
         # Replaced, not merged. A candidate that is no longer in the newest
@@ -587,6 +631,52 @@ class WorkScanService:
         )
 
     # --- internals ---------------------------------------------------------
+
+    def _reading_cost(self) -> str:
+        """The cost sentence, with both numbers filled in.
+
+        Built here rather than stored, because one of the two numbers is the
+        ceiling and the ceiling has exactly one home (``agent/budget.py``).
+        Reading it at the point of display means a screen can never quote a
+        limit the code stopped using.
+        """
+        return MODEL_READING_COST_SENTENCE.format(
+            lines=MAX_LINES_PER_TURN,
+            calls=ScanModelCallCounter().max_model_calls,
+        )
+
+    def _read_lines(
+        self, snapshot: RoomMessagesSnapshot, *, counter: ScanModelCallCounter
+    ) -> RoomReading:
+        """Ask the reading lane about this room's readable lines.
+
+        ``readable_lines`` has already dropped everything the prohibition
+        registry matched, so a line asking for a wallet action is not handed to
+        a provider. That is a cost and exposure decision and **not** the
+        enforcement: ``derive_from_room`` applies the same registry again
+        before it reads a verdict, so a verdict about a prohibited line
+        produces a refusal whatever happened here (ADR-0014 2).
+
+        With no reader, every readable line is refused **by name**. The
+        alternative - an empty candidate list - is the exact failure the user
+        measured: a screen that looks like "there is no work here" when the
+        truth is "nothing looked".
+        """
+        lines: tuple[ReadableLine, ...] = readable_lines(snapshot)
+        if not lines:
+            return RoomReading()
+        if self._reader is None:
+            return RoomReading(
+                refusals=tuple(
+                    ReadingRefusal(
+                        seq=line.seq,
+                        reason=ReadingRefusalReason.MODEL_UNAVAILABLE,
+                        detail=MODEL_UNAVAILABLE_DETAIL,
+                    )
+                    for line in lines
+                )
+            )
+        return self._reader.classify(lines, counter=counter)
 
     def _bounded(self, rooms: Sequence[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
         """De-duplicate, keep the caller's order, and cap the count.

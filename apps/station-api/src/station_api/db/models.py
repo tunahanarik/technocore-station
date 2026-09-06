@@ -683,6 +683,75 @@ class OpenCodeCredentialMetadata(Base):
         return f"OpenCodeCredentialMetadata(id={self.id!r})"
 
 
+class OpenCodeProbeLedger(Base):
+    """What the connection probe spent, and what it last answered. Per key.
+
+    ADR-0015. The probe is a metered ``chat/completions`` turn - the only
+    request that can prove the stored credential authenticates, because it is
+    the only one the provider refuses without it - so two facts have to
+    survive a restart:
+
+    * **how many probes this credential has spent**, because a model call
+      nothing counts is a way around the ceiling ADR-0013 built, and a count
+      kept in memory is a count a relaunch clears;
+    * **what the last probe answered**, because ``GET /api/opencode/status``
+      must not probe, and a verdict that lived only in the probe's own reply
+      would vanish on the next read and leave the badge saying "unverified"
+      about a key the provider had just accepted.
+
+    The primary key is the credential **fingerprint** - the same value
+    ``opencode_credential_metadata`` already stores, which names a key without
+    revealing it - and there is deliberately **no foreign key** to that table.
+    That row is deleted whenever a key is forgotten or replaced, and a count
+    that went with it would be a ceiling cleared by two button presses: the
+    ``forget`` defect ADR-0013 named, wearing this feature's clothes. Keyed to
+    the fingerprint instead, re-saving the same key lands on the same row and
+    the spend stands; a genuinely different key is a different secret that has
+    never been asked about, and it starts at zero.
+
+    ``probes_used`` only ever goes **up**. There is no reset route, no setter
+    and no tool in the registry that names it; the only writer is
+    :meth:`station_api.opencode.service.OpenCodeService._record_probe`, and
+    ``test_opencode_probe.py::test_nothing_lowers_the_connection_probe_counter``
+    reads the syntax tree of the whole tree to say so.
+
+    The verdict columns share the row rather than a second table because they
+    share the row's **lifetime**: both are per credential, both are durable,
+    both are written by the one operation that writes either. ADR-0013 1's
+    objection was to two facts with *different* lifetimes sharing a home - a
+    conversation that must die with the process beside a count that must not -
+    and that is not the case here.
+
+    No column holds a seed, a key, a credential, a prompt, a completion, a raw
+    provider payload or a model reasoning trace. ``detail`` is the bounded,
+    credential-redacted, reasoning-stripped excerpt
+    :func:`station_api.opencode.client._excerpt` already produces.
+    """
+
+    __tablename__ = "opencode_probe_ledger"
+
+    fingerprint: Mapped[str] = mapped_column(String(64), primary_key=True)
+    #: Probes this credential has spent. Never decremented.
+    probes_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    first_probe_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    last_probe_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    #: verified | provider_refused | probe_failed
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: 0 when the request never produced a status (DNS, TLS, timeout).
+    http_status: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return (
+            f"OpenCodeProbeLedger(state={self.state!r}, "
+            f"probes_used={self.probes_used!r})"
+        )
+
+
 class OpenCodeCatalogCheck(Base):
     """One user-initiated read of the public model catalog.
 

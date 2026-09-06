@@ -93,6 +93,7 @@ REGISTRY_SCANNED_DIRS = (
     "tasks",
     "technocore",
     "vault",
+    "workreader",
     "workscan",
 )
 
@@ -369,6 +370,24 @@ PACKAGES_OUTSIDE_A_REGISTRY_SCAN: dict[str, dict[str, str]] = {
     },
     "security": {},
     "tasks": {},
+    "workreader": {
+        OUTBOUND: (
+            "The second *permission* rather than a description, and it is "
+            "word for word the ``planner`` one because it is the same "
+            "permission: the work scan's reading lane (ADR-0014) may **ask** "
+            "the reviewed connection for a turn through ``opencode.service``, "
+            "and may not assemble a request beside it. "
+            "``station_api.opencode.client`` is banned even though "
+            "``station_api.opencode`` is not, and "
+            "``test_work_reader_boundary.py::"
+            "test_the_outbound_exemption_is_an_exact_list_and_is_used`` holds "
+            "the exemption to an exact list of three modules and requires it "
+            "to be used. ``OUTBOUND_CLIENT_MODULES`` stays at five "
+            "(ADR-0014 8). This package is inside the other two rules, and "
+            "``station_api/workscan`` - which is where a lazier version of "
+            "this change would have put the code - stays inside all three."
+        ),
+    },
     "technocore": {
         OUTBOUND: (
             "The read-only Technocore client. Three of the five reviewed "
@@ -1844,6 +1863,10 @@ def test_the_opencode_tables_have_no_secret_shaped_columns(engine: Engine) -> No
         "opencode_credential_metadata",
         "opencode_catalog_check",
         "opencode_model_snapshot",
+        # ADR-0015's probe ledger. It is keyed by a credential *fingerprint*,
+        # which is the one table where a column called ``api_key`` would look
+        # most natural and be worst, so it joins this scan by name.
+        "opencode_probe_ledger",
     ):
         for column in inspector.get_columns(table):
             name = str(column["name"]).lower()

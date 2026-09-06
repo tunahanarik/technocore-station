@@ -39,6 +39,16 @@ sabit şablondan gelir, dolayısıyla promptun istediği çıktı-şeması denet
 "bu sürüm adayları kalıp eşleşmesiyle çıkarır; anlamsal çıkarım yoktur, bu
 yüzden bir odadaki her fırsat görülmez."
 
+> **Üstü çizili değil, tarihli (6 Eylül 2026).** Yukarıdaki paragraf H1'in
+> doğrulama kaydıdır ve o gün doğruydu; bu belge bir tarihin kaydı olduğu için
+> düzeltilmez, **eklenir**. ADR-0014 tanımayı bir modele verdi, çünkü kalıp
+> listesi kullanıcının kendi üç odasında 150 satır okuyup **sıfır** aday
+> üretti. Değişen şey yalnız tanımadır: sekiz öğe, sabit şablonlar,
+> `(room, seq)` kimliği ve `candidate_content`'in girdileri aynen durur, ve
+> modelin döndürebileceği tek şey satır numaraları ile dört addan biridir.
+> Kullanıcıya gösterilen cümle de değişti; güncel hâli
+> [`../work-scan.md`](../work-scan.md) §3'tedir.
+
 ## Sekiz öğe yapısal olarak zorunlu
 
 `SourceQuote`, `EffortEstimate` ve `WorkCandidate`'in `__post_init__`'leri

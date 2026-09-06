@@ -462,8 +462,10 @@ export interface TechnocoreStatus {
 // * there is no `api_key`, `key`, `token` or `secret` field anywhere below,
 //   in either direction after the one write, because the API has no route
 //   that returns the stored key (ADR-0005 7);
-// * a connection verdict has no `verified` value and no boolean badge - it is
-//   a state plus every reason it is not stronger (ADR-0005 4);
+// * a connection verdict is never a boolean badge - it is a state plus every
+//   reason it is not stronger, and the reasons a probe makes false are
+//   dropped rather than left standing beside a fresh verdict (ADR-0005 4,
+//   ADR-0015);
 // * `selectable` travels with the `reason` it is false, because listing a
 //   model is not the same claim as being able to call it (ADR-0005 5);
 // * `budget_available` is `false` as a *type*, so no future edit can open a
@@ -472,17 +474,35 @@ export interface TechnocoreStatus {
 /**
  * What can honestly be said about the stored credential.
  *
- * Note the absent value: there is no `verified`. The provider's catalog
- * answers without a key, a GET on a protocol path answers 404, and this
- * build makes no metered call on its own - so nothing here can earn a
- * verified verdict, and the type refuses to hold one.
+ * `verified` exists since ADR-0015 and has exactly one producer: a `200` from
+ * the metered endpoint, sent by `POST /api/opencode/check` when a person
+ * presses the button. The catalog still answers without a key, so reading it
+ * still verifies nothing, and `GET /api/opencode/status` still contacts
+ * nobody - which is why what it reports is a *stored* verdict with a date.
+ *
+ * A probe that failed keeps its own value. `provider_refused` and
+ * `probe_failed` are different answers from each other and from
+ * `key_saved_unverified`, which now means only "nobody has asked yet".
  */
 export interface OpenCodeConnectionCheck {
-  readonly state: "not_configured" | "never_checked" | "key_saved_unverified";
+  readonly state:
+    | "not_configured"
+    | "key_saved_unverified"
+    | "verified"
+    | "provider_refused"
+    | "probe_failed";
   /** Plural on purpose. One reason reads like a fixable problem; the list is
    * the actual epistemic position. */
   readonly reasons: readonly string[];
   readonly detail: string;
+  /** When the last probe ran. `null` until one has: a verdict with no date is
+   * one nobody can tell is stale. */
+  readonly checked_at: string | null;
+  /** What this credential has spent against the probe ceiling, and the
+   * ceiling. Published so the control can be disabled before the refusal
+   * rather than after it. */
+  readonly probes_used: number;
+  readonly probe_ceiling: number;
 }
 
 /** One catalog row, joined to what this build knows about it. */
@@ -710,6 +730,10 @@ export interface WorkScanRoomResult {
   /** How many lines were actually read. An empty candidate list beside a
    * non-zero count is a different finding from an empty room. */
   readonly lines_read: number;
+  /** Model turns the reading lane spent on this room (ADR-0014 4). Zero on a
+   * room whose every line was prohibited and zero on a build with no provider
+   * connection - two different facts the refusal list tells apart. */
+  readonly model_calls_used: number;
 }
 
 /**
@@ -930,13 +954,23 @@ export interface WorkScanResult {
   readonly notes: readonly WorkScanRoomNote[];
   readonly candidate_count: number;
   readonly refusal_count: number;
+  /** Model turns this scan spent, and the ceiling it spent them against
+   * (ADR-0014 4). Both, because a number with no denominator is not a spend
+   * report. */
+  readonly model_calls_used: number;
+  readonly max_model_calls: number;
 }
 
 /** The whole scan surface, read-only. Reading it sends nothing outward. */
 export interface WorkScanStatus {
-  /** The cost of a deterministic derivation, stated on every read and not
-   * only beside a result (ADR-0007 2). Rendered verbatim. */
+  /** The cost of the derivation, stated on every read and not only beside a
+   * result (ADR-0007 2). Rendered verbatim. Since ADR-0014 it says a model
+   * reads the lines and can be wrong about one; it used to promise no
+   * semantic inference, and that promise stopped being true. */
   readonly honesty: string;
+  /** What a scan costs, before it is spent: how many lines one turn carries
+   * and how many turns one scan may spend (ADR-0014 6). */
+  readonly reading_cost: string;
   readonly capability: WorkScanCapability;
   readonly adapters: readonly WorkScanAdapter[];
   readonly room_index: WorkScanRoomIndex | null;

@@ -74,6 +74,9 @@ const BASE: OpenCodeStatus = {
     state: "not_configured",
     reasons: ["Anahtar kaydedilmedi."],
     detail: "Saglayici anahtari kaydedilmedi.",
+    checked_at: null,
+    probes_used: 0,
+    probe_ceiling: 8,
   },
   selected_model: "",
   auth_header_caveat:
@@ -167,20 +170,77 @@ const WITH_DRIFT: OpenCodeStatus = {
   },
 };
 
+/**
+ * A key is stored and nobody has asked about it yet.
+ *
+ * The third reason used to read *"Ucretli gercek bir cagri bu surumde
+ * kendiliginden yapilmaz"* and the panel's own copy said the check produced no
+ * verification. Both were true of the build that shipped them and both were
+ * describing a button with nothing behind it, which is exactly the shape a
+ * fixture is good at preserving - `TasksPanel.test.tsx` held a false ceiling
+ * sentence in place the same way. The sentence here now says what the press
+ * does and what it costs.
+ */
 const SAVED: OpenCodeStatus = {
   ...WITH_CATALOG,
   configured: true,
   fingerprint_short: "a1b2c3d4e5f6",
   configured_at: "2026-09-04T10:00:00+00:00",
   updated_at: "2026-09-04T10:00:00+00:00",
+  selected_model: "glm-5.3",
   check: {
     state: "key_saved_unverified",
     reasons: [
       "Katalog anahtarsiz da yanit verdigi icin listeyi cekebilmek anahtari dogrulamaz.",
-      "Protokol yollarina yapilan kimliksiz bir GET 404 dondurur; probe olarak kullanilamaz.",
-      "Ucretli gercek bir cagri bu surumde kendiliginden yapilmaz.",
+      "Dogrulama yalnizca siz 'Baglantiyi denetle' dugmesine bastiginizda yapilir.",
     ],
     detail: "Anahtar kaydedildi, dogrulanmadi.",
+    checked_at: null,
+    probes_used: 0,
+    probe_ceiling: 8,
+  },
+};
+
+/** What the provider accepting the key looks like on the wire. */
+const VERIFIED: OpenCodeStatus = {
+  ...SAVED,
+  check: {
+    state: "verified",
+    reasons: [
+      "Dogrulama tek bir cagriya ve kimlik dogrulamasina aittir.",
+      "Kimlik dogrulama basligi resmi belgede hala yayimlanmamistir.",
+    ],
+    detail: "Anahtar dogrulandi: saglayici olculu istege yanit verdi.",
+    checked_at: "2026-09-06T11:00:00+00:00",
+    probes_used: 1,
+    probe_ceiling: 8,
+  },
+};
+
+/** What the provider rejecting the key looks like. Its own state, its own
+ * sentence, and never the one above. */
+const REFUSED: OpenCodeStatus = {
+  ...SAVED,
+  check: {
+    state: "provider_refused",
+    reasons: ["Saglayici denetimi reddetti."],
+    detail: "Saglayici anahtari reddetti (401). Kaydedilen anahtar kabul edilmedi.",
+    checked_at: "2026-09-06T11:05:00+00:00",
+    probes_used: 2,
+    probe_ceiling: 8,
+  },
+};
+
+/** The ceiling spent. The control is greyed out before the refusal, not after. */
+const SPENT: OpenCodeStatus = {
+  ...SAVED,
+  check: {
+    ...REFUSED.check,
+    probes_used: 8,
+    reasons: [
+      "Saglayici denetimi reddetti.",
+      "Bu anahtar icin denetim tavani doldu (8/8). Yeni bir denetim cagrisi yapilmaz ve sifirlama yolu yoktur.",
+    ],
   },
 };
 
@@ -402,25 +462,153 @@ describe("OpenCode credential surface", () => {
 });
 
 describe("OpenCode honest status", () => {
-  it("produces no verified verdict and no green badge from a check", async () => {
-    stub(SAVED);
+  /**
+   * This replaces `produces no verified verdict and no green badge from a
+   * check`, which passed for five packages against a button that did nothing.
+   *
+   * It could not have failed. The stub answered every request with the same
+   * document, the panel's check called `GET /status` - the read it had already
+   * done on mount - and the assertion was that the verdict had *not* moved. A
+   * test whose subject is "nothing happened" is green whether the control is
+   * wired or absent, and this one was green because the control was absent.
+   *
+   * What replaced it asserts the press: which endpoint it hit, that it was a
+   * POST, and that the verdict on screen is the one the server sent back.
+   */
+  it("sends the check to its own endpoint and shows what came back", async () => {
+    const sent: Recorded[] = [];
+    stub(SAVED, {
+      sent,
+      onPost: (url) => (url.includes("/opencode/check") ? jsonOk(VERIFIED) : null),
+    });
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<OpenCodeConnectionPanel />);
+    await ready();
+
+    // Before the press: the honest not-yet-asked verdict.
+    expect(screen.getAllByText("Anahtar kaydedildi, dogrulanmadi").length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: "Baglantiyi denetle" }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Anahtar dogrulandi").length).toBeGreaterThan(0);
+    });
+    // The request went to the probe route, not to the status read.
+    expect(sent.map((entry) => entry.url).filter((url) => url.includes("/opencode/check"))).toHaveLength(1);
+    expect(screen.getByTestId("opencode-probe-budget")).toHaveTextContent("1/8 kullanildi");
+    expect(screen.getByText(VERIFIED.check.detail)).toBeInTheDocument();
+  });
+
+  it("shows a refusal as a refusal and never as the verdict before it", async () => {
+    stub(SAVED, {
+      onPost: (url) => (url.includes("/opencode/check") ? jsonOk(REFUSED) : null),
+    });
+    await bootstrapSession();
     const user = userEvent.setup();
     render(<OpenCodeConnectionPanel />);
     await ready();
 
     await user.click(screen.getByRole("button", { name: "Baglantiyi denetle" }));
-    await waitFor(() => {
-      expect(screen.getAllByText("Anahtar kaydedildi, dogrulanmadi").length).toBeGreaterThan(0);
-    });
 
+    await waitFor(() => {
+      expect(screen.getAllByText("Saglayici reddetti").length).toBeGreaterThan(0);
+    });
     const text = document.body.textContent ?? "";
-    expect(text).not.toContain("Dogrulandi");
-    expect(text).toContain("yeni bir dogrulama uretmez");
-    expect(text).toContain("Anahtarin bicimi dogru diye gecerli sayilmaz");
+    expect(text).not.toContain("Anahtar dogrulandi");
+    expect(text).toContain("401");
+  });
+
+  it("disables the check while it is in flight and does not send a second one", async () => {
+    let release = (): void => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let probes = 0;
+    stub(SAVED, {
+      onPost: (url) => {
+        if (!url.includes("/opencode/check")) return null;
+        probes += 1;
+        return held.then(() => new Response(JSON.stringify(VERIFIED), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }));
+      },
+    });
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<OpenCodeConnectionPanel />);
+    await ready();
+
+    await user.click(screen.getByRole("button", { name: "Baglantiyi denetle" }));
+    const busy = await screen.findByRole("button", { name: "Denetleniyor..." });
+    expect(busy).toBeDisabled();
+    // Every press costs a metered call against a ceiling with no reset, so a
+    // second one landing on the first would spend twice for one decision.
+    fireEvent.click(busy);
+    expect(probes).toBe(1);
+
+    release();
+    await screen.findByText(VERIFIED.check.detail);
+    expect(probes).toBe(1);
+  });
+
+  it("greys the check out once the ceiling for this key is spent", async () => {
+    stub(SPENT);
+    render(<OpenCodeConnectionPanel />);
+    await ready();
+
+    expect(screen.getByRole("button", { name: "Baglantiyi denetle" })).toBeDisabled();
+    expect(screen.getByTestId("opencode-probe-budget")).toHaveTextContent("8/8 kullanildi");
+    expect(document.body.textContent ?? "").toContain("sifirlama yolu yoktur");
+  });
+
+  it("does not offer the check before there is a key and a model to send", async () => {
+    stub(BASE);
+    render(<OpenCodeConnectionPanel />);
+    await ready();
+
+    // `BASE` is a fresh install: nothing stored, nothing selected. A press
+    // here could only ever produce a refusal, so it is not offered.
+    expect(screen.getByRole("button", { name: "Baglantiyi denetle" })).toBeDisabled();
+  });
+
+  it("states every reason the verdict is not stronger, and drops the ones a probe made false", async () => {
+    stub(SAVED, {
+      onPost: (url) => (url.includes("/opencode/check") ? jsonOk(VERIFIED) : null),
+    });
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<OpenCodeConnectionPanel />);
+    await ready();
+
     // Plural reasons, all of them, not one summarised excuse.
     for (const reason of SAVED.check.reasons) {
       expect(screen.getByText(`• ${reason}`)).toBeInTheDocument();
     }
+
+    await user.click(screen.getByRole("button", { name: "Baglantiyi denetle" }));
+    await screen.findByText(`• ${VERIFIED.check.reasons[0]}`);
+
+    // The sentence that said the key was not verified is gone rather than
+    // sitting under a badge that says it is.
+    expect(screen.queryByText(`• ${SAVED.check.reasons[0]}`)).toBeNull();
+    for (const reason of VERIFIED.check.reasons) {
+      expect(screen.getByText(`• ${reason}`)).toBeInTheDocument();
+    }
+  });
+
+  it("never calls the metered check on mount", async () => {
+    const sent: Recorded[] = [];
+    const spy = stub(SAVED, { sent });
+    render(<OpenCodeConnectionPanel />);
+    await ready();
+
+    expect(sent.some((entry) => entry.url.includes("/opencode/check"))).toBe(false);
+    const urls = spy.mock.calls.map(([input]) =>
+      typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url,
+    );
+    expect(urls.some((url: string) => url.includes("/opencode/check"))).toBe(false);
   });
 
   it("states that the auth header is an unverified assumption", async () => {

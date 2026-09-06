@@ -48,6 +48,18 @@ DEFECT_LINE = "TEST-ONLY: script calismiyor, hata veriyor"
 #: were read and produced nothing" distinguishable from "no lines were read".
 QUIET_LINE = "TEST-ONLY: bugun hava guzel"
 
+#: The user's actual complaint, as a line.
+#:
+#: Real work, phrased the way people phrase things: somebody has a broken
+#: build and would like company. It contains **none** of the twenty-nine
+#: literal markers the pattern list carried, so the build the user measured
+#: produced nothing from it - no candidate and no refusal - and their three
+#: rooms came back empty. ADR-0014 is about this line.
+ORDINARY_WORK_LINE = (
+    "TEST-ONLY: dun aksamdan beri derleme adimi yarida kesiliyor, "
+    "bakabilecek biri varsa cok sevinirim"
+)
+
 #: A line that matches a prohibited shape *and* a signal, so the ordering of
 #: the two checks is testable rather than assumed.
 WALLET_LINE = "kim yapabilir: wallet baglayip claim alacak biri lazim"
@@ -251,6 +263,7 @@ __all__ = [
     "HELP_LINE",
     "MARKERS",
     "NICKNAME",
+    "ORDINARY_WORK_LINE",
     "QUIET_LINE",
     "ROOM",
     "SECOND_ROOM",
@@ -267,3 +280,138 @@ __all__ = [
     "routing_transport",
     "status_transport",
 ]
+
+
+# ---------------------------------------------------------------------------
+# The reading lane, stubbed
+# ---------------------------------------------------------------------------
+#
+# ADR-0014 made candidate derivation depend on a model's verdict, so the tests
+# that are *not* about the model need a way to supply one without a provider.
+# This is that way, and it is deliberately dumb: a mapping from ``seq`` to
+# shape, decided by the test. Nothing here parses text, so a test that asserts
+# something about a candidate is asserting it about the derivation rather than
+# about a second implementation of the recogniser that was just deleted.
+
+
+@dataclass
+class StubReader:
+    """A :class:`station_api.workscan.reading.LineReader` a test writes.
+
+    ``verdicts`` maps a sequence number to a shape; a line with no entry comes
+    back with no verdict, which is the model saying "no work here".
+    ``refusals`` maps a sequence number to a reason, for the paths where the
+    reading did not happen.
+
+    It records what it was shown, because several tests are about exactly
+    that: which lines reached the lane, and which did not.
+    """
+
+    verdicts: dict[int, Any] = field(default_factory=dict)
+    refusals: dict[int, Any] = field(default_factory=dict)
+    seen: list[tuple[int, str]] = field(default_factory=list)
+    calls: int = 0
+
+    def classify(self, lines: Any, *, counter: Any) -> Any:
+        from station_api.workscan.reading import (
+            LineVerdict,
+            ReadingRefusal,
+            RoomReading,
+        )
+
+        self.calls += 1
+        self.seen.extend((line.seq, line.text) for line in lines)
+        return RoomReading(
+            verdicts=tuple(
+                LineVerdict(seq=line.seq, signal=self.verdicts[line.seq])
+                for line in lines
+                if line.seq in self.verdicts
+            ),
+            refusals=tuple(
+                ReadingRefusal(
+                    seq=line.seq,
+                    reason=self.refusals[line.seq],
+                    detail="TEST-ONLY refusal detail.",
+                )
+                for line in lines
+                if line.seq in self.refusals
+            ),
+            model_calls_used=counter.used,
+        )
+
+
+#: What the fixture lines are classified as, so a test that is not about the
+#: model keeps the meaning it had before ADR-0014.
+#:
+#: Text-keyed rather than ``seq``-keyed because the same line appears at
+#: different sequence numbers across this suite, and a table keyed by number
+#: would have to be re-stated in every test. ``QUIET_LINE`` is deliberately
+#: absent: "the model read this line and found no work" is the answer several
+#: tests depend on being distinguishable from "this line was never read".
+FIXTURE_VERDICTS: dict[str, str] = {}
+
+
+@dataclass
+class FixtureReader:
+    """A reader that answers for the fixture lines and for nothing else.
+
+    Used where a test needs a scan to *produce* something and is about
+    anything other than the reading lane - the HTTP surface, the task
+    machine, the request file. It contacts nobody and spends nothing.
+    """
+
+    def classify(self, lines: Any, *, counter: Any) -> Any:
+        from station_api.workscan.reading import LineVerdict, RoomReading
+
+        verdicts = []
+        for line in lines:
+            # Containment rather than equality: several tests wrap a fixture
+            # line in hostile text, and the point of those tests is what
+            # happens *after* a candidate exists.
+            for known, signal in FIXTURE_VERDICTS.items():
+                if known in line.text:
+                    verdicts.append(LineVerdict(seq=line.seq, signal=signal))
+                    break
+        return RoomReading(verdicts=tuple(verdicts))
+
+
+def reading_of(**verdicts: Any) -> Any:
+    """A :class:`RoomReading` naming ``seq`` to shape, for direct derivation.
+
+    Written as ``reading_of(s1=SignalId.HELP_WANTED)`` because keyword names
+    cannot start with a digit; the ``s`` is stripped.
+    """
+    from station_api.workscan.reading import LineVerdict, RoomReading
+
+    return RoomReading(
+        verdicts=tuple(
+            LineVerdict(seq=int(name.lstrip("s")), signal=signal)
+            for name, signal in verdicts.items()
+        )
+    )
+
+
+def _fill_fixture_verdicts() -> None:
+    """Populate the table after import, so the enum is loaded lazily.
+
+    Written as a function rather than as a literal above because importing
+    ``station_api.workscan.candidates`` at module scope would make this
+    fixtures file part of every import cycle it participates in.
+    """
+    from station_api.workscan.candidates import SignalId
+
+    FIXTURE_VERDICTS.update(
+        {
+            HELP_LINE: SignalId.HELP_WANTED,
+            DEFECT_LINE: SignalId.DEFECT_REPORT,
+            ORDINARY_WORK_LINE: SignalId.HELP_WANTED,
+            # Classified as work on purpose: the prohibition has to be what
+            # refuses it, not the absence of a verdict.
+            WALLET_LINE: SignalId.HELP_WANTED,
+        }
+    )
+
+
+_fill_fixture_verdicts()
+
+__all__ += ["FIXTURE_VERDICTS", "FixtureReader", "StubReader", "reading_of"]

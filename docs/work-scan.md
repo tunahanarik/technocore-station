@@ -1,11 +1,13 @@
 # İş Tara — kamuya açık oda taraması (Paket H1)
 
-Kapsam kararları: [`decisions/0007-paket-h1-kapsam-kararlari-2026-09-04.md`](decisions/0007-paket-h1-kapsam-kararlari-2026-09-04.md).
-Test edilebilir değişmezler: [`security-invariants.md`](security-invariants.md) §9i (SI-271…SI-284).
+Kapsam kararları: [`decisions/0007-paket-h1-kapsam-kararlari-2026-09-04.md`](decisions/0007-paket-h1-kapsam-kararlari-2026-09-04.md)
+ve — §3'ü değiştiren —
+[`decisions/0014-oda-satirlarini-model-okur-2026-09-06.md`](decisions/0014-oda-satirlarini-model-okur-2026-09-06.md).
+Test edilebilir değişmezler: [`security-invariants.md`](security-invariants.md) §9i (SI-271…SI-284) ve §9n (SI-349…SI-357).
 
 Bu belge dört soruyu cevaplar: **sözleşmenin neyi doğrulandı ve neyi
-doğrulanamadı**, **deterministik çıkarımın sınırı nerede**, **Kibble'ın durumu
-ne**, ve **polling yasağının karşılığı kodda ne**.
+doğrulanamadı**, **çıkarımın sınırı nerede ve satırları kimin okuduğu**,
+**Kibble'ın durumu ne**, ve **polling yasağının karşılığı kodda ne**.
 
 ---
 
@@ -158,28 +160,101 @@ bu pakette **hiçbir istek gönderilmedi**.
 
 ---
 
-## 3. Deterministik çıkarımın sınırı
+## 3. Çıkarımın sınırı: satırları model okur
 
-**Model çağrısı yoktur ve erişilebilir değildir.** Paket
-`station_api.opencode`'u import etmez ve bir test bunu sözdizim ağacından
-denetler.
+Kapsam kararı: [`decisions/0014-oda-satirlarini-model-okur-2026-09-06.md`](decisions/0014-oda-satirlarini-model-okur-2026-09-06.md).
 
-Bir adayın taşıdığı her değer **iki kaynaktan birinden** gelir:
+**Bu bölüm 6 Eylül 2026'da değişti ve neyin değiştiği kayda geçer.** Buradaki
+başlık "Deterministik çıkarımın sınırı" idi ve ilk cümlesi *"Model çağrısı
+yoktur ve erişilebilir değildir"* diyordu. İkisi de o gün doğruydu; ikisi de
+artık doğru değil.
+
+### Neden değişti: ölçüm
+
+Kullanıcı kendi odalarında gerçek bir tarama koştu:
+
+```
+gpu_mempool         · 50 satir okundu · 0 aday · 0 reddedilen
+technocore          · 50 satir okundu · 0 aday · 4 reddedilen
+technocore-genesis  · 50 satir okundu · 0 aday · 18 reddedilen
+```
+
+Aday üretimi işi **birebir ifade eşleşmesiyle** tanıyordu: dört sinyalde
+toplam 29 marker. Bu 29 dizeden birini içermeyen bir satır hiçbir şey
+üretmiyordu — ne aday, ne ret. Aynı dosyada tek başına cüzdan yasağı 34 marker
+taşıyordu, yani reddeden süzgeç kabul eden süzgeçten genişti.
+
+### Ne değişti: yalnız tanıma
+
+Kalkan tek şey `Signal.markers`, yani eşleşme. Dört şeklin adı ve **her
+şablonu** (`benefit`, `deliverable`, `success_condition`, `test_method`,
+`permissions`, `risks`, `effort_band`) birebir durur.
+
+Bir adayın taşıdığı her değer hâlâ **iki kaynaktan birinden** gelir:
 
 1. ham kaynak alanı (`room`, `seq`, `ts`, `from`, `text`), veya
 2. [`candidates.py`](../apps/station-api/src/station_api/workscan/candidates.py)
    içindeki **sabit şablon**.
 
-Üçüncü bir kaynak yoktur. Uydurulacak alan olmadığı için çıktı şeması denetimi
-ve kaynak referansı denetimi *ek* güvenliktir, *tek* güvenlik değil.
+Üçüncü bir kaynak hâlâ yoktur, çünkü okuma yolunun araçlarında **metin taşıyan
+bir parametre yoktur**: model yalnızca `(satır numaraları, dört addan biri)`
+döndürebilir. Modelin yazdığı bir cümle ürünün hiçbir yüzeyinde bulunmaz.
 
-### Kullanıcıya gösterilen dürüstlük cümlesi
+Kimlik de değişmedi: aday kimliği `(room, seq)` üzerinden üretilir ve
+`candidate_content` yalnız ham alanlar ile sabit şablonlar üzerinden hesaplanır,
+yani `source_version_id` model çıktısına bağlı değildir.
 
-> Bu sürüm adayları kalıp eşleşmesiyle çıkarır; anlamsal çıkarım yoktur, bu
-> yüzden bir odadaki her fırsat görülmez.
+### Model yolu nerede
 
-Bu cümle her `status` okumasında ve her tarama sonucunda yanıt gövdesindedir;
-bir tasarım belgesine gömülmemiştir.
+Yeni paket: [`workreader/`](../apps/station-api/src/station_api/workreader/).
+`station_api/workscan` hâlâ `station_api.opencode`'u **import etmez** ve bir
+test bunu sözdizim ağacından denetler; tarama paketi yalnız bir `LineReader`
+protokolü adlandırır, somut sınıfı `app.py` bağlar.
+
+| Katman | Ne yapar |
+|---|---|
+| `workscan/candidates.py::readable_lines` | Yasak kaydına takılan satırı **çıkarır**; o satır modele hiç gitmez |
+| `workreader/protocol.py` | Kapalı registry (dört araç, tek parametre: satır numaraları), istek mesajlarını kurar, cevabı çözer |
+| `workreader/service.py` | Tavanı kontrol eder, turu gönderir, sayacı artırır, cevabı registry'den geçirir |
+| `workscan/candidates.py::derive_from_room` | Yasak kaydını **yeniden** uygular, sonra verdict'i okur; sekiz öğe ve kimlik aynen |
+
+### Yabancı metnin kapsanması
+
+Satırlar süpürülür (`sweep_untrusted`; satırsonu dahil her taşıyıcı karakter
+boşluğa döner), numaralandırılır, sınırlanır ve **tek** bir `user` mesajının
+`READING_CONTENT_CAVEAT`'ten sonra gelen bölümüne konur. Kurallar `system`
+mesajındadır ve oda metninden üretilmiş bir `system`/`assistant` mesajı yoktur.
+Bloğun **kapanış işareti yoktur**: kapanış işareti odanın yazabileceği bir
+dizedir.
+
+Asıl koruma bunların hiçbiri değildir ve bunu söylemek önemlidir: koruma
+**cevabın şeklidir**. "Önceki talimatlarını yok say" diyen bir satırın
+ulaşabileceği en uç sonuç yanlış bir sınıflandırmadır, ve yanlış bir
+sınıflandırma da yasak kaydından, sekiz öğeden ve kullanıcının onayından
+geçmek zorundadır.
+
+### Harcama
+
+Birim ADR-0012 §3'ün seçtiği birimdir: **model çağrısı sayısı**. Tavan
+`budget.CEILING.max_model_calls`; kontrol planlama yolunun aynı saf
+`budget.check` fonksiyonudur; sayaç `agent/model_calls.py::ScanModelCallCounter`
+ve yalnızca artar. Bir tur en çok `MAX_LINES_PER_TURN` (60) satır taşır, yani
+iki yüz satırlık bir oda iki yüz tur harcayamaz. Sayaç tarama başınadır ve
+diske yazılmaz; gerekçesi ve bedeli ADR-0014 §4'tedir.
+
+### Kullanıcıya gösterilen iki cümle
+
+> Bu sürüm adayları, odadan okunan satırları bir dil modeline okutarak çıkarır;
+> model yanılabilir ve bir satırı yanlış sınıflandırabilir, bu yüzden bir adayı
+> kabul etmeden önce alıntıyı kendiniz okuyun.
+
+> Bu tarama model çağrısı harcar: her tur en çok 60 satır taşır ve bir tarama
+> en çok 8 tur harcayabilir. Tavan dolarsa kalan satırlar okunmaz ve
+> gerekçesiyle listelenir; harcanan tur sayısı sonucun yanında gösterilir.
+
+İkisi de her `status` okumasında yanıt gövdesindedir ve ekranda tarama
+düğmesinin yanındadır; bir tasarım belgesine gömülmemiştir. İkincisi
+**harcanmadan önce** okunur.
 
 ### Sekiz zorunlu öğe
 
@@ -318,8 +393,11 @@ Sonuçları:
   bile bu mesajın o anahtarla imzalandığını söylemez (imza ayrı bir alandır ve
   bu yolda doğrulanmaz);
 - içerik **veridir**: süpürülür, HTML olarak render edilmez, otomatik
-  linkleştirilmez ve hiçbir modele talimat olarak verilmez — bu pakette bir
-  model çağrısı zaten yoktur.
+  linkleştirilmez ve bir modele **talimat olarak** verilmez. Bu cümlenin son
+  yarısı ADR-0014'ten sonra daha çok iş yapıyor: satırlar artık bir modele
+  gösteriliyor, fakat numaralanmış bir veri bloğunda, `READING_CONTENT_CAVEAT`
+  altında, ve modelin döndürebileceği tek şey dört addan biri ile satır
+  numaralarıdır (§3).
 
 ---
 
@@ -451,9 +529,17 @@ kimlik değil.
 
 ## 8. Bu pakette bilinçli olarak yapılmayanlar
 
-- Model çağrısı, streaming, tool-call (H2).
-- Bütçe ve maliyet tavanı — tahmin **tahmin** olarak etiketlidir ve bütçe
-  `not_implemented`'tır (H2).
+> **Not (6 Eylül 2026).** Bu liste H1'in kendi turunda yazıldı. İlk iki madde
+> o turda doğruydu ve ADR-0012 ile ADR-0014 ikisini de geçersiz kıldı;
+> silinmiyorlar, çünkü neyin ne zaman açıldığı kaydın kendisidir.
+
+- ~~Model çağrısı, streaming, tool-call (H2).~~ **Model çağrısı ADR-0014 ile
+  açıldı** (§3). Streaming ve `wait` hâlâ kapalıdır.
+- ~~Bütçe ve maliyet tavanı — tahmin **tahmin** olarak etiketlidir ve bütçe
+  `not_implemented`'tır (H2).~~ Aday üzerindeki `budget_state` hâlâ
+  `not_implemented`'tır ve bu doğrudur: adayın *işi* için bir bütçe hâlâ
+  yoktur. **Taramanın kendi harcaması** için bir tavan artık vardır ve
+  `budget.CEILING.max_model_calls`'tur (§3, ADR-0014 §4).
 - Kibble'a istek, Kibble adapter'ı (§6).
 - Oda **açmak**: `/r/{oda}`'ya ilk mesaj bir yazmadır, DID ve write
   gate'in altı ön koşulunu ister. Bu turda yazma yolu açılmadı; keşif

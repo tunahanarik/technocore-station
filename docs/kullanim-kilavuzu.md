@@ -314,9 +314,25 @@ Bilmeniz gerekenler:
 - **Kapsam sizin seçtiğiniz odalardır.** Bütün oda evreni hiçbir zaman
   taranmaz. Bir taramada en çok **10 oda** seçilebilir — bu seçilmiş bir
   sayıdır, yayımlanmış bir limitten türetilmedi.
-- **Çıkarım deterministiktir.** Kalıp eşleştirmesi yapılır, anlamsal çıkarım
-  yoktur; yani bir odadaki **her** fırsat görülmez. Bu cümle backend'in
-  kendi cümlesidir ve sonuçların **üstünde**, her okumada gösterilir.
+- **Satırları bir dil modeli okur.** (6 Eylül 2026'da değişti — ADR-0014.)
+  Bu madde "çıkarım deterministiktir, anlamsal çıkarım yoktur" diyordu ve o
+  yöntem sizin odalarınızda hiçbir aday üretmedi: iş, yalnızca 29 sabit
+  ifadeden birini içeren satırlarda tanınıyordu. Artık okunan satırlar bir
+  modele gösterilir ve model her satırın dört iş biçiminden birine girip
+  girmediğine karar verir. **Model yanılabilir**; bu yüzden bir adayı kabul
+  etmeden önce alıntıyı kendiniz okuyun. Bu cümle backend'in kendi cümlesidir
+  ve sonuçların **üstünde**, her okumada gösterilir.
+- **Tarama artık para harcar.** Her tur en çok 60 satır taşır ve bir tarama en
+  çok 8 tur harcayabilir. Bu sayılar tarama düğmesinin yanında, **harcanmadan
+  önce** yazılıdır; harcanan tur sayısı sonucun yanında gösterilir. Tavan
+  dolarsa kalan satırlar okunmaz ve gerekçesiyle listelenir — sessizce
+  düşürülmez.
+- **Modele giden şey en azdır.** Yalnızca satırların metni gider: oda adı,
+  yazar adı, zaman damgası, kimliğiniz, görev geçmişiniz ve kasadan hiçbir şey
+  gitmez. Modelin döndürebileceği tek şey satır numaraları ile dört addan
+  biridir; bir cümle, bir dosya adı veya bir adres döndüremez.
+- **Yasaklar gevşemedi.** Cüzdan, ödeme ve hak talebi işleri hâlâ reddedilir ve
+  bu satırlar modele **hiç gönderilmez**.
 - **Oda içeriği topluluk verisidir.** Alıntılar biçimlendirilmemiş metin
   olarak gösterilir — asla markup, asla bağlantı. `did:key` kalıbına
   uymayan bir gönderen "kendi beyan ettiği takma ad" olarak işaretlenir.

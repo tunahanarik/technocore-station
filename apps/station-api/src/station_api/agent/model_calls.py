@@ -1,4 +1,17 @@
-"""The model-call counter: per task, durable, and it only goes up.
+"""The model-call counters: they only go up, and neither has a reset.
+
+Two of them since ADR-0014, for two lanes that spend the same unit against
+the same ceiling. :class:`ModelCallCounter` is the planning lane's, keyed by
+task and written to a row. :class:`ScanModelCallCounter` is the work scan's,
+keyed by nothing because a scan is one request, and its own docstring states
+what that costs rather than leaving the asymmetry to be discovered. What they
+share is the part that matters: one writer each, addition only, no setter,
+and :func:`station_api.agent.budget.check` deciding whether one more turn may
+be spent.
+
+The rest of this docstring is about the first one.
+
+The model-call counter: per task, durable, and it only goes up.
 
 ADR-0013. This module exists because the number it holds is the **only spend
 control this product owns**. ADR-0012 3 decided that on purpose: the provider
@@ -48,11 +61,13 @@ that increments it.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
 
+from station_api.agent import budget
 from station_api.db.models import ModelCallLedger
 
 
@@ -113,4 +128,95 @@ class ModelCallCounter:
             return int(row.model_calls_used)
 
 
-__all__ = ["ModelCallCounter"]
+@dataclass(slots=True)
+class ScanModelCallCounter:
+    """Model turns one **scan** has spent. Per scan, monotonic, no reset.
+
+    ADR-0014 4. The work scan spends model turns now, so it needs the same two
+    things the planning lane needs: a number this process counts itself, and a
+    limit expressed in that number. Both are the ones that already exist -
+    :func:`station_api.agent.budget.check` and
+    :attr:`station_api.agent.budget.RunCeiling.max_model_calls` - so there is
+    no second ceiling anywhere and ``budget.py`` is untouched.
+
+    Why this one is not a row, when the planning lane's is
+    ------------------------------------------------------
+    ADR-0013 moved the planning count to ``model_call_ledger`` because the
+    defect there was a **refillable counter for a long-lived subject**: the
+    number was a field on a task's in-memory session, and "start over" dropped
+    the session, so a button handed back a fresh ceiling against a metered
+    endpoint.
+
+    A scan has no such subject. It is one synchronous request: there is no
+    button inside it, no session to resume and no restart to survive. A row
+    keyed by a fresh scan id would be refilled by the next scan exactly as
+    this object is, so it would bound nothing that this does not bound - and a
+    control that can be deleted with nothing going red is the shape ADR-0012 1
+    removed rather than kept.
+
+    The cost is stated rather than hidden: **a second scan starts with a fresh
+    ceiling.** That is the same sentence ADR-0013 3.1 writes about a second
+    task, and it needs the same thing - a deliberate user action. What stands
+    between a person and an unbounded bill is therefore the ceiling *inside* a
+    scan plus the cost sentence beside the button, and both are stated on the
+    surface (ADR-0014 6).
+
+    What this class cannot do
+    --------------------------
+    There is no ``reset``, no ``clear`` and no setter, for
+    :class:`ModelCallCounter`'s reason. :meth:`record_call` adds one;
+    :attr:`used` reads. ``test_nothing_lowers_the_scan_model_call_counter``
+    reads the syntax tree of the whole ``station_api`` package and refuses any
+    write to ``_scan_model_calls_used`` outside the one method that increments
+    it, and a second test requires that write to be an addition.
+    """
+
+    #: Declared rather than assigned in a body, and that is not a style
+    #: choice. ``test_nothing_lowers_the_scan_model_call_counter`` requires
+    #: exactly **one** write to this attribute in the whole product; an
+    #: ``__init__`` that set it to zero would be a second one, and a second
+    #: one is a method somebody can call again. The dataclass generates the
+    #: initialisation, so the only write in the source is the increment.
+    _scan_model_calls_used: int = field(default=0, init=False)
+
+    @property
+    def used(self) -> int:
+        """Turns this scan has spent so far."""
+        return self._scan_model_calls_used
+
+    @property
+    def max_model_calls(self) -> int:
+        """The ceiling, read from the one place a ceiling is decided."""
+        return budget.CEILING.max_model_calls
+
+    def verdict(self) -> budget.BudgetVerdict:
+        """May one more turn be spent? The planning lane's own pure check.
+
+        Called **before** a request is built, so a refusal here costs nothing
+        because nothing was sent. ``tool_calls`` and ``elapsed_seconds`` are
+        zero because this lane makes no tool call and takes no wall-clock
+        budget of its own; the only unit it spends is the one it is asking
+        about.
+        """
+        return budget.check(
+            budget.RunUsage(
+                tool_calls=0,
+                model_calls=self._scan_model_calls_used,
+                elapsed_seconds=0.0,
+            )
+        )
+
+    def record_call(self) -> int:
+        """Count one turn against this scan and return the new total.
+
+        The **only** writer, and it only adds. Called once, immediately after
+        a provider answer has been parsed - the same moment the planning lane
+        counts one, so what a turn costs means the same thing on both lanes.
+        A turn the provider never answered is not counted, because nothing
+        came back to count.
+        """
+        self._scan_model_calls_used += 1
+        return self._scan_model_calls_used
+
+
+__all__ = ["ModelCallCounter", "ScanModelCallCounter"]

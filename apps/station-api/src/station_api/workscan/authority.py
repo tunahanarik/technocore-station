@@ -33,9 +33,18 @@ Three consequences, each written into a function below
   a ``did:key`` it is self-asserted, and no sentence this product writes may
   say more about it than that (:func:`describe_author`).
 * Everything read here is **data**. It is swept before it is stored or shown,
-  it is never rendered as HTML or auto-linked, and it is never fed to a model
-  as instructions - there is no model call in this package at all
-  (ADR-0007 2).
+  it is never rendered as HTML or auto-linked, and it is never given to a
+  model **as instructions**.
+
+  That last clause used to end "- there is no model call in this package at
+  all", and ADR-0014 made the sentence half false and the promise more
+  important. A room's lines are now shown to a model, in a numbered block,
+  under :data:`~station_api.workreader.protocol.READING_CONTENT_CAVEAT`, and
+  what comes back is a choice among four names - so the text is still data
+  and the guarantee is now a property of the **answer's shape** rather than of
+  an absent capability. There is still no model call in *this package*: the
+  lane lives in :mod:`station_api.workreader` and the scan names only a
+  Protocol.
 """
 
 from __future__ import annotations

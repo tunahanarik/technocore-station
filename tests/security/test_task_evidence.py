@@ -148,6 +148,7 @@ BUDGET_SCANNED_DIRS = (
     "tasks",
     "technocore",
     "vault",
+    "workreader",
 )
 
 #: Every loose module directly under ``station_api``, written out.
@@ -336,9 +337,27 @@ BUDGET_NAMES_ONE_PACKAGE_MAY_USE: dict[str, dict[str, str]] = {
 #: ``not_implemented`` verdict and its own sentence and reads no ceiling at
 #: all. An exemption whose justification nothing checks is how a list of
 #: reasons decays into a list of names, and this is that check working.
+#:
+#: ADR-0015 added the fourth, and the pin did its job: ``opencode/service.py``
+#: imports ``MAX_CONNECTION_PROBES`` because the connection probe is a metered
+#: model call and a metered call nothing counts is a way around the ceiling
+#: next door. It reads a limit rather than declaring one - the constant stays
+#: in ``budget.py``, which is the module ADR-0013 2 says limits live in, and a
+#: ceiling written next to the connection it bounds would have been the second
+#: place to look for one.
 THE_CEILING_MODULE = "station_api.agent.budget"
+#: ``agent/model_calls.py`` joined on ADR-0014 and it reads oddly enough to be
+#: worth a sentence: ``budget.py`` is the **limit** and ``model_calls.py`` is
+#: the **meter**, and ADR-0013 2 put them in separate files precisely so the
+#: two would not be confused. The meter names the limit because the work
+#: scan's counter answers "may one more turn be spent" with the same pure
+#: ``budget.check`` the planning lane uses. Naming the ceiling is what "there
+#: is no second ceiling" looks like in code; opening one would be a new
+#: constant, and there is not one.
 MODULES_THAT_NAME_THE_CEILING = (
+    "agent/model_calls.py",
     "agent/service.py",
+    "opencode/service.py",
     "planner/service.py",
     "routes/agent.py",
 )
@@ -1736,10 +1755,11 @@ def test_the_ceiling_is_named_by_exactly_the_modules_written_down_here(
     ``station_api.agent.budget`` *and this package names it rather than
     opening one*. A sentence cannot stop being true loudly, so the mechanical
     version is asserted here - the module that declares ``CEILING`` is
-    imported by exactly three modules in the whole tree, and every one of them
-    is either the ceiling's own package or written down above.
+    imported by exactly the modules :data:`MODULES_THAT_NAME_THE_CEILING`
+    names, and every one of them is either the ceiling's own package or
+    written down above.
 
-    A fourth importer, or a scanned package that started importing it without
+    One importer more, or a scanned package that started importing it without
     an allowance, fails here long before anybody re-reads the paragraphs.
 
     Read off the syntax tree rather than by searching the text, for the reason

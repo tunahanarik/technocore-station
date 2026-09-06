@@ -25,6 +25,7 @@ from station_api.workscan import language as language_module
 from station_api.workscan.language import (
     DERIVATION_HONESTY_SENTENCE,
     FORBIDDEN_PHRASES,
+    MODEL_READING_COST_SENTENCE,
     NEUTRALISED_MARK,
     OPEN_STATE_SENTENCE,
     PERMITTED_ALTERNATIVES,
@@ -337,5 +338,17 @@ def test_the_guard_is_wired_into_the_producer_and_not_only_defined(
 
 
 def test_the_honesty_sentence_is_not_itself_a_forbidden_claim() -> None:
+    """The sentence changed with ADR-0014; what it must not do did not.
+
+    It still may not carry a forbidden claim of its own - that half is
+    unchanged. What it says has to be the **current** cost, and the old
+    wording ("no semantic inference") became false the day a model started
+    reading the lines, so its absence is asserted as firmly as the new
+    wording's presence: a promise that quietly stops being true is worse than
+    one nobody made.
+    """
     assert find_forbidden_phrases(DERIVATION_HONESTY_SENTENCE) == ()
-    assert "anlamsal cikarim yoktur" in DERIVATION_HONESTY_SENTENCE
+    assert "anlamsal cikarim yoktur" not in DERIVATION_HONESTY_SENTENCE
+    assert "dil modeline" in DERIVATION_HONESTY_SENTENCE
+    assert "yanilabilir" in DERIVATION_HONESTY_SENTENCE
+    assert find_forbidden_phrases(MODEL_READING_COST_SENTENCE) == ()

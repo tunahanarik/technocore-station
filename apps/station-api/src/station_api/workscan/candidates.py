@@ -1,34 +1,50 @@
-"""Deterministic candidate derivation. No model call, and none is reachable.
+"""Candidate derivation: a model reads the line, this module decides everything else.
 
-ADR-0007 2 settles the question this module exists to answer: candidates are
-derived by **rule**, not by asking a language model. The constraint half of
-the reasoning is easy to state - no code path in this build sends a
-completion, the test session severs real egress at the socket, and so a model
-call could not be verified by any test that exists. The load-bearing half is
-different, and it is why the decision would stand even without the constraint:
+ADR-0014 replaced the answer ADR-0007 2 gave, and it is worth being exact
+about which half changed.
 
-    in a deterministic derivation there is no field left to invent.
+What changed: recognition
+--------------------------
+Work used to be recognised by **literal phrase matching** - four signals
+carrying twenty-nine markers between them - and the user measured what that
+saw in their own three rooms across a hundred and fifty lines: **nothing**.
+Not one candidate. A line that did not contain one of those twenty-nine
+strings produced no candidate and no refusal, so the screen was blank and the
+blankness looked like an answer. In the same file the wallet prohibition alone
+carried thirty-four markers, so the refusing filter was wider than the
+accepting one, and almost every line that matched anything matched a refusal.
 
-Every value on a candidate comes from exactly one of two places, and which
-one is visible in the type: it is either a raw field of the source line
-(``room``, ``seq``, ``ts``, ``from``, ``text``) or a fixed template written
-here and reviewed here. There is no third source. Output-schema validation and
-a source-reference audit are then *additional* protection rather than the only
-protection - which is the situation a generated candidate would have left us
-in, checking a free-form answer against a shape and hoping the shape was
-enough.
+Recognition is now :mod:`station_api.workreader`'s job: it shows the lines to
+the selected model and gets back ``(line, one of four shapes)`` through a
+closed tool registry. Nothing else here moved.
 
-There is a second reason, and it is about identity. A task binds to
-``source_version_id``, a digest over the source and the exact content bytes.
-Rule-based derivation gives the same bytes for the same line every time, so
-the identity is stable and de-duplication means something. A generated
-candidate would differ on every run and the identity would name nothing.
+What did not change: everything a candidate says
+-------------------------------------------------
+Every value on a candidate still comes from exactly one of two places, and
+which one is still visible in the type: a raw field of the source line
+(``room``, ``seq``, ``ts``, ``from``, ``text``) or a fixed template in
+:data:`SIGNALS`, written here and reviewed here. **There is still no third
+source.** The reading lane has no text parameter to fill in - its tools accept
+line numbers and nothing else - so a model cannot author a benefit, a
+deliverable, a success condition, a test method, a permission or a risk. It
+picks among four sets of sentences this product wrote (ADR-0014 1).
+
+The identity argument survives too, and it was the stronger of ADR-0007 2's
+two. A task binds to ``source_version_id``, a digest over
+:func:`candidate_content`, and that function reads raw source fields and fixed
+templates only. The same line yields the same bytes on every scan whatever the
+model said, so de-duplication still means something and evidence recorded
+against a proposal does not stop matching because a second reading phrased
+things differently.
 
 The price, stated out loud
 --------------------------
-Pattern matching sees patterns. :data:`~station_api.workscan.language.
-DERIVATION_HONESTY_SENTENCE` says so to the user, in the response, on every
-scan - not in a design document a user never opens (ADR-0007 2).
+It is a different price now and the sentence a user sees says so. A model can
+be wrong about a line, and :data:`~station_api.workscan.language.
+DERIVATION_HONESTY_SENTENCE` says that in the response on every scan - not in
+a design document a user never opens. Reading also costs model turns, and
+:data:`~station_api.workscan.language.MODEL_READING_COST_SENTENCE` says that
+before the button is pressed (ADR-0014 6).
 
 The eight elements are enforced by construction
 -----------------------------------------------
@@ -39,25 +55,28 @@ built for an unfillable field. A candidate that cannot carry all eight is not
 produced at all, so there is no partially-formed candidate anywhere in the
 system to be rendered, stored or turned into a task.
 
-Prohibited work is refused before anything else runs
------------------------------------------------------
+Prohibited work is refused before the verdict is read
+------------------------------------------------------
 Six shapes are named in :class:`ProhibitedShape` and matched **first**, before
-any signal is considered, so a line that looks like one of them produces no
-candidate on any path. What is structural is the *ordering* and the fact that
-there is no code path around it; the matching itself is a **pattern list**,
-and the honest word for it is not "structurally impossible". A line that asks
-for a payment in words the list does not contain produces a candidate, and
-:func:`prohibited_shape` says so in its own docstring rather than leaving the
-reader with the stronger impression.
+a verdict is consulted, so a line that looks like one of them produces no
+candidate on any path - including a path where a model said it was work. The
+ordering is what is structural, and there is no code path around it; the
+matching itself is a **pattern list**, and the honest word for it is not
+"structurally impossible". A line that asks for a payment in words the list
+does not contain produces a candidate, and :func:`prohibited_shape` says so in
+its own docstring rather than leaving the reader with the stronger impression.
+
+The same registry runs a second time, earlier, in :func:`readable_lines`: a
+prohibited line is not sent to a provider at all. That one is a cost and
+exposure decision. The one that *enforces* the rule is the one in
+:func:`derive_from_room`, because it is the one a verdict has to get past.
 
 The refusal is recorded and shown rather than dropped silently: a line this
 build declined to act on is a fact about the scan, and hiding it would make
 the scan look like it saw less than it did. That rule holds for every reason a
-line is declined, not only for the six shapes - a repeated ``seq`` and a line
-this build cannot quote are refusals with their own sentence too, for the same
-reason.
+line is declined - the six shapes, a repeated ``seq``, a line this build
+cannot quote, and every reason the reading lane reports back.
 """
-
 from __future__ import annotations
 
 from collections.abc import Iterable
@@ -78,6 +97,8 @@ from station_api.workscan.language import (
     assert_no_forbidden_claim,
     neutralise,
 )
+from station_api.workscan.reading import ReadableLine, RoomReading
+from station_api.workscan.signals import SignalId
 from station_api.workscan.snapshot import RoomMessage, RoomMessagesSnapshot
 
 #: Domain separation for a candidate's identity. Versioned: a change to what
@@ -85,9 +106,12 @@ from station_api.workscan.snapshot import RoomMessage, RoomMessagesSnapshot
 #: one, so an old identity can never be read as a new-format one.
 CANDIDATE_DOMAIN = b"technocore-station/work-scan-candidate/v1"
 
-#: How a candidate was produced. One value today, and the field exists so a
-#: later producer cannot be mistaken for this one.
-DERIVATION_METHOD: Final = "rule_based_pattern_match"
+#: How a candidate was produced. The field existed so that a later producer
+#: could not be mistaken for the one that wrote it, and ADR-0014 is that later
+#: producer: a candidate derived by phrase matching and a candidate derived by
+#: a model reading the line are told apart **by name** rather than by the date
+#: on the build that made them.
+DERIVATION_METHOD: Final = "model_read_line_classification"
 
 
 # ---------------------------------------------------------------------------
@@ -293,28 +317,29 @@ def prohibited_shape(text: str) -> ProhibitedShape | None:
 # ---------------------------------------------------------------------------
 
 
-class SignalId(StrEnum):
-    """The kinds of line this build recognises. Four, and never a fifth
-    computed at runtime."""
-
-    HELP_WANTED = "help_wanted"
-    DEFECT_REPORT = "defect_report"
-    REVIEW_REQUEST = "review_request"
-    DOCUMENTATION_GAP = "documentation_gap"
-
-
 @dataclass(frozen=True, slots=True)
 class Signal:
-    """One recogniser: what it matches, and the fixed sentences it produces.
+    """One shape of work, and the fixed sentences a candidate of it carries.
 
     Every template below is a **constant with named substitutions**, and the
     only values substituted are the raw source fields. There is no free text
     anywhere in a produced candidate that did not come from one of these
     strings or from the message itself.
+
+    It used to carry a ``markers`` tuple as well - the literal phrases a line
+    had to contain - and ADR-0014 removed it after the user measured what it
+    saw in their own rooms: **nothing**, in three rooms, across a hundred and
+    fifty lines. What is left is the half that was never the problem. These
+    seven fields are this product's own statement of what accepting a
+    candidate commits to: what is delivered, when it is done, how that is
+    checked, what has to be permitted first and what could go wrong. A model
+    chooses **among** them; it does not write them, because a proposer that
+    also writes the acceptance criterion has not been given a criterion
+    (``planner/service.py::_condition_sentence``, and the same sentence is
+    truer here, where the subject is a stranger's line).
     """
 
     id: SignalId
-    markers: tuple[str, ...]
     benefit: str
     deliverable: str
     success_condition: str
@@ -353,25 +378,16 @@ _RISK_PARTIAL_VIEW = (
     "yani daha once verilmis bir cevap bu taramada gorunmeyebilir."
 )
 
-_RISK_NO_SEMANTICS = (
-    "Aday kalip eslesmesiyle cikarildi. Satirin gercek anlami farkli olabilir; "
-    "kabul etmeden once alintiyi okuyun."
+_RISK_MODEL_READING = (
+    "Bu satirin bir is firsati tarif ettigine bir dil modeli karar verdi. "
+    "Model yanilabilir ve satirin gercek anlami farkli olabilir; kabul "
+    "etmeden once alintiyi okuyun."
 )
 
 
 SIGNALS: tuple[Signal, ...] = (
     Signal(
         id=SignalId.HELP_WANTED,
-        markers=(
-            "yardim eden",
-            "yardimci olabilir",
-            "help wanted",
-            "looking for someone",
-            "kim yapabilir",
-            "isteyen var mi",
-            "birine ihtiyacim var",
-            "need help with",
-        ),
         benefit=(
             "'{room}' odasinda {author} bir yardim cagrisi yazdi. Isi yapan "
             "kisi o cagriyi karsilamis olur; baska kimse hakkinda bir fayda "
@@ -390,21 +406,11 @@ SIGNALS: tuple[Signal, ...] = (
             "odadaki yaniti gosteren bir kanit kaydiyla belgelenir."
         ),
         permissions=(_PERMISSION_WRITE, _PERMISSION_READ),
-        risks=(_RISK_UNVERIFIED_AUTHOR, _RISK_PARTIAL_VIEW, _RISK_NO_SEMANTICS),
+        risks=(_RISK_UNVERIFIED_AUTHOR, _RISK_PARTIAL_VIEW, _RISK_MODEL_READING),
         effort_band="bir oturum veya daha az",
     ),
     Signal(
         id=SignalId.DEFECT_REPORT,
-        markers=(
-            "hata veriyor",
-            "calismiyor",
-            "bozuk",
-            "is broken",
-            "does not work",
-            "doesn't work",
-            "throws an error",
-            "bug:",
-        ),
         benefit=(
             "'{room}' odasinda {author} calismayan bir sey bildirdi. Sorunu "
             "yeniden uretip duzelten kisi o bildirimi karsilamis olur."
@@ -422,19 +428,11 @@ SIGNALS: tuple[Signal, ...] = (
             "ayri ayri kaydedilir ve tek bir 'gecti' isaretine indirgenmez."
         ),
         permissions=(_PERMISSION_WRITE, _PERMISSION_READ),
-        risks=(_RISK_UNVERIFIED_AUTHOR, _RISK_PARTIAL_VIEW, _RISK_NO_SEMANTICS),
+        risks=(_RISK_UNVERIFIED_AUTHOR, _RISK_PARTIAL_VIEW, _RISK_MODEL_READING),
         effort_band="bir oturum veya daha az",
     ),
     Signal(
         id=SignalId.REVIEW_REQUEST,
-        markers=(
-            "review eder misiniz",
-            "gozden gecirir misiniz",
-            "please review",
-            "can someone review",
-            "feedback almak istiyorum",
-            "yorum bekliyorum",
-        ),
         benefit=(
             "'{room}' odasinda {author} bir inceleme istedi. Inceleyen kisi o "
             "istegi karsilamis olur; inceleme tek basina bir basari isareti "
@@ -453,20 +451,11 @@ SIGNALS: tuple[Signal, ...] = (
             "baglanamayan madde nottan cikarilir."
         ),
         permissions=(_PERMISSION_WRITE, _PERMISSION_READ),
-        risks=(_RISK_UNVERIFIED_AUTHOR, _RISK_PARTIAL_VIEW, _RISK_NO_SEMANTICS),
+        risks=(_RISK_UNVERIFIED_AUTHOR, _RISK_PARTIAL_VIEW, _RISK_MODEL_READING),
         effort_band="bir oturum veya daha az",
     ),
     Signal(
         id=SignalId.DOCUMENTATION_GAP,
-        markers=(
-            "belge yok",
-            "dokuman yok",
-            "nasil kullanilir",
-            "no documentation",
-            "undocumented",
-            "how do i use",
-            "ornek var mi",
-        ),
         benefit=(
             "'{room}' odasinda {author} eksik bir aciklama bildirdi. Aciklamayi "
             "yazan kisi o eksigi kapatmis olur."
@@ -484,29 +473,24 @@ SIGNALS: tuple[Signal, ...] = (
             "yazi eksiktir ve sonuc 'gecti' sayilmaz."
         ),
         permissions=(_PERMISSION_WRITE, _PERMISSION_READ),
-        risks=(_RISK_UNVERIFIED_AUTHOR, _RISK_PARTIAL_VIEW, _RISK_NO_SEMANTICS),
+        risks=(_RISK_UNVERIFIED_AUTHOR, _RISK_PARTIAL_VIEW, _RISK_MODEL_READING),
         effort_band="bir oturum veya daha az",
     ),
 )
 
-_FOLDED_SIGNALS: tuple[tuple[Signal, tuple[str, ...]], ...] = tuple(
-    (signal, tuple(fold(marker) for marker in signal.markers)) for signal in SIGNALS
-)
+_BY_SIGNAL: dict[SignalId, Signal] = {signal.id: signal for signal in SIGNALS}
 
 
-def matching_signal(text: str) -> Signal | None:
-    """The first signal a line matches, in declaration order, or ``None``.
+def signal_for(signal_id: SignalId) -> Signal:
+    """The record for one shape. Total over the enum, by construction.
 
-    First rather than best: "best" would need a score, a score would need a
-    weighting, and a weighting is the first step towards the inference this
-    package does not perform. Declaration order is a decision a reviewer can
-    read.
+    A lookup rather than a search, and it replaced ``matching_signal`` whole.
+    The old function asked "does this line contain one of twenty-nine
+    phrases"; this one asks "which of the four shapes did the reading lane
+    name", and the answer is already a :class:`SignalId`, so there is no
+    string here to spell wrong.
     """
-    haystack = fold(text)
-    for signal, needles in _FOLDED_SIGNALS:
-        if any(needle in haystack for needle in needles):
-            return signal
-    return None
+    return _BY_SIGNAL[signal_id]
 
 
 # ---------------------------------------------------------------------------
@@ -769,6 +753,11 @@ class DerivationResult:
     #: How many lines were read to produce the above. Reported so an empty
     #: candidate list is distinguishable from an empty room.
     lines_read: int
+    #: Model turns the reading lane spent on this room. Reported beside the
+    #: result rather than summed away, because a room that produced nothing
+    #: after four turns and a room that produced nothing after none are
+    #: different facts about where the scan's ceiling went (ADR-0014 4).
+    model_calls_used: int = 0
     honesty: str = DERIVATION_HONESTY_SENTENCE
 
 
@@ -834,20 +823,54 @@ def _author_phrase(message: RoomMessage) -> str:
     return f"kendi beyan ettigi adiyla '{neutralise(message.author.value)}'"
 
 
+def readable_lines(snapshot: RoomMessagesSnapshot) -> tuple[ReadableLine, ...]:
+    """The lines a reading lane may be shown. Prohibited ones are not among them.
+
+    The prohibition registry runs **here**, before anything leaves this
+    process, and a line it matches is never sent anywhere. That is two things
+    at once: the refusal is cheaper than a model turn, and a line asking for a
+    wallet action is not handed to a provider as a side effect of scanning.
+
+    It is not the enforcement, though, and the difference matters. What
+    enforces the prohibition is that :func:`derive_from_room` applies it
+    **again** before it consults a verdict, so a verdict about a prohibited
+    line cannot produce a candidate even if it somehow arrives - which is what
+    "the model's opinion is an input and never a bypass" has to mean to be
+    worth saying (ADR-0014 2).
+    """
+    return tuple(
+        ReadableLine(seq=message.seq, text=message.text)
+        for message in snapshot.messages
+        if prohibited_shape(message.text) is None
+    )
+
+
 def derive_from_room(
     snapshot: RoomMessagesSnapshot,
     *,
     capability: CandidateCapability,
+    reading: RoomReading,
 ) -> DerivationResult:
-    """Turn one room snapshot into candidates. Pure; contacts nobody.
+    """Turn one room snapshot plus one reading into candidates. Contacts nobody.
 
-    The order of the two checks is load-bearing: a prohibited shape is
-    recognised **before** a signal is looked for, so there is no path on which
-    a line that asks for a wallet action also happens to match a help marker
-    and gets produced anyway.
+    ``reading`` is an **input**, in the same position the marker table used to
+    occupy and with none of the marker table's authority. The order of the
+    checks is unchanged and still load-bearing: a prohibited shape is
+    recognised **before** the verdict is consulted, so there is no path on
+    which a line asking for a wallet action also carries a ``help_wanted``
+    verdict and gets produced anyway. Every other gate is where it was - the
+    ``(room, seq)`` identity, the duplicate-sequence refusal, the eight
+    mandatory elements enforced by ``__post_init__``, the forbidden-claim
+    check on our own sentences, and ``neutralise`` on everything imported.
+
+    The reading's own refusals are appended rather than merged: a line the
+    ceiling stopped and a line the prohibition registry refused are different
+    facts about the scan, and a person reading the list is entitled to both
+    (ADR-0014 4).
     """
     candidates: dict[str, WorkCandidate] = {}
     refusals: list[RefusedLine] = []
+    verdicts = reading.by_sequence
 
     for message in snapshot.messages:
         shape = prohibited_shape(message.text)
@@ -863,9 +886,10 @@ def derive_from_room(
             )
             continue
 
-        signal = matching_signal(message.text)
-        if signal is None:
+        signal_id = verdicts.get(message.seq)
+        if signal_id is None:
             continue
+        signal = signal_for(signal_id)
 
         identity = candidate_id(snapshot.room, message.seq)
         if identity in candidates:
@@ -939,11 +963,22 @@ def derive_from_room(
             )
             continue
 
+    refusals.extend(
+        RefusedLine(
+            room=snapshot.room,
+            seq=refusal.seq,
+            reason=refusal.reason.value,
+            detail=refusal.detail,
+        )
+        for refusal in reading.refusals
+    )
+
     return DerivationResult(
         room=snapshot.room,
         candidates=tuple(candidates.values()),
         refusals=tuple(refusals),
         lines_read=len(snapshot.messages),
+        model_calls_used=reading.model_calls_used,
     )
 
 
@@ -1006,6 +1041,7 @@ __all__ = [
     "EffortEstimate",
     "OpenStateNote",
     "ProhibitedShape",
+    "ReadableLine",
     "RefusedLine",
     "Signal",
     "SignalId",
@@ -1015,7 +1051,8 @@ __all__ = [
     "candidate_id",
     "capability_for",
     "derive_from_room",
-    "matching_signal",
     "open_state_note",
     "prohibited_shape",
+    "readable_lines",
+    "signal_for",
 ]

@@ -454,9 +454,18 @@ export const isOpenCodeStatus = validator<OpenCodeStatus>(
     configured_at: nullOr(str),
     updated_at: nullOr(str),
     check: shape({
-      state: enumOf("not_configured", "never_checked", "key_saved_unverified"),
+      state: enumOf(
+        "not_configured",
+        "key_saved_unverified",
+        "verified",
+        "provider_refused",
+        "probe_failed",
+      ),
       reasons: listOf(str),
       detail: str,
+      checked_at: nullOr(str),
+      probes_used: num,
+      probe_ceiling: num,
     }),
     selected_model: str,
     auth_header_caveat: str,
@@ -574,6 +583,7 @@ const workScanStaleness = shape({
 export const isWorkScanStatus = validator<WorkScanStatus>(
   shape({
     honesty: str,
+    reading_cost: str,
     capability: workScanCapability,
     adapters: listOf(
       shape({
@@ -669,6 +679,7 @@ export const isWorkScanStatus = validator<WorkScanStatus>(
             candidates: listOf(workScanCandidate),
             refusals: listOf(shape({ room: str, seq: num, shape: str, detail: str })),
             lines_read: num,
+            model_calls_used: num,
           }),
         ),
         failures: listOf(shape({ room: str, reason: str, detail: str })),
@@ -680,6 +691,8 @@ export const isWorkScanStatus = validator<WorkScanStatus>(
         ),
         candidate_count: num,
         refusal_count: num,
+        model_calls_used: num,
+        max_model_calls: num,
       }),
     ),
     never_sent_params: listOf(str),

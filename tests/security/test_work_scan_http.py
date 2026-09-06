@@ -67,6 +67,7 @@ from tests.security.workscan_fixtures import (
     ROOM,
     SECOND_ROOM,
     WALLET_LINE,
+    FixtureReader,
     index_document,
     message,
     never_called_transport,
@@ -119,6 +120,12 @@ def _service(  # type: ignore[no-untyped-def]
         client=RoomScanClient(transport=transport, sleep=lambda _: None),
         tasks=TaskService(engine=engine),
         data_dir=data_dir,
+        # ADR-0014 made a candidate depend on a reading. This file is about
+        # the HTTP surface and the task machine, so the reading is a fixture
+        # rather than a provider: it answers for the fixture lines, contacts
+        # nobody and spends nothing, which keeps every outbound-attempt count
+        # in this file meaning what it meant.
+        reader=FixtureReader(),
     )
     return service, recorder
 
@@ -219,13 +226,22 @@ def test_reading_the_status_makes_no_outbound_request(
 def test_the_status_document_carries_the_honesty_sentence_and_the_polling_statement(
     mocked_client: TestClient, mocked_app: FastAPI
 ) -> None:
-    """ADR-0007 2: the cost of pattern matching is shown on every read."""
+    """ADR-0007 2's rule with ADR-0014's cost: both sentences, on every read.
+
+    The rule did not change and the cost did. It used to be "patterns see
+    patterns, so not every opportunity is seen"; it is now "a model reads the
+    lines and can be wrong about one", plus what a scan **spends** - and the
+    spend sentence has to be here rather than only beside a result, because a
+    cost a person learns afterwards is a receipt.
+    """
     establish_session(mocked_client, mocked_app)
 
     body = mocked_client.get(STATUS_PATH).json()
 
-    assert "kalip eslesmesiyle" in body["honesty"]
-    assert "her firsat gorulmez" in body["honesty"]
+    assert "dil modeline" in body["honesty"]
+    assert "yanilabilir" in body["honesty"]
+    assert "anlamsal cikarim yoktur" not in body["honesty"]
+    assert "model cagrisi harcar" in body["reading_cost"]
     assert "zamanlayici" in body["polling_statement"]
     assert sorted(body["never_sent_params"]) == ["n", "wait"]
 

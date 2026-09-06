@@ -54,10 +54,15 @@ const UNLISTED_NOTE =
   "Listelenmeyen (p-) odalar bu listede ve kesif gunlugunde hicbir zaman gorunmez. Burada olmayan bir oda 'yok' demek degildir.";
 
 const HONESTY =
-  "Bu surum adaylari kalip eslesmesiyle cikarir; anlamsal cikarim yoktur, bu yuzden bir odadaki her firsat gorulmez.";
+  "Bu surum adaylari, odadan okunan satirlari bir dil modeline okutarak cikarir; model yanilabilir ve bir satiri yanlis siniflandirabilir, bu yuzden bir adayi kabul etmeden once alintiyi kendiniz okuyun.";
+
+/** What a scan costs, said before it is spent (ADR-0014 6). */
+const READING_COST =
+  "Bu tarama model cagrisi harcar: her tur en cok 60 satir tasir ve bir tarama en cok 8 tur harcayabilir. Tavan dolarsa kalan satirlar okunmaz ve gerekcesiyle listelenir; harcanan tur sayisi sonucun yaninda gosterilir.";
 
 const BASE = {
   honesty: HONESTY,
+  reading_cost: READING_COST,
   capability: {
     module_id: "work_scan",
     module_state: "available",
@@ -226,7 +231,7 @@ const CANDIDATE = {
     detail:
       "Su ana kadar okunanda kapanis isareti gorulmedi (anlik goruntu: 2026-09-04T10:01:00+00:00).",
   },
-  derivation: "rule_based_pattern_match",
+  derivation: "model_read_line_classification",
 };
 
 const WITH_ROOMS = { ...BASE, room_index: ROOM_INDEX };
@@ -237,13 +242,23 @@ const WITH_SCAN = {
     started_at: "2026-09-04T10:00:55Z",
     completed_at: "2026-09-04T10:01:02Z",
     rooms: [ROOM_A],
-    results: [{ room: ROOM_A, candidates: [CANDIDATE], refusals: [], lines_read: 50 }],
+    results: [
+      {
+        room: ROOM_A,
+        candidates: [CANDIDATE],
+        refusals: [],
+        lines_read: 50,
+        model_calls_used: 1,
+      },
+    ],
     failures: [
       { room: ROOM_B, reason: "room_unreadable", detail: "TEST-ONLY: oda okunamadi." },
     ],
     notes: [],
     candidate_count: 1,
     refusal_count: 0,
+    model_calls_used: 1,
+    max_model_calls: 8,
   },
 };
 
@@ -325,7 +340,15 @@ test.describe("Is Tara", () => {
 
     await expect(entry).toHaveAttribute("aria-current", "page");
     await expect(page.getByRole("region", { name: "Oda secimi" })).toBeVisible();
-    await expect(page.getByRole("region", { name: "Cikarim sinirlari" })).toContainText(HONESTY);
+    const limits = page.getByRole("region", { name: "Cikarim sinirlari" });
+    await expect(limits).toContainText(HONESTY);
+    // ADR-0014: the cost is on screen before the button is pressed, and the
+    // sentence that promised this build inferred nothing is gone rather than
+    // moved. The retired phrase is assembled rather than written out because
+    // `test_model_lane_claims.py` scans this tree for it as text, and a file
+    // that spelled it would need an exemption from that scan.
+    await expect(limits).toContainText(READING_COST);
+    await expect(limits).not.toContainText(["anlamsal", "cikarim", "yoktur"].join(" "));
     // Exactly one entry is current at a time.
     await expect(
       page.getByRole("navigation", { name: "Ana bolumler" }).locator("[aria-current]"),

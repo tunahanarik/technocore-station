@@ -864,18 +864,39 @@ class TaskReconciliationResponse(StrictModel):
 class OpenCodeConnectionCheckStatus(StrictModel):
     """What can honestly be said about the stored credential.
 
-    Note the absent value: ``state`` has no ``verified``. The catalog answers
-    without a key, a GET on a protocol path answers 404, and a real metered
-    call is not made automatically - so nothing in this build can produce a
-    verified verdict, and a field that could hold one would be an invitation
-    to write it from somewhere that had not earned it.
+    ``verified`` is reachable now and has exactly one producer: a ``200`` from
+    the metered endpoint, sent by ``POST /api/opencode/check`` and by nothing
+    else (ADR-0015). The catalog still answers without a key, so reading it
+    still verifies nothing, and ``GET /api/opencode/status`` still contacts
+    nobody - which is why the state it reports is a *stored* verdict with a
+    date on it rather than a fresh one.
+
+    A failed probe keeps its own value. ``provider_refused`` and
+    ``probe_failed`` are different answers from each other and from
+    ``key_saved_unverified``, which now means only "nobody has asked yet".
+
+    ``never_checked`` was removed: nothing ever produced it.
     """
 
-    state: Literal["not_configured", "never_checked", "key_saved_unverified"]
+    state: Literal[
+        "not_configured",
+        "key_saved_unverified",
+        "verified",
+        "provider_refused",
+        "probe_failed",
+    ]
     #: Plural on purpose. One reason reads like a problem to fix; the list is
     #: the actual epistemic position.
     reasons: list[str]
     detail: str
+    #: When the last probe ran. ``None`` until one has: a verdict with no date
+    #: is one nobody can tell is stale.
+    checked_at: datetime | None = None
+    #: What this credential has spent against the probe ceiling, and the
+    #: ceiling. Published so the surface can disable the control before the
+    #: refusal rather than after it.
+    probes_used: int = 0
+    probe_ceiling: int = 0
 
 
 class OpenCodeStrictModel(StrictModel):
@@ -1125,7 +1146,15 @@ class WorkScanCandidate(StrictModel):
 
 
 class WorkScanRefusal(StrictModel):
-    """A line this build declined to propose work from, and why."""
+    """A line this build declined to propose work from, and why.
+
+    ``shape`` carries the machine-readable reason whatever kind of reason it
+    was: one of the six prohibited work shapes, a repeated sequence number, a
+    line that could not be quoted, or one of the reading lane's four
+    (``model_unavailable``, ``reading_ceiling``, ``model_failed``,
+    ``model_refused``). One field rather than two, so nothing that read this
+    payload before sees a different string where a shape used to be.
+    """
 
     room: str
     seq: int
@@ -1148,6 +1177,10 @@ class WorkScanRoomResult(StrictModel):
     candidates: list[WorkScanCandidate]
     refusals: list[WorkScanRefusal]
     lines_read: int
+    #: Model turns the reading lane spent on this room (ADR-0014 4). Zero on a
+    #: room whose every line was prohibited, and zero on a build with no
+    #: provider connection - two different facts the refusal list tells apart.
+    model_calls_used: int = 0
 
 
 class WorkScanStaleness(StrictModel):
@@ -1343,13 +1376,23 @@ class WorkScanResult(StrictModel):
     notes: list[WorkScanRoomNote] = Field(default_factory=list)
     candidate_count: int
     refusal_count: int
+    #: What this scan spent, and the ceiling it spent it against. Both, because
+    #: a number with no denominator is not a spend report.
+    model_calls_used: int = 0
+    max_model_calls: int = 0
 
 
 class WorkScanStatusResponse(StrictModel):
     """The whole scan surface, read-only. Sends nothing."""
 
-    #: Shown on every read, not only beside a result (ADR-0007 2).
+    #: Shown on every read, not only beside a result (ADR-0007 2). Since
+    #: ADR-0014 it says a model reads the lines and can be wrong about one -
+    #: the old sentence promised no semantic inference, and that promise
+    #: stopped being true.
     honesty: str
+    #: What a scan costs, before it is spent: how many lines one turn carries
+    #: and how many turns one scan may spend (ADR-0014 6).
+    reading_cost: str
     capability: WorkScanCapability
     adapters: list[WorkScanAdapter]
     room_index: WorkScanRoomIndex | None

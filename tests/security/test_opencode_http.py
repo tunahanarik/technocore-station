@@ -6,10 +6,11 @@ are tested from several directions each:
 * **no response, on any route, can return the stored credential** - there is
   no field for it, no route that reads it, and no response body that contains
   it after one has been stored;
-* **no route reports the connection as verified**, because nothing in this
-  build can verify it (ADR-0005 4). Storing a key answers with the same
+* **a verified verdict has exactly one producer** - the metered probe behind
+  ``POST /check``, on a press (ADR-0015). Storing a key answers with the same
   document a fresh install answers with, differing only in the fingerprint
-  and the state - which reads as "saved, not verified" rather than as a tick.
+  and the state - which reads as "saved, not verified" rather than as a tick,
+  and ``GET /status`` still contacts nobody.
 
 The usual guards are asserted too. They are middleware, so a route cannot opt
 out - but "cannot" is exactly the sort of claim that stops being true when
@@ -64,10 +65,11 @@ windows_only = pytest.mark.skipif(
 STATUS_PATH = "/api/opencode/status"
 CREDENTIAL_PATH = "/api/opencode/credential"
 FORGET_PATH = "/api/opencode/credential/forget"
+CHECK_PATH = "/api/opencode/check"
 REFRESH_PATH = "/api/opencode/catalog/refresh"
 MODEL_PATH = "/api/opencode/model"
 
-STATE_CHANGING = (CREDENTIAL_PATH, FORGET_PATH, REFRESH_PATH, MODEL_PATH)
+STATE_CHANGING = (CREDENTIAL_PATH, FORGET_PATH, CHECK_PATH, REFRESH_PATH, MODEL_PATH)
 
 
 @pytest.fixture
@@ -160,14 +162,22 @@ def test_connection_state_is_never_cacheable(mocked_client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_surface_offers_exactly_five_routes_and_no_completion_lane(
+def test_the_surface_offers_exactly_six_routes_and_no_completion_lane(
     mocked_app: FastAPI,
 ) -> None:
-    """No send, no run, no probe, and no route that reads the key back.
+    """No send, no run, and no route that reads the key back.
 
-    A completion route would have made "Station never spends money on its
-    own" a claim with a footnote, and a read route would have made the
-    credential retrievable by anything that can reach loopback.
+    There are six now, not five, and the sixth is the probe ADR-0015 put
+    behind "Baglantiyi denetle". The set is still asserted by equality, which
+    is what makes adding one a decision somebody has to write down rather than
+    a diff nobody notices - this line is where that decision is recorded.
+
+    What did **not** change: there is no completion route. ``/check`` sends a
+    metered request, but its body carries nothing a caller wrote - no prompt,
+    no model, no address - so "Station never spends money on its own" is still
+    true as a statement about presses. A read route would still have made the
+    credential retrievable by anything that can reach loopback, and there is
+    still none.
     """
     paths = {path for path in collect_route_paths(mocked_app) if "opencode" in path}
 
@@ -175,12 +185,137 @@ def test_the_surface_offers_exactly_five_routes_and_no_completion_lane(
         STATUS_PATH,
         CREDENTIAL_PATH,
         FORGET_PATH,
+        CHECK_PATH,
         REFRESH_PATH,
         MODEL_PATH,
     }
+    # ``probe`` used to be on this list and has been taken off it. It was
+    # there because no probe existed, so a path naming one would have been a
+    # route nobody decided to add; a build that *has* one and still bans the
+    # word would be enforcing a spelling instead of a property. The five that
+    # remain are the capabilities this surface still refuses to offer.
     for path in paths:
-        for forbidden in ("complete", "completion", "send", "run", "probe", "reveal"):
+        for forbidden in ("complete", "completion", "send", "run", "reveal"):
             assert forbidden not in path
+
+
+@windows_only
+def test_the_status_read_never_reaches_the_provider(
+    settings: Settings, engine: Engine, base_url: str
+) -> None:
+    """``GET /status`` is free, and the transport is what says so.
+
+    Driven with a transport that raises on any request. The status route is
+    the one a page load hits, so a probe reachable from it would be a metered
+    call somebody pays for by opening a screen.
+    """
+    transport, recorder = never_called_transport()
+    application = create_app(
+        settings=settings,
+        port=TEST_PORT,
+        engine=engine,
+        web_dist=None,
+        opencode=OpenCodeService(
+            engine=engine,
+            data_dir=settings.data_dir,
+            client=OpenCodeClient(transport=transport, sleep=lambda _: None),
+        ),
+    )
+    with TestClient(application, base_url=base_url) as test_client:
+        establish_session(test_client, application)
+        token = {"X-Station-CSRF": test_client.get("/api/session/bootstrap").json()["csrf_token"]}
+        test_client.post(
+            CREDENTIAL_PATH,
+            json={"api_key": TEST_ONLY_OPENCODE_CREDENTIAL},
+            headers=token,
+        )
+        for _ in range(3):
+            assert test_client.get(STATUS_PATH).status_code == 200
+
+    assert recorder.count == 0
+
+
+def test_the_check_route_is_a_post_and_carries_the_usual_guards(
+    mocked_client: TestClient,
+) -> None:
+    """It spends money, so it must be a press rather than a navigation.
+
+    A ``GET`` is what a browser, a prefetcher, a reload and a history entry
+    repeat on their own, and each repetition would be a metered call. The
+    session, CSRF, Host and Sec-Fetch-Site guards come from middleware, so
+    this asserts they actually apply to the new path rather than that they
+    exist.
+    """
+    assert mocked_client.get(CHECK_PATH).status_code in {404, 405}
+    assert mocked_client.post(CHECK_PATH, json={}).status_code == 403
+    assert (
+        mocked_client.post(
+            CHECK_PATH, json={}, headers={**_csrf(mocked_client), "Host": "evil.example"}
+        ).status_code
+        == 421
+    )
+
+
+@windows_only
+def test_a_check_with_no_model_selected_is_refused_before_anything_is_sent(
+    settings: Settings, engine: Engine, base_url: str
+) -> None:
+    """Station does not pick a model, least of all to spend money with one."""
+    transport, recorder = never_called_transport()
+    application = create_app(
+        settings=settings,
+        port=TEST_PORT,
+        engine=engine,
+        web_dist=None,
+        opencode=OpenCodeService(
+            engine=engine,
+            data_dir=settings.data_dir,
+            client=OpenCodeClient(transport=transport, sleep=lambda _: None),
+        ),
+    )
+    with TestClient(application, base_url=base_url) as test_client:
+        establish_session(test_client, application)
+        token = {"X-Station-CSRF": test_client.get("/api/session/bootstrap").json()["csrf_token"]}
+        test_client.post(
+            CREDENTIAL_PATH,
+            json={"api_key": TEST_ONLY_OPENCODE_CREDENTIAL},
+            headers=token,
+        )
+        response = test_client.post(CHECK_PATH, headers=_csrf(test_client))
+
+    assert response.status_code == 400
+    assert "model secmez" in response.json()["detail"]
+    assert recorder.count == 0
+
+
+def test_a_check_without_a_credential_is_refused_and_contacts_nobody(
+    mocked_client: TestClient,
+) -> None:
+    response = mocked_client.post(CHECK_PATH, headers=_csrf(mocked_client))
+
+    assert response.status_code == 503
+    assert "kaydedilmedi" in response.json()["detail"]
+
+
+def test_the_check_route_takes_no_body_that_could_steer_it(
+    mocked_client: TestClient,
+) -> None:
+    """There is no prompt, no model and no address parameter.
+
+    A body is accepted and ignored, which is what every other no-body route
+    here does; what matters is that nothing in it can reach the request. The
+    refusal below comes from the *stored* state - no credential - and is
+    identical whatever the caller sent.
+    """
+    hostile = mocked_client.post(
+        CHECK_PATH,
+        json={"model_id": "TEST-ONLY-elsewhere", "url": "https://evil.example"},
+        headers=_csrf(mocked_client),
+    )
+    empty = mocked_client.post(CHECK_PATH, headers=_csrf(mocked_client))
+
+    assert hostile.status_code == empty.status_code
+    assert hostile.json()["detail"] == empty.json()["detail"]
 
 
 def test_the_status_document_has_no_field_that_could_hold_a_credential(

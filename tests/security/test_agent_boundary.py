@@ -129,10 +129,13 @@ SECRET_IMPORTS = (
 #: acceptance conditions. ``0011`` is ADR-0013's: one additive table,
 #: ``model_call_ledger``, holding the per-task model-turn count that used to
 #: live in process memory and was therefore cleared by the "start over" button
-#: and by a relaunch. Bumping this constant is the point of writing it out - a
-#: migration is a change a reviewer has to see, and a head read off the script
-#: directory would have agreed with whatever the directory said.
-CURRENT_MIGRATION_HEAD = "0011"
+#: and by a relaunch. ``0012`` is ADR-0015's: one additive table,
+#: ``opencode_probe_ledger``, holding what the connection probe spent and what
+#: it last answered, keyed by credential fingerprint so forgetting a key does
+#: not hand its ceiling back. Bumping this constant is the point of writing it
+#: out - a migration is a change a reviewer has to see, and a head read off the
+#: script directory would have agreed with whatever the directory said.
+CURRENT_MIGRATION_HEAD = "0012"
 
 
 def _agent_sources(api_source_root: Path) -> list[Path]:

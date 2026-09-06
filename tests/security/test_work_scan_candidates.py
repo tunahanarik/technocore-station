@@ -40,12 +40,12 @@ from station_api.workscan.candidates import (
     candidate_id,
     capability_for,
     derive_from_room,
-    matching_signal,
     open_state_note,
     prohibited_shape,
 )
 from station_api.workscan.client import RoomScanClient
 from station_api.workscan.errors import CandidateError
+from station_api.workscan.reading import LineVerdict, RoomReading
 from station_api.workscan.snapshot import parse_room_messages, staleness_note
 from station_api.workscan.targets import resolve_room_target
 
@@ -73,6 +73,40 @@ def _capability(*, write_gate_open: bool = True) -> CandidateCapability:
 _LATER = datetime(2031, 3, 4, 5, 6, 7, 891011, tzinfo=UTC)
 
 
+#: Which shape the stub reading gives a line, chosen by the line's own text.
+#:
+#: ADR-0014 moved recognition to a model, and these tests are not about the
+#: model: they are about what the derivation does with a verdict. So the
+#: verdict is supplied by a table a reader can see, and the two fixture lines
+#: keep the shapes they always had - which is what lets every assertion below
+#: about the eight elements, the identity and the prohibitions stay word for
+#: word what it was.
+_STUB_VERDICTS = {
+    HELP_LINE: SignalId.HELP_WANTED,
+    DEFECT_LINE: SignalId.DEFECT_REPORT,
+    WALLET_LINE: SignalId.HELP_WANTED,
+}
+
+
+def _stub_reading(messages: list[dict[str, object]]) -> RoomReading:
+    """A reading that says "work" for the fixture lines and nothing else.
+
+    ``WALLET_LINE`` is deliberately in the table: the strongest form of the
+    ordering test is a verdict that *does* call the prohibited line work, so
+    the refusal cannot be an accident of the recogniser.
+    """
+    return RoomReading(
+        verdicts=tuple(
+            LineVerdict(
+                seq=int(item["seq"]),  # type: ignore[arg-type]
+                signal=_STUB_VERDICTS[item["text"]],  # type: ignore[index]
+            )
+            for item in messages
+            if item.get("text") in _STUB_VERDICTS
+        )
+    )
+
+
 def _derive(  # type: ignore[no-untyped-def]
     messages: list[dict[str, object]],
     *,
@@ -88,7 +122,9 @@ def _derive(  # type: ignore[no-untyped-def]
     if read_at is not None:
         snapshot = replace(snapshot, staleness=staleness_note(read_at))
     return derive_from_room(
-        snapshot, capability=_capability(write_gate_open=write_gate_open)
+        snapshot,
+        capability=_capability(write_gate_open=write_gate_open),
+        reading=_stub_reading(messages),
     )
 
 
@@ -385,6 +421,12 @@ def test_a_planned_module_produces_a_capability_that_says_the_code_is_absent(
 
 
 def test_all_six_prohibited_shapes_are_defined_with_markers_and_a_sentence() -> None:
+    """The prohibition registry is untouched by ADR-0014 and still a list.
+
+    The user was offered relaxing it and did not take the offer, so the wallet
+    and payment shape refuses exactly what it refused before - including on a
+    line a model would happily call work.
+    """
     assert set(ProhibitedShape) == set(PROHIBITED_MARKERS)
     assert set(ProhibitedShape) == set(PROHIBITION_DETAIL)
     for shape in ProhibitedShape:
@@ -411,11 +453,12 @@ def test_a_prohibited_line_is_recognised(text: str, shape: ProhibitedShape) -> N
 def test_a_prohibited_line_produces_no_candidate_even_when_it_matches_a_signal() -> None:
     """The order of the two checks is load-bearing, so it is tested.
 
-    :data:`WALLET_LINE` carries a help marker *and* a wallet marker. If the
-    signal were looked for first, this line would become a proposal to do
-    exactly the work the charter forbids.
+    :data:`WALLET_LINE` carries a wallet marker, and the stub reading is told
+    to classify it as help wanted - which is the strongest form of this test
+    since ADR-0014, because it hands the derivation exactly the verdict an
+    attacker would want rather than relying on a recogniser to disagree.
     """
-    assert matching_signal(WALLET_LINE) is not None
+    assert _STUB_VERDICTS[WALLET_LINE] is SignalId.HELP_WANTED
     result = _derive([message(3, WALLET_LINE)])
 
     assert result.candidates == ()
@@ -460,17 +503,25 @@ def test_the_candidate_identity_is_domain_separated_and_stable() -> None:
 
 
 def test_the_honesty_sentence_travels_with_every_derivation() -> None:
-    """ADR-0007 2: the cost of pattern matching is shown, not filed away."""
+    """ADR-0007 2's rule, ADR-0014's sentence: the cost is shown, not filed.
+
+    The cost changed when the recogniser did. It used to be "patterns see
+    patterns"; it is now "a model can be wrong about a line", and the sentence
+    on the result says the second one because the first one is no longer true.
+    """
     result = _derive([message(1, QUIET_LINE)])
 
-    assert "kalip eslesmesiyle" in result.honesty
-    assert "her firsat gorulmez" in result.honesty
+    assert "dil modeline" in result.honesty
+    assert "yanilabilir" in result.honesty
+    assert "anlamsal cikarim yoktur" not in result.honesty
 
 
 def test_the_signal_table_is_closed_and_every_entry_is_complete() -> None:
     assert {signal.id for signal in SIGNALS} == set(SignalId)
     for signal in SIGNALS:
-        assert signal.markers
+        # ADR-0014 removed ``markers`` and kept everything else. What a
+        # candidate *commits to* is still written here and reviewed here; only
+        # the phrase list that decided which lines got one is gone.
         assert "{room}" in signal.benefit
         assert "{author}" in signal.benefit
         for text in (signal.deliverable, signal.success_condition, signal.test_method):

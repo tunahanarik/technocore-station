@@ -13,13 +13,22 @@ assert_storable` refuses one before it can be stored, and
 :meth:`OpenCodeService._registered` asserts the length again at use time
 rather than trusting that the store was the only way in.
 
-**"Check the connection" produces no badge.** ADR-0005 4: the catalog answers
-without a credential, so fetching it cannot verify one; ``GET`` on a protocol
-path answers 404, so it is not a probe either; and a real metered call is
-forbidden in this round. The best available verdict is therefore
-``key_saved_unverified``, and :class:`ConnectionCheck` has no value that
-means "verified". A format check is deliberately absent: a key that *looks*
-right would produce a green result that means nothing.
+**"Check the connection" sends one metered request, and only on a press.**
+ADR-0005 4 said the check could produce no badge, and the reasoning under it
+was right about everything except its own conclusion: the catalog answers
+without a credential so fetching it verifies nothing, a ``GET`` on a protocol
+path answers 404, and a metered call needs the user's explicit request. The
+button *is* that request, and for five packages there was nothing behind it -
+:meth:`check_connection` returned a constant. ADR-0015 puts a probe behind it:
+:meth:`probe_connection`, one ``chat/completions`` turn with the stored
+credential, **never** reached from :meth:`describe`, from a poll, or as a step
+of storing a key. A format check is still deliberately absent: a key that
+*looks* right would produce a green result that means nothing.
+
+The verdict a probe produces is durable and per credential
+(``opencode_probe_ledger``), so ``GET /api/opencode/status`` can report it
+without repeating it, and so a spent ceiling cannot be handed back by
+forgetting and re-saving the same key.
 
 **Nothing is substituted.** :meth:`select_model` either resolves the id
 through the closed table or refuses with the reason attached. There is no
@@ -42,14 +51,16 @@ from pathlib import Path
 from sqlalchemy import Engine, delete, select
 from sqlalchemy.orm import Session
 
+from station_api.agent.budget import MAX_CONNECTION_PROBES
 from station_api.db.models import (
     AppMetadata,
     OpenCodeCatalogCheck,
     OpenCodeCredentialMetadata,
     OpenCodeModelSnapshot,
+    OpenCodeProbeLedger,
 )
 from station_api.logging_setup import forget_secret, register_secret
-from station_api.opencode import planner
+from station_api.opencode import planner, probe
 from station_api.opencode.catalog import (
     CatalogEntry,
     ModelView,
@@ -107,24 +118,65 @@ class CatalogState(StrEnum):
 class VerificationState(StrEnum):
     """What can honestly be said about the stored credential.
 
-    There is no ``VERIFIED``. Adding one would require a call this round does
-    not make (ADR-0005 4), and a value that exists but is unreachable is an
-    invitation to set it from somewhere it should not be set.
+    ``VERIFIED`` exists now, and the rule that kept it out is the reason it
+    can: a value nothing could earn would be an invitation to set it from
+    somewhere that had not earned it, and ADR-0015 gives it exactly one
+    producer - a ``200`` from the metered endpoint, which no request without
+    the credential can obtain.
+
+    A probe produces **three** outcomes and each keeps its own value. Folding
+    a refusal or an inconclusive answer back into ``SAVED_UNVERIFIED`` would
+    make a failed check indistinguishable from a check nobody ran, which is
+    the state this feature was written to leave behind.
+
+    ``NEVER_CHECKED`` was removed. Nothing ever returned it, and the docstring
+    that used to sit here warned - correctly - about exactly that kind of
+    value.
     """
 
     NOT_CONFIGURED = "not_configured"
-    NEVER_CHECKED = "never_checked"
+    #: A key is stored and no probe has been run against it.
     SAVED_UNVERIFIED = "key_saved_unverified"
+    #: The provider answered the metered request. Only an accepted credential
+    #: can produce this.
+    VERIFIED = "verified"
+    #: The provider answered and refused (401, or 403 for this model).
+    PROVIDER_REFUSED = "provider_refused"
+    #: No answer, or an answer that settles nothing. Not the same as refused,
+    #: and deliberately not the same as unverified-because-nobody-asked.
+    PROBE_FAILED = "probe_failed"
+
+
+#: One probe outcome to one verdict, written out.
+#:
+#: The two enums carry the same three strings, so ``VerificationState(row.state)``
+#: would have worked and would have coupled the wire value of a stored row to
+#: the wire value of a verdict for as long as nobody edited either.
+_STATE_FOR: dict[probe.ProbeOutcome, VerificationState] = {
+    probe.ProbeOutcome.VERIFIED: VerificationState.VERIFIED,
+    probe.ProbeOutcome.REFUSED: VerificationState.PROVIDER_REFUSED,
+    probe.ProbeOutcome.FAILED: VerificationState.PROBE_FAILED,
+}
 
 
 @dataclass(frozen=True, slots=True)
 class ConnectionCheck:
-    """The result of "check the connection". Never a single green badge."""
+    """The result of "check the connection". A verdict, never a bare badge."""
 
     state: VerificationState
-    #: Every reason the state is not stronger than it is. Plural on purpose.
+    #: Every reason the state is not stronger than it is. Plural on purpose,
+    #: and pruned on purpose: a sentence that a probe made false is removed
+    #: rather than left standing beside a fresh verdict.
     reasons: tuple[str, ...]
     detail: str
+    #: When the last probe ran, or ``None`` when none has. A verification is a
+    #: point-in-time fact and a badge with no date is one nobody can age.
+    checked_at: datetime | None = None
+    #: How many probes this credential has spent, and the ceiling it is spent
+    #: against. Shown rather than only enforced: a limit a person meets by
+    #: surprise is a limit they read as a bug.
+    probes_used: int = 0
+    probe_ceiling: int = MAX_CONNECTION_PROBES
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,14 +232,57 @@ _NOT_VERIFIABLE_REASON = (
     "katalogu okumak anahtarin gecerli oldugunu kanitlamaz."
 )
 
-_NO_PROBE_REASON = (
-    "Gercek bir istek ucretli olabilir; bu surumde yalnizca sizin acik "
-    "isteginizle yapilir ve henuz uygulanmamistir."
+#: What replaced ``_NO_PROBE_REASON``.
+#:
+#: The old sentence ended "...ve henuz uygulanmamistir" - *and it has not been
+#: implemented yet*. It was true when it was written and it was the thing the
+#: button was hiding: a control that announced its own absence in a list most
+#: people do not read. The probe exists now, so the sentence says what it
+#: costs and what triggers it instead of apologising for not existing.
+_PROBE_ON_REQUEST_REASON = (
+    "Dogrulama yalnizca siz 'Baglantiyi denetle' dugmesine bastiginizda "
+    "yapilir: secili modele, olculu ucta, tek bir kucuk model cagrisi "
+    "gonderilir. Bu cagri sayilir ve anahtar basina bir tavani vardir."
+)
+
+#: What a verified verdict still does **not** say. Two bounds, both real.
+_VERIFIED_SCOPE_REASON = (
+    "Dogrulama tek bir cagriya ve kimlik dogrulamasina aittir: anahtarin "
+    "sonraki cagrilarda da kabul edilecegini, kotanin dolu olmadigini veya "
+    "baska bir modelin cagrilabilecegini kanitlamaz."
+)
+
+_REFUSED_REASON = (
+    "Saglayici denetimi reddetti. Asagidaki cumle Station'in yorumu degil, "
+    "saglayicinin yanitidir."
+)
+
+#: The "we do not know" verdict, and what it is careful not to claim.
+_INCONCLUSIVE_REASON = (
+    "Denetim sonuc vermedi: ya bir yanit gelmedi ya da gelen yanit anahtar "
+    "hakkinda bir sey soylemiyor. Bu, anahtarin gecersiz oldugu anlamina "
+    "gelmez."
 )
 
 _SAVED_DETAIL = (
-    "Anahtar kaydedildi, dogrulanmadi. Bu tek yesil bir rozet degildir."
+    "Anahtar kaydedildi, dogrulanmadi. Dogrulamak icin 'Baglantiyi denetle' "
+    "dugmesine basin; bu, secili modele olculu ucta tek bir model cagrisi "
+    "gonderir."
 )
+
+
+def _ceiling_spent_reason(used: int) -> str:
+    """The sentence a spent ceiling carries, with both numbers in it.
+
+    Written as a function rather than a constant because ADR-0013 4's lesson
+    was that a ceiling sentence which does not say where you stand is a
+    sentence people argue with.
+    """
+    return (
+        f"Bu anahtar icin denetim tavani doldu ({used}/{MAX_CONNECTION_PROBES}). "
+        "Yeni bir denetim cagrisi yapilmaz ve sifirlama yolu yoktur. Baska bir "
+        "anahtar kaydederseniz kendi tavaniyla baslar."
+    )
 
 
 class OpenCodeService:
@@ -324,23 +419,152 @@ class OpenCodeService:
         )
 
     def check_connection(self) -> ConnectionCheck:
-        """The honest verdict, and every reason it is not stronger.
+        """The stored verdict, and every reason it is not stronger. **Sends nothing.**
 
-        Deliberately does not call anything. A probe that cost money would
-        need the user's explicit request; a probe that did not cost money
-        would not prove anything.
+        This reads: the credential row, and the probe ledger row keyed to that
+        credential's fingerprint. It is reached from :meth:`describe`, which is
+        reached from ``GET /api/opencode/status``, which is reached on page
+        load - so a request from here would be a metered call on a page load,
+        which is the one thing ADR-0005 4 was right about and ADR-0015 does not
+        change. The probe is :meth:`probe_connection` and nothing calls it but
+        its own route.
+
+        The reasons are assembled per state rather than shared, because they
+        are not all true in every state. ``_NOT_VERIFIABLE_REASON`` opens with
+        *anahtar dogrulanmadi* and is dropped the moment a probe succeeds;
+        :data:`~station_api.opencode.client.AUTH_HEADER_CAVEAT` survives every
+        state, because "the header works and the documentation still does not
+        publish it" is as true after a green verdict as before one.
         """
-        if not (self._credential_row() is not None and self._envelope.exists()):
+        row = self._credential_row()
+        if not (row is not None and self._envelope.exists()):
             return ConnectionCheck(
                 state=VerificationState.NOT_CONFIGURED,
                 reasons=(_NOT_CONFIGURED_REASON,),
                 detail=_NOT_CONFIGURED_REASON,
             )
+
+        ledger = self._probe_row(row.fingerprint)
+        if ledger is None:
+            return ConnectionCheck(
+                state=VerificationState.SAVED_UNVERIFIED,
+                reasons=(
+                    _NOT_VERIFIABLE_REASON,
+                    _PROBE_ON_REQUEST_REASON,
+                    AUTH_HEADER_CAVEAT,
+                ),
+                detail=_SAVED_DETAIL,
+            )
+
+        outcome = probe.ProbeOutcome(ledger.state)
+        if outcome is probe.ProbeOutcome.VERIFIED:
+            reasons = [_VERIFIED_SCOPE_REASON, AUTH_HEADER_CAVEAT]
+        elif outcome is probe.ProbeOutcome.REFUSED:
+            reasons = [_REFUSED_REASON, _NOT_VERIFIABLE_REASON, AUTH_HEADER_CAVEAT]
+        else:
+            reasons = [_INCONCLUSIVE_REASON, _NOT_VERIFIABLE_REASON, AUTH_HEADER_CAVEAT]
+        if ledger.probes_used >= MAX_CONNECTION_PROBES:
+            reasons.append(_ceiling_spent_reason(ledger.probes_used))
+
         return ConnectionCheck(
-            state=VerificationState.SAVED_UNVERIFIED,
-            reasons=(_NOT_VERIFIABLE_REASON, _NO_PROBE_REASON, AUTH_HEADER_CAVEAT),
-            detail=_SAVED_DETAIL,
+            state=_STATE_FOR[outcome],
+            reasons=tuple(reasons),
+            detail=ledger.detail,
+            checked_at=ledger.last_probe_at,
+            probes_used=ledger.probes_used,
         )
+
+    def probe_connection(self) -> ConnectionView:
+        """Send **one** metered request to prove the stored key authenticates.
+
+        The only method in this class that spends money on a credential's
+        behalf other than :meth:`propose_plan`, and the only one a person
+        reaches by pressing "Baglantiyi denetle". It is called from exactly one
+        route and from nowhere else: not from :meth:`describe`, not from
+        :meth:`store_credential`, not from a timer, and there is no timer.
+
+        Everything that could go wrong before money is spent is refused before
+        the request is built, and each refusal is its own sentence:
+
+        * **no credential** - there is nothing to authenticate with, and a
+          probe without one would be measuring the network;
+        * **the probe ceiling for this credential is spent** - nothing is
+          sent, the stored verdict stands, and the reasons list already says
+          so. This returns rather than raises because a spent ceiling is a
+          *state of the connection*, not an error in the request, which is the
+          same call :meth:`refresh_catalog` makes about a failed fetch;
+        * **no selected model** - Station does not pick one (ADR-0005 11), and
+          picking a default *for* a verification would be the substitution rule
+          broken in the one place a person would never look for it;
+        * **a model whose row is not selectable, or whose protocol family is
+          not the measured one.** The probe body is ``chat/completions``
+          shaped because that is the shape ADR-0012 measured; a ``responses``
+          model is refused by name rather than probed against an unread
+          contract.
+
+        The credential is held in the redaction registry for exactly the
+        duration of the call - :meth:`ApiKeyEnvelope.opened` takes that choice
+        away from this method - and the client registers it a second time
+        around the response excerpt, which is where a reflected key would
+        otherwise appear.
+
+        **A lost answer counts.** ADR-0013 3 counts a planning turn only once
+        a provider answer has been parsed, and that is right for a lane where a
+        person is watching a session unfold. Here the ceiling is the only thing
+        between a button and a metered endpoint, and
+        :class:`~station_api.opencode.errors.OpenCodeLostResponseError` means
+        precisely *this request may already have been billed*. A ceiling that
+        hands back a maybe-billed call is a ceiling with a retry loop in it, so
+        every attempt that reached the client is counted.
+        """
+        self._require_engine()
+        row = self._credential_row()
+        if not (row is not None and self._envelope.exists()):
+            raise OpenCodeConfigurationError(
+                "Saglayici anahtari kaydedilmedi; baglanti denetlenemez."
+            )
+        fingerprint = row.fingerprint
+
+        ledger = self._probe_row(fingerprint)
+        if ledger is not None and ledger.probes_used >= MAX_CONNECTION_PROBES:
+            return self.describe()
+
+        selected = self._selected_model()
+        if not selected:
+            raise ModelNotSelectableError(
+                "Bir model secilmedi. Denetim, secilen modele gercek bir cagri "
+                "gonderir; Station sizin yerinize model secmez."
+            )
+        mapping = find_mapping(selected, mappings=self._mappings)
+        if mapping is None or not mapping.selectable:
+            raise ModelNotSelectableError(
+                f"'{selected}' bu surumun pinli tablosunda secilebilir "
+                "degil; denetim cagrisi yapilmaz ve baska bir modele gecilmez."
+            )
+        if mapping.protocol is not probe.PROBE_PROTOCOL:
+            raise ModelNotSelectableError(
+                f"'{selected}' modelinin protokol ailesi "
+                f"'{mapping.protocol.value}'. Denetim istegi yalnizca "
+                f"'{probe.PROBE_PROTOCOL.value}' ailesi icin olculdu; "
+                "digerleri icin tahmin edilmez."
+            )
+
+        body = probe.build_probe_request(model=mapping.wire_id)
+        client = self._client if self._client is not None else OpenCodeClient()
+        with self._envelope.opened() as api_key:
+            try:
+                raw = client.post_completion(
+                    probe.PROBE_PROTOCOL, body, api_key=api_key
+                )
+            except OpenCodeLostResponseError as exc:
+                result = probe.lost(str(exc))
+            except OpenCodeRequestError as exc:
+                result = probe.transport_failed(str(exc))
+            else:
+                result = probe.classify(raw)
+
+        self._record_probe(fingerprint, result)
+        return self.describe()
 
     # --- catalog -----------------------------------------------------------
 
@@ -653,6 +877,53 @@ class OpenCodeService:
             return None
         with self._session() as session:
             return session.get(OpenCodeCredentialMetadata, CREDENTIAL_ID)
+
+    def _probe_row(self, fingerprint: str) -> OpenCodeProbeLedger | None:
+        """This credential's probe ledger row. A read; writes nothing."""
+        if self._engine is None:
+            return None
+        with self._session() as session:
+            return session.get(OpenCodeProbeLedger, fingerprint)
+
+    def _record_probe(self, fingerprint: str, result: probe.ProbeResult) -> None:
+        """Count one probe against this credential and store what it answered.
+
+        The **only** writer of ``probes_used`` in this build, and it only adds.
+        There is no reset, no setter and no argument that could make the count
+        go down; ``test_opencode_probe.py::
+        test_nothing_lowers_the_connection_probe_counter`` reads the syntax
+        tree of the whole package tree to keep it that way, and its companion
+        keeps the row from being deleted - deleting a row lowers a counter just
+        as effectively as assigning to it, which is the mutation ADR-0013 5
+        found the hard way.
+
+        The verdict columns are replaced on every probe. That is the point of
+        them: a failed check must not leave the previous verdict standing, and
+        a stale ``verified`` beside a fresh refusal is the exact shape of
+        dishonesty this feature exists to remove.
+        """
+        now = datetime.now(UTC)
+        detail = result.detail[:MAX_EXCERPT_CHARS]
+        with self._session() as session, session.begin():
+            row = session.get(OpenCodeProbeLedger, fingerprint)
+            if row is None:
+                session.add(
+                    OpenCodeProbeLedger(
+                        fingerprint=fingerprint,
+                        probes_used=1,
+                        first_probe_at=now,
+                        last_probe_at=now,
+                        state=result.outcome.value,
+                        http_status=result.http_status,
+                        detail=detail,
+                    )
+                )
+            else:
+                row.probes_used += 1
+                row.last_probe_at = now
+                row.state = result.outcome.value
+                row.http_status = result.http_status
+                row.detail = detail
 
     def _selected_model(self) -> str:
         if self._engine is None:

@@ -776,6 +776,15 @@ function ScanReport({ scan }: { readonly scan: WorkScanResult }) {
           scan.candidate_count,
         )} · reddedilen satir: ${String(scan.refusal_count)}.`}
       </p>
+      {/* What the scan actually spent, beside the ceiling it spent it
+          against. The cost sentence above the button says what a scan *may*
+          cost; this says what this one *did*, and a number with no
+          denominator is not a spend report (ADR-0014 4). */}
+      <p className="font-mono text-xs text-muted" data-testid="workscan-model-calls">
+        {`Harcanan model cagrisi: ${String(scan.model_calls_used)}/${String(
+          scan.max_model_calls,
+        )}.`}
+      </p>
       <p className="text-xs text-muted">
         Bu yanit oda mesajlari icin sunucunun kendi bayatlik beyanini
         tasimiyor; yukaridaki degerler bu istasyonun olctugu okuma anlaridir.
@@ -856,7 +865,9 @@ function ScanReport({ scan }: { readonly scan: WorkScanResult }) {
             <p className="font-mono text-xs text-muted">
               {`${result.room} · okunan satir: ${String(result.lines_read)} · aday: ${String(
                 result.candidates.length,
-              )} · reddedilen: ${String(result.refusals.length)}`}
+              )} · reddedilen: ${String(result.refusals.length)} · model cagrisi: ${String(
+                result.model_calls_used,
+              )}`}
             </p>
             {result.refusals.map((refusal) => (
               <p className="text-xs text-muted" key={`${refusal.room}-${String(refusal.seq)}`}>
@@ -1081,17 +1092,30 @@ export function WorkScanPanel() {
           />
         )}
 
-        {/* --- what a deterministic derivation cannot do ----------------- */}
+        {/* --- what this derivation can get wrong, and what it costs ------ */}
         <section aria-label="Cikarim sinirlari" className="flex flex-col gap-2">
           <h3 className="text-sm font-semibold text-foreground">Bu taramanin siniri</h3>
           <Alert status="warning">
             <Alert.Indicator />
             <Alert.Content>
-              <Alert.Title>Anlamsal cikarim yoktur</Alert.Title>
+              {/* The heading used to promise that this build inferred
+                  nothing, and that promise became false the day a model
+                  started reading the lines (ADR-0014). A promise that quietly
+                  stops being true is worse than one nobody made: a reader
+                  would take a wrong candidate to be impossible rather than
+                  merely uncommon. The retired wording is deliberately not
+                  quoted here - `test_model_lane_claims.py` scans this tree
+                  for it, and a comment is a place a stale claim survives. */}
+              <Alert.Title>Satirlari bir dil modeli okur</Alert.Title>
               {/* The backend's sentence, verbatim, on every read - not only
                   beside a result (ADR-0007 2). */}
               <Alert.Description>
                 <span data-testid="workscan-honesty">{status.honesty}</span>
+              </Alert.Description>
+              {/* What a scan spends, before the button is pressed. A cost a
+                  person learns afterwards is a receipt (ADR-0014 6). */}
+              <Alert.Description>
+                <span data-testid="workscan-reading-cost">{status.reading_cost}</span>
               </Alert.Description>
               {/* The same honesty about the refusals. A pattern list that was
                   described as a structural block is a stronger promise than

@@ -126,11 +126,43 @@ OPEN_STATE_SENTENCE = (
 )
 
 #: The sentence the product must show beside every scan result. ADR-0007 2
-#: requires the cost of a deterministic derivation to be stated to the user
-#: rather than left in a design document.
+#: required the cost of the derivation to be stated to the user rather than
+#: left in a design document, and ADR-0014 changed what the cost **is**.
+#:
+#: It used to say *"anlamsal cikarim yoktur"* - no semantic inference - and
+#: that sentence was true for exactly as long as candidates came out of a
+#: phrase list. It stopped being true the moment a model started reading the
+#: lines, and a promise that has quietly become false is worse than one that
+#: was never made: a user who read it would think a wrong candidate was
+#: impossible rather than merely uncommon.
+#:
+#: So the sentence names the new cost instead of the old one. A model can be
+#: wrong about a line, and the answer to that is the quote - which is on every
+#: candidate, verbatim, from the snapshot rather than from anything the model
+#: said.
 DERIVATION_HONESTY_SENTENCE = (
-    "Bu surum adaylari kalip eslesmesiyle cikarir; anlamsal cikarim yoktur, "
-    "bu yuzden bir odadaki her firsat gorulmez."
+    "Bu surum adaylari, odadan okunan satirlari bir dil modeline okutarak "
+    "cikarir; model yanilabilir ve bir satiri yanlis siniflandirabilir, bu "
+    "yuzden bir adayi kabul etmeden once alintiyi kendiniz okuyun."
+)
+
+#: What a scan costs, said **before** it is spent (ADR-0014 6).
+#:
+#: A template rather than a sentence, for :data:`OPEN_STATE_SENTENCE`'s reason:
+#: it cannot be shown without the two numbers that make it a statement rather
+#: than a warning, and a caller holding only the prose would be tempted to show
+#: it alone. The numbers come from the one place each is decided -
+#: ``reading.MAX_LINES_PER_TURN`` and ``budget.CEILING.max_model_calls`` - so
+#: the screen and the request cannot drift apart.
+#:
+#: The second half is the part a person needs and would not guess: a ceiling
+#: that runs out mid-scan does not fail the scan, it leaves lines unread, and
+#: those lines are listed with their reason rather than dropped.
+MODEL_READING_COST_SENTENCE = (
+    "Bu tarama model cagrisi harcar: her tur en cok {lines} satir tasir ve bir "
+    "tarama en cok {calls} tur harcayabilir. Tavan dolarsa kalan satirlar "
+    "okunmaz ve gerekcesiyle listelenir; harcanan tur sayisi sonucun yaninda "
+    "gosterilir."
 )
 
 #: The second half of the same honesty, about the *refusals* rather than the
@@ -257,6 +289,7 @@ def _mask_one(text: str, needle: str) -> str:
 __all__ = [
     "DERIVATION_HONESTY_SENTENCE",
     "FORBIDDEN_PHRASES",
+    "MODEL_READING_COST_SENTENCE",
     "NEUTRALISED_MARK",
     "OPEN_STATE_SENTENCE",
     "PERMITTED_ALTERNATIVES",

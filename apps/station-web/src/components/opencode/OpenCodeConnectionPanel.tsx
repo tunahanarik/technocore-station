@@ -3,6 +3,7 @@ import { useCallback, useEffect, useId, useState } from "react";
 
 import {
   ApiError,
+  checkOpenCodeConnection,
   fetchOpenCodeStatus,
   forgetOpenCodeCredential,
   refreshOpenCodeCatalog,
@@ -30,12 +31,17 @@ import { StatusPill, type StatusTone } from "../StatusPill";
  * 2. **Nothing here is persisted by the browser.** Not the key, not the
  *    chosen model, not a "remember me" of any kind (SI-24). The selected
  *    model is a backend setting; this panel only asks for it.
- * 3. **Checking the connection produces no green badge.** The provider's
- *    catalog answers without a key, a GET on a protocol path answers 404,
- *    and this build makes no metered call on its own. The strongest honest
- *    verdict is "saved, not verified", carried with *every* reason it is not
- *    stronger (ADR-0005 4). The tone table below has no `ok` entry, so the
- *    rule is structural rather than a habit.
+ * 3. **A green badge is earned by a request, or it is not shown.** "Baglantiyi
+ *    denetle" used to call the same status read the page already made on
+ *    mount, so the verdict could never move whatever the provider would have
+ *    said: a control that looked like it did something and did nothing. It now
+ *    sends one metered `chat/completions` turn with the stored key (ADR-0015),
+ *    on the press and nowhere else - never on mount, never on a poll, never as
+ *    a step of saving. What comes back is the provider's actual outcome, in
+ *    four states that never collapse into each other: verified, refused,
+ *    inconclusive, and not-yet-asked. Each carries every reason it is not
+ *    stronger, and the reasons the probe made false are dropped rather than
+ *    left standing beside a fresh verdict.
  * 4. **Listed is not callable.** A model with no published protocol family
  *    is shown, with its reason, and cannot be picked. There is no fallback:
  *    a refused model is a refusal, never a quiet substitution (ADR-0005 5).
@@ -57,7 +63,7 @@ type Busy = Step | null;
 
 const ERROR_TITLE: Record<Step, string> = {
   read: "Baglanti durumu okunamadi",
-  check: "Baglanti durumu okunamadi",
+  check: "Baglanti denetlenemedi",
   save: "Anahtar kaydedilemedi",
   forget: "Anahtar kaldirilamadi",
   refresh: "Model listesi yenilenemedi",
@@ -67,21 +73,29 @@ const ERROR_TITLE: Record<Step, string> = {
 /**
  * The connection verdict, as labels and tones.
  *
- * There is deliberately no `ok` tone in this table and no `verified` state to
- * give one to. A single green pill is exactly the reduction ADR-0005 4
- * forbids, and the cheapest way to make that impossible is to leave the
- * colour out of the mapping rather than out of the review checklist.
+ * There is one `ok` tone and exactly one state may wear it. That used to be
+ * zero, and the comment here said the absence was structural - which it was,
+ * and it was guarding a control that could not have earned the colour anyway.
+ * Now `verified` is produced by one thing only: a `200` from the metered
+ * endpoint, which no request without the credential can obtain. Everything
+ * else keeps a colour that does not read as success, and a failed probe gets
+ * `problem` rather than the `pending` a never-asked key gets - because "we
+ * asked and it went badly" and "nobody has asked" are different findings.
  */
 const CHECK_LABEL: Record<OpenCodeStatus["check"]["state"], string> = {
   not_configured: "Anahtar kaydedilmedi",
-  never_checked: "Henuz denetlenmedi",
   key_saved_unverified: "Anahtar kaydedildi, dogrulanmadi",
+  verified: "Anahtar dogrulandi",
+  provider_refused: "Saglayici reddetti",
+  probe_failed: "Denetim sonuc vermedi",
 };
 
 const CHECK_TONE: Record<OpenCodeStatus["check"]["state"], StatusTone> = {
   not_configured: "inactive",
-  never_checked: "pending",
   key_saved_unverified: "pending",
+  verified: "ok",
+  provider_refused: "problem",
+  probe_failed: "problem",
 };
 
 const CATALOG_LABEL: Record<OpenCodeStatus["catalog"]["state"], string> = {
@@ -142,9 +156,14 @@ function formatDate(value: string | null): string {
  * so the redacted diagnostics payload is exactly as useful as it was; the
  * only thing dropped is the one field that could carry the key.
  *
- * The other three calls keep their prose: neither the catalog refresh nor
- * the model selection sends a credential, and their messages ("this model
- * has no published protocol family") are the whole point of the refusal.
+ * The other four calls keep their prose. None of them submits a value a
+ * message could quote back - the catalog refresh, the model selection and the
+ * connection check all send a body with nothing the user typed in it - and
+ * their messages ("this model has no published protocol family", "no model is
+ * selected") are the whole point of the refusal. The check does carry the
+ * credential *outbound*, but a provider that rejects it is not an error on
+ * that path: it comes back as a verdict inside the status document, already
+ * redacted on the server.
  */
 function withoutServerProse(error: ApiError): ApiError {
   return new ApiError(error.status, error.code, {
@@ -174,15 +193,15 @@ export function OpenCodeConnectionPanel() {
   const [error, setError] = useState<ApiError | null>(null);
   const [step, setStep] = useState<Step>("read");
 
-  const load = useCallback(async (as: "read" | "check"): Promise<void> => {
+  const load = useCallback(async (): Promise<void> => {
     setLoading(true);
-    setBusy(as);
+    setBusy("read");
     try {
       setStatus(await fetchOpenCodeStatus());
       setError(null);
     } catch (caught) {
       setError(toApiError(caught));
-      setStep(as);
+      setStep("read");
     } finally {
       setLoading(false);
       setBusy(null);
@@ -190,8 +209,40 @@ export function OpenCodeConnectionPanel() {
   }, []);
 
   useEffect(() => {
-    void load("read");
+    void load();
   }, [load]);
+
+  /**
+   * Probe the stored key. **The only control here that spends money.**
+   *
+   * It used to be `load("check")` - the same status read the effect above
+   * makes on mount, with a different busy label and a different error title.
+   * The verdict therefore could not move, which is what the user hit.
+   *
+   * `busy !== null` is the double-click guard and it matters more here than
+   * anywhere else on this surface: every press is a metered call counted
+   * against a ceiling that has no reset, so a second press landing while the
+   * first is in flight would spend twice for one decision.
+   */
+  async function runCheck(): Promise<void> {
+    if (busy !== null) return;
+    setBusy("check");
+    setError(null);
+    try {
+      setStatus(await checkOpenCodeConnection());
+    } catch (caught) {
+      // The prose is kept, unlike the two credential calls. This request
+      // carries nothing the user typed, so there is no submitted value for a
+      // backend to quote back - and the messages that do arrive here are the
+      // refusals worth reading: "no model is selected", "that model's protocol
+      // family was never measured". A provider that rejects the key is *not*
+      // an error on this path; it comes back as a verdict in the document.
+      setError(toApiError(caught));
+      setStep("check");
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function save(): Promise<void> {
     // Double-click guard. Two stores of the same key would write the envelope
@@ -289,7 +340,7 @@ export function OpenCodeConnectionPanel() {
           ) : (
             <ErrorRegion
               error={error}
-              onRetry={() => void load("read")}
+              onRetry={() => void load()}
               retryPending={loading}
               section="Ayarlar ve Yardim / OpenCode Go baglantisi"
               title={ERROR_TITLE[step]}
@@ -307,6 +358,18 @@ export function OpenCodeConnectionPanel() {
   const canSelect =
     busy === null && pending !== null && pending.selectable && (!needsAck || trainingAck);
   const showField = !status.configured || editing;
+  /**
+   * Whether a check can happen at all, computed from the same three facts the
+   * backend refuses on: a stored key, a chosen model, and a ceiling with room
+   * left. Duplicated here on purpose - the server refuses again on its own
+   * side and this is a courtesy, not the control - because a button that is
+   * only ever going to produce a 400 is one the user should not be able to
+   * press, and because pressing it would otherwise look like a spend.
+   */
+  const canCheck =
+    status.configured &&
+    status.selected_model !== "" &&
+    check.probes_used < check.probe_ceiling;
 
   return (
     <Card>
@@ -326,7 +389,7 @@ export function OpenCodeConnectionPanel() {
         {error !== null && (
           <ErrorRegion
             error={error}
-            onRetry={step === "read" ? () => void load("read") : undefined}
+            onRetry={step === "read" ? () => void load() : undefined}
             retryPending={busy === "read"}
             section="Ayarlar ve Yardim / OpenCode Go baglantisi"
             title={ERROR_TITLE[step]}
@@ -406,7 +469,17 @@ export function OpenCodeConnectionPanel() {
                 Vazgec
               </Button>
             )}
-            <Button isDisabled={busy !== null} onPress={() => void load("check")} variant="secondary">
+            {/* Disabled while anything is in flight - this press costs a
+                metered call against a ceiling with no reset, so a second one
+                landing on top of the first would spend twice for one
+                decision - and disabled outright once the ceiling is spent or
+                while there is no key and no model to send. A control that is
+                going to be refused is better greyed out than pressed. */}
+            <Button
+              isDisabled={busy !== null || !canCheck}
+              onPress={() => void runCheck()}
+              variant="secondary"
+            >
               {busy === "check" ? "Denetleniyor..." : "Baglantiyi denetle"}
             </Button>
             {status.configured && (
@@ -427,11 +500,29 @@ export function OpenCodeConnectionPanel() {
           </div>
           <p className="text-sm">{check.detail}</p>
           <p className="text-xs text-muted">
-            &quot;Baglantiyi denetle&quot; yeni bir dogrulama uretmez ve yesil bir
-            rozetle sonuclanmaz: yerel servisin bu anahtar hakkinda dururken
-            soyleyebildigi seyi yeniden okur. Anahtarin bicimi dogru diye gecerli
-            sayilmaz; ucretli gercek bir cagri bu surumde kendiliginden yapilmaz.
+            &quot;Baglantiyi denetle&quot; secili modele gercek bir istek gonderir
+            ve saglayicinin cevabini oldugu gibi gosterir. Bu istek ucretlidir ve
+            yalnizca siz bastiginizda yapilir: sayfa acilirken, arka planda veya
+            anahtari kaydederken yapilmaz. Anahtarin bicimi dogru diye gecerli
+            sayilmaz; gecerlilik ancak saglayici cevap verdiginde soylenir.
           </p>
+          {/* Both numbers, always - including on a fresh install where they
+              read 0/8. A ceiling a person first meets as a refusal is one they
+              read as a bug. */}
+          <dl className="grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
+            <div className="flex justify-between gap-2">
+              <dt className="text-muted">Son denetim</dt>
+              <dd className="font-mono" data-testid="opencode-checked-at">
+                {formatDate(check.checked_at)}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-2">
+              <dt className="text-muted">Denetim hakki</dt>
+              <dd className="font-mono" data-testid="opencode-probe-budget">
+                {`${String(check.probes_used)}/${String(check.probe_ceiling)} kullanildi`}
+              </dd>
+            </div>
+          </dl>
           <ul className="flex flex-col gap-1">
             {check.reasons.map((reason) => (
               <li className="text-xs text-muted" key={reason}>

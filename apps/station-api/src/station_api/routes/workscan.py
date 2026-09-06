@@ -209,6 +209,7 @@ def _room_result(value: DerivationResult) -> WorkScanRoomResult:
             for item in value.refusals
         ],
         lines_read=value.lines_read,
+        model_calls_used=value.model_calls_used,
     )
 
 
@@ -351,6 +352,8 @@ def _scan(value: ScanResult) -> WorkScanResult:
         notes=[_room_note(item) for item in value.notes],
         candidate_count=len(value.candidates),
         refusal_count=len(value.refusals),
+        model_calls_used=value.model_calls_used,
+        max_model_calls=value.max_model_calls,
     )
 
 
@@ -417,6 +420,7 @@ def _adapter(value: AdapterRecord) -> WorkScanAdapter:
 def _to_response(view: WorkScanView) -> WorkScanStatusResponse:
     return WorkScanStatusResponse(
         honesty=view.honesty,
+        reading_cost=view.reading_cost,
         capability=_capability(view.capability),
         adapters=[_adapter(item) for item in view.adapters],
         room_index=(

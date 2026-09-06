@@ -113,6 +113,30 @@ STALE_CLAIMS: tuple[tuple[str, str], ...] = (
     # test result is missing. Acceptance conditions are decided by reading
     # bytes; no executor is involved either way.
     ("test_needs_the_closed_executor", r"kosacak yurutme kapalidir"),
+    # ADR-0015. The ninth instance of this file's shape, and the first found
+    # by a user rather than by a review: "Baglantiyi denetle" called the same
+    # status read the page made on mount, so the copy beside it - *this
+    # produces no new verification* - was accurate about a control that did
+    # nothing. It is a claim the product makes about its own button, so it
+    # belongs here rather than in a comment saying not to write it again.
+    ("check_produces_no_verification", r"yeni bir dogrulama uretmez"),
+    # The same absence in the reasons list, where it was filed as a bullet
+    # most people never open. Narrow on purpose: "henuz uygulanmamistir" is a
+    # sentence this build may honestly need about something else, so the
+    # pattern requires it in the same clause as a request or a call.
+    ("metered_call_unimplemented", r"(istek|cagri)[^.!?]{0,120}uygulanmamis"),
+    # ADR-0014. The tenth instance, and the first one this file was able to
+    # anticipate rather than find after the fact: "there is no semantic
+    # inference" was the work scan's own honesty sentence, it was true while
+    # candidates came out of a twenty-nine phrase list, and it stopped being
+    # true the day a model started reading the lines. It is the most dangerous
+    # of the ten to leave standing, because it is a promise about what the
+    # product *cannot* get wrong.
+    ("no_semantic_inference", r"anlamsal cikarim yoktur"),
+    # The other half of the same sentence, and the half somebody would keep
+    # while rewriting the first: "this release derives candidates by pattern
+    # matching". Kept separate so a partial correction is still caught.
+    ("derives_by_pattern_matching", r"adaylari kalip eslesmesiyle cikarir"),
 )
 
 _COMPILED: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
@@ -136,6 +160,22 @@ PATTERN_EXAMPLES: dict[str, str] = {
     "test_needs_the_closed_executor": (
         "Test sonucu bu surumde uygulanmadi; onu kosacak yurutme kapalidir."
     ),
+    "check_produces_no_verification": (
+        "'Baglantiyi denetle' yeni bir dogrulama uretmez ve yesil bir rozetle "
+        "sonuclanmaz."
+    ),
+    "metered_call_unimplemented": (
+        "Gercek bir istek ucretli olabilir; bu surumde yalnizca sizin acik "
+        "isteginizle yapilir ve henuz uygulanmamistir."
+    ),
+    "no_semantic_inference": (
+        "Bu surum adaylari kalip eslesmesiyle cikarir; anlamsal cikarim "
+        "yoktur, bu yuzden bir odadaki her firsat gorulmez."
+    ),
+    "derives_by_pattern_matching": (
+        "Bu surum adaylari kalip eslesmesiyle cikarir ve bir odadaki her "
+        "firsati gormez."
+    ),
 }
 
 #: Sentences this build has still earned. They sit close enough to the
@@ -153,6 +193,31 @@ STILL_EARNED: tuple[str, ...] = (
     ),
     "Note lane bu surumde yoktur; hicbir kod yolu bu kaniti uretemez.",
     "Gercek bir cikis kodu uretilmedi; kosacak bir denetim yoktur.",
+    # ADR-0015's replacement copy. It names a cost and a trigger instead of an
+    # absence, and the two patterns above have to leave it alone or they would
+    # have flagged the correction along with the defect.
+    (
+        "Dogrulama yalnizca siz 'Baglantiyi denetle' dugmesine bastiginizda "
+        "yapilir: secili modele, olculu ucta, tek bir kucuk model cagrisi "
+        "gonderilir."
+    ),
+    (
+        "Denetim sonuc vermedi: ya bir yanit gelmedi ya da gelen yanit anahtar "
+        "hakkinda bir sey soylemiyor."
+    ),
+    # ADR-0014's replacement copy, and the two sentences the new patterns have
+    # to leave alone. The first names what can now go wrong instead of
+    # promising that nothing can; the second is still true and still needed -
+    # the prohibition registry really is a pattern list, and saying so is the
+    # correction ADR-0007 8 already made.
+    (
+        "Bu surum adaylari, odadan okunan satirlari bir dil modeline okutarak "
+        "cikarir; model yanilabilir ve bir satiri yanlis siniflandirabilir."
+    ),
+    (
+        "Yasakli is bicimleri kalip eslesmesiyle reddedilir. Yasak listede "
+        "olmayan bir sozcukle istenirse aday uretilebilir."
+    ),
 )
 
 

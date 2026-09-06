@@ -72,8 +72,10 @@ English, in which the lexicon scores **zero**
 its own wording - the honesty sentences the four language modules export -
 and it does, with room to spare. The longest exported constant it does *not*
 see is seven word tokens (``NEUTRALISED_ALL``, a bracketed mark rather than a
-sentence); the shortest it does see is sixteen
-(:func:`test_the_detector_sees_every_sentence_this_product_certifies`).
+sentence); the shortest it does see is twenty-five
+(:func:`test_the_detector_sees_every_sentence_this_product_certifies`). It was
+sixteen until ADR-0014 rewrote ``DERIVATION_HONESTY_SENTENCE``, and the gap
+around the threshold only got wider.
 
 And the discovery walks. :func:`test_the_scan_reaches_a_package_no_list_here_names`
 and :func:`test_the_derivation_sees_a_package_no_list_here_names` build a
@@ -136,6 +138,7 @@ LANGUAGE_SCAN_PACKAGES: tuple[str, ...] = (
     "tasks",
     "technocore",
     "vault",
+    "workreader",
     "workscan",
 )
 
@@ -365,8 +368,8 @@ MINIMUM_ENGLISH_CORPUS_TOKENS = 4000
 #: the longest one the detector does not classify as Turkish is
 #: ``NEUTRALISED_ALL`` at seven word tokens - a bracketed mark, not a
 #: sentence - and the shortest one it does is
-#: ``DERIVATION_HONESTY_SENTENCE`` at sixteen. Eight sits in a nine-token gap
-#: rather than against either edge.
+#: ``DERIVATION_HONESTY_SENTENCE`` at twenty-five - sixteen before ADR-0014
+#: rewrote it. Eight sits in the gap rather than against either edge.
 SENTENCE_WORD_TOKENS = 8
 
 #: Floors, so "the scan found nothing" cannot read as "the tree is clean".
@@ -932,11 +935,14 @@ def test_the_detector_sees_every_sentence_this_product_certifies() -> None:
     )
 
     # And the gap the threshold sits in is real rather than assumed: nothing
-    # between seven and sixteen tokens is exported at all, so eight is not a
-    # number tuned against an edge.
+    # between seven and twenty-five tokens is exported at all, so eight is not
+    # a number tuned against an edge. The upper number was sixteen until
+    # ADR-0014 replaced the shortest of these sentences with a longer one; the
+    # gap the threshold sits in only widened, which is the property this pair
+    # of assertions is about rather than either figure on its own.
     lengths = sorted(len(_word_tokens(text)) for _, text in sentences)
     assert max(n for n in lengths if n < SENTENCE_WORD_TOKENS) == 7
-    assert min(n for n in lengths if n >= SENTENCE_WORD_TOKENS) == 16
+    assert min(n for n in lengths if n >= SENTENCE_WORD_TOKENS) == 25
 
 
 def test_the_detector_sees_the_planted_sentence_and_not_a_machine_code() -> None:

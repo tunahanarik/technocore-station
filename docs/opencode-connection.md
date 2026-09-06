@@ -442,30 +442,116 @@ Koşul **model başınadır**, tek bir battaniye cümle değil — Privacy tablo
 
 ---
 
-## 6. "Bağlantıyı denetle" — dürüst çıktı
+## 6. "Bağlantıyı denetle" — gerçek bir probe (ADR-0015)
 
-Üç gözlem çatışıyor (ADR-0005 §4): katalog anahtarsız cevap veriyor, protokol
-yolunda `GET` 404 dönüyor, ve gerçek bir çağrı bu turda yasak. Sonuç:
+**Bu bölüm ADR-0015 ile yeniden yazıldı.** Eskiden burada üç gözlemin
+çatıştığı ve sonucun `key_saved_unverified` olduğu yazıyordu. İki gözlem hâlâ
+doğru: katalog anahtarsız cevap veriyor (yani onu okumak anahtarı
+doğrulamıyor) ve protokol yolunda `GET` 404 dönüyor. Üçüncüsü —
+*"gerçek bir çağrı bu turda yasak"* — düğmenin kendisiyle çelişiyordu:
+**düğme zaten kullanıcının açık isteğidir** ve arkasında hiçbir şey yoktu.
+`check_connection` sabit bir hüküm döndürüyordu, ön yüzdeki `load("check")`
+`load("read")` ile aynı `GET /status`'u çağırıyordu, ve bir check ucu yoktu.
+Kaydedilmiş bir anahtarla rozet **hiçbir koşulda** ilerleyemezdi.
+
+### Probe ne gönderir
+
+Katalog probe **olamaz**: `client.py::fetch_catalog` kimlik bilgisi eklemez
+(`api_key=None`) ve uç kimliksiz de `200` döner. Kimliksiz de başarılı olan bir
+istek kimlik bilgisi hakkında hiçbir şey söylemez.
+
+Probe, ADR-0012'nin ölçtüğü biçimde **tek bir** istektir:
 
 ```
-VerificationState = not_configured | never_checked | key_saved_unverified
+POST /zen/go/v1/chat/completions
+  model      = kullanıcının seçtiği model      (seçim yoksa gerekçeli ret)
+  messages   = [{"role": "user", "content": "ping"}]
+  max_tokens = 16                              (üretimi tavanlar)
+  stream     = false
+  tools      -> YOK                             (registry bir planın işidir)
 ```
 
-**`verified` diye bir değer yoktur.** Enum'da bulunmayan bir değer, yanlış
-yerden yazılamaz.
+**Maliyeti bir model çağrısıdır.** ADR-0012'nin ölçtüğü tur bundan büyüktü
+(184 giriş + 46 çıkış token'ı) ve `cost: "0"` bildirdi; bu istek o promptun
+küçük bir kesridir. "Ucuz" "bedava" değildir, bu yüzden sayılır (§6.3).
 
-Anahtar kayıtlıyken çıktı şudur:
+### Hüküm durum satırından okunur
 
-* `state`: `key_saved_unverified`
-* `detail`: *"Anahtar kaydedildi, dogrulanmadi. Bu tek yesil bir rozet degildir."*
-* `reasons` (**çoğul, kasıtlı**): katalog anahtarsız yanıt verdiği için
-  doğrulamıyor; gerçek istek ücretli olabileceği için yalnız kullanıcının
-  açık eylemine bağlıdır ve bu turda uygulanmadı; auth header'ı belgede
-  doğrulanmamıştır.
+`adapters.parse_response` bir `200`'ü başarı saymadan önce okunabilir metin
+ister; probe için bu yanlıştır. Probe tek bir soru sorar — *kimlik bilgisi
+kabul edildi mi* — ve cevabı durum satırıyla gelmiştir. On altı token'ı
+muhakemeye harcayan bir model `200` + `finish_reason: "length"` + boş `content`
+döndürür, ve bunu "doğrulanmadı" saymak kanıtlanmış bir anahtarı model kısa
+konuştu diye kanıtsız saymaktır. Okunan tek istisna: `error` üyesi taşıyan bir
+`200`.
+
+### 6.1 Beş durum, hiçbiri diğerine katlanmıyor
+
+```
+VerificationState = not_configured
+                  | key_saved_unverified   (anahtar var, kimse sormadı)
+                  | verified               (ölçülü uç 200 döndü)
+                  | provider_refused       (sağlayıcı baktı ve reddetti: 401/403)
+                  | probe_failed           (yanıt yok, ya da yanıt bir şey söylemiyor)
+```
+
+`never_checked` **kaldırıldı**: hiçbir kod yolu onu üretmiyordu.
+
+`probe_failed` bilerek `unreachable` **değildir**: bir 429 açıkça ulaşılmış bir
+sunucudan gelen cevaptır, ve onu "ulaşılamadı" diye adlandırmak ölçülmemiş bir
+ağ iddiası olurdu. Kişinin ihtiyaç duyduğu ayrımı `detail` taşır — sağlayıcının
+kendi cümlesi, sınırlı ve redakte.
+
+### 6.2 Yalnız açık basışla
+
+`POST /api/opencode/check`. `GET` değil: para harcar (gezinme değil basış
+olmalı), saklanan durumu değiştirir (CSRF middleware'inin arkasına ait), ve bir
+`GET` tarayıcının/prefetcher'ın/yeniden yüklemenin kendiliğinden tekrarladığı
+şeydir.
+
+`GET /api/opencode/status` hiçbir şey göndermez; `store_credential` ve
+`catalog/refresh` de göndermez. Bunu tutan şey yorum değil, **her istekte
+patlayan bir transport** süren testlerdir.
+
+### 6.3 Tavan: kimlik bilgisi başına, kalıcı, sıfırlamasız
+
+Sayılmayan ölçülü bir çağrı, ADR-0013'ün kurduğu tavanın yanındaki açık
+kapıdır. Bu yüzden:
+
+```
+opencode_probe_ledger   (migration 0012, yalnız ekleme)
+  fingerprint     PK — kimlik bilgisi parmak izi, FK YOK
+  probes_used     yalnız artar
+  first/last_probe_at
+  state, http_status, detail   (son hüküm)
+
+agent/budget.py::MAX_CONNECTION_PROBES = 8
+```
+
+Parmak izine anahtarlıdır çünkü `opencode_credential_metadata` satırı anahtar
+unutulduğunda **ve değiştirildiğinde** silinir; sayaç oraya yazılsaydı tavan
+iki basışla geri gelirdi. Yeniden başlatma da sıfırlamaz. **Kaybedilen yanıt
+sayılır** (ADR-0013 §3.4'ten kasıtlı fark): `OpenCodeLostResponseError` tam
+olarak *bu istek ücretlenmiş olabilir* demektir.
+
+Bedeli açıktır: sekiz denetimi biten bir anahtarın hakkı geri gelmez ve
+sıfırlama yolu yoktur. Kullanıcının yolu **başka bir anahtar**dır.
+
+### 6.4 Gerekçe listesi taze hükmün yanında bayat durmaz
+
+* `_NOT_VERIFIABLE_REASON` ("Anahtar dogrulanmadi…") probe başarınca **düşer**;
+* `_NO_PROBE_REASON` (*"…ve henuz uygulanmamistir"*) **silindi** — düğmenin
+  kendi itirafıydı;
+* `AUTH_HEADER_CAVEAT` **her durumda kalır**, `verified` dahil: başlık
+  çalışıyor (ADR-0012 ölçtü) ve belge onu hâlâ yayımlamıyor;
+* `verified` yanında doğrulamanın **tek bir çağrıya** ve **kimlik
+  doğrulamasına** ait olduğu yazılır;
+* tavan dolduğunda listeye sayılarla bir cümle eklenir.
 
 **Biçim kontrolüyle başarı üretilmez.** `assert_storable` yalnız güvenle
 tutulabilirliği denetler (uzunluk, kırpılmamışlık); anahtarın "makul
 göründüğünü" kontrol eden bir kural, anlamı olmayan yeşil bir sonuç üretirdi.
+Yeşil rozetin tek üreticisi ölçülü uçtan gelen bir `200`'dür.
 
 ---
 
@@ -495,6 +581,7 @@ route bunu her yanıtta çalıştırır.
     GET  /api/opencode/status             tüm bağlantı, salt okunur
     POST /api/opencode/credential         anahtarı kaydet
     POST /api/opencode/credential/forget  anahtarı sil
+    POST /api/opencode/check              anahtarı dene (tek ölçülü çağrı)
     POST /api/opencode/catalog/refresh    katalogu çek (yalnız istek üzerine)
     POST /api/opencode/model              model seç, ya da gerekçeli ret
 
@@ -543,7 +630,7 @@ autouse ağ kesici iki katmanda blokludur.
 |---|---|
 | Streaming / SSE | Ertelenmiş — sözleşmesi hâlâ ölçülmedi; `streaming_supported` `False` |
 | ~~Tool-call~~ | **Kapandı.** ADR-0012 sözleşmeyi ölçtü; `tool_calls_supported` `True` ve yol H4'te (`opencode/planner.py`, `planner/`) açıldı |
-| Gerçek probe ("anahtarı doğrula") | Kullanıcının açık eylemine bağlı; ücretli olabileceği için bu turda uygulanmadı |
+| ~~Gerçek probe ("anahtarı doğrula")~~ | **Kapandı.** ADR-0015: `POST /api/opencode/check`, yalnız basışla, kimlik bilgisi başına sekiz hakla, kalıcı sayaçla |
 | ~~Gerçek bütçe sınırı ve eşzamanlılık~~ | **Kapandı.** H2 `agent/budget.py`'yi yazdı: araç çağrısı, duvar saati ve eşzamanlılık (`Literal[1]`); H4 dördüncü birimi ekledi (`max_model_calls`). `usage`/`cost` kaydedilir, **tavan olarak okunmaz** (ADR-0012 §3) |
 | Katalogdaki **7 eşlemesiz** model | Belge "Endpoints" tablosuna eklediğinde `MODEL_MAPPINGS`'te satır başına tek satır |
 

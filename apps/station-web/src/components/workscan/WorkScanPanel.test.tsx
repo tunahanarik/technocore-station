@@ -235,11 +235,22 @@ const CANDIDATE: WorkScanCandidate = {
     detail:
       "Su ana kadar okunanda kapanis isareti gorulmedi (anlik goruntu: 2026-09-04T10:01:00+00:00). Bu, isin acik oldugu anlamina gelmez; yalnizca okunan dilimde bir kapanis isareti bulunmadigi anlamina gelir.",
   },
-  derivation: "rule_based_pattern_match",
+  derivation: "model_read_line_classification",
 };
 
+/** The backend's derivation sentence, byte for byte.
+ *
+ * It changed with ADR-0014 and the *reason* it is pinned here did not: this
+ * screen renders a disclaimer the backend wrote, and a paraphrase of a
+ * disclaimer is a weaker disclaimer. What it says changed because what is
+ * true changed - the build no longer promises "no semantic inference", it
+ * says a model reads the lines and can be wrong about one. */
 const HONESTY =
-  "Bu surum adaylari kalip eslesmesiyle cikarir; anlamsal cikarim yoktur, bu yuzden bir odadaki her firsat gorulmez.";
+  "Bu surum adaylari, odadan okunan satirlari bir dil modeline okutarak cikarir; model yanilabilir ve bir satiri yanlis siniflandirabilir, bu yuzden bir adayi kabul etmeden once alintiyi kendiniz okuyun.";
+
+/** What a scan costs, said before it is spent (ADR-0014 6). */
+const READING_COST =
+  "Bu tarama model cagrisi harcar: her tur en cok 60 satir tasir ve bir tarama en cok 8 tur harcayabilir. Tavan dolarsa kalan satirlar okunmaz ve gerekcesiyle listelenir; harcanan tur sayisi sonucun yaninda gosterilir.";
 
 /** The refusal half of the honesty block. Pinned here the way the
  * derivation sentence is: a paraphrase of a disclaimer is a weaker one. */
@@ -251,6 +262,7 @@ const POLLING =
 
 const BASE: WorkScanStatus = {
   honesty: HONESTY,
+  reading_cost: READING_COST,
   capability: {
     module_id: "work_scan",
     module_state: "available",
@@ -325,6 +337,7 @@ const WITH_SCAN: WorkScanStatus = {
           },
         ],
         lines_read: 50,
+        model_calls_used: 1,
       },
     ],
     failures: [
@@ -337,6 +350,8 @@ const WITH_SCAN: WorkScanStatus = {
     notes: [],
     candidate_count: 1,
     refusal_count: 1,
+    model_calls_used: 1,
+    max_model_calls: 8,
   },
 };
 
@@ -543,7 +558,7 @@ describe("Work scan: no polling", () => {
 });
 
 describe("Work scan: the honesty surface", () => {
-  it("shows the limit of the deterministic derivation before any scan runs", async () => {
+  it("shows what the derivation can get wrong before any scan runs", async () => {
     stub(BASE);
     render(<WorkScanPanel />);
     await ready();
@@ -552,6 +567,56 @@ describe("Work scan: the honesty surface", () => {
     expect(screen.getByTestId("workscan-honesty")).toHaveTextContent(HONESTY);
     expect(screen.getByTestId("workscan-polling")).toHaveTextContent(POLLING);
     expect(screen.getByText(/Hicbir istekte gonderilmeyen parametreler: n, wait/)).toBeInTheDocument();
+  });
+
+  it("no longer promises that nothing is inferred", async () => {
+    // ADR-0014. The screen used to promise that this build inferred nothing -
+    // as a heading and inside the backend's sentence - and that promise
+    // became false the day a model started reading the lines. A reader who
+    // still saw it would take a wrong candidate to be impossible rather than
+    // merely uncommon, so its absence is asserted as firmly as the new
+    // wording's presence.
+    //
+    // The retired phrase is assembled rather than written out, and that is
+    // not cosmetic: `test_model_lane_claims.py` scans this whole tree for
+    // stale claims as **text**, and a file that spelled the phrase would need
+    // an exemption from that scan. An exemption is how a tree-wide guard
+    // becomes a list of files somebody keeps adding to.
+    const RETIRED = ["anlamsal", "cikarim", "yoktur"].join(" ");
+
+    stub(BASE);
+    render(<WorkScanPanel />);
+    await ready();
+
+    expect(screen.queryByText(new RegExp(RETIRED, "i"))).not.toBeInTheDocument();
+    expect(screen.getByTestId("workscan-honesty").textContent).not.toContain(RETIRED);
+  });
+
+  it("states what a scan will cost before the button is pressed", async () => {
+    // A cost a person learns after the scan is a receipt, not a warning
+    // (ADR-0014 6). Both numbers are in the sentence, and the sentence is on
+    // the first read rather than beside a result.
+    stub(BASE);
+    render(<WorkScanPanel />);
+    await ready();
+
+    const cost = screen.getByTestId("workscan-reading-cost");
+    expect(cost).toHaveTextContent(READING_COST);
+    expect(cost.textContent).toContain("60");
+    expect(cost.textContent).toContain("8");
+  });
+
+  it("reports what the scan spent, with the ceiling it spent it against", async () => {
+    // The server's two numbers, rendered together. A spend with no
+    // denominator is not a spend report, and this screen must not compute
+    // either half for itself.
+    stub(WITH_SCAN);
+    render(<WorkScanPanel />);
+    await ready();
+
+    expect(screen.getByTestId("workscan-model-calls")).toHaveTextContent(
+      "Harcanan model cagrisi: 1/8.",
+    );
   });
 
   it("says the prohibited work shapes are pattern-matched, not understood", async () => {

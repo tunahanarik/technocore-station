@@ -127,14 +127,16 @@ def test_initialise_database_is_repeatable(tmp_path: Path) -> None:
 #: whatever the script directory happened to say.
 OLDER_RELEASE_REVISION = "0007"
 #: ``0009`` until Package H4 added ``0010`` - one additive column on
-#: ``agent_run`` - and ``0011`` after ADR-0013, which adds one table,
-#: ``model_call_ledger``. The upgrade path this file drives is unchanged in
+#: ``agent_run`` - then ``0011`` after ADR-0013, which adds one table,
+#: ``model_call_ledger``, and ``0012`` after ADR-0015, which adds one more,
+#: ``opencode_probe_ledger``. The upgrade path this file drives is unchanged in
 #: shape: a populated ``0007`` database still arrives at the head with its rows
 #: intact, and the head simply moved another revision further along. There is
-#: no backfill and none would be honest - a task whose model turns nobody
-#: recorded has no count to migrate, and inventing one would be a ceiling built
-#: out of a guess.
-CURRENT_MIGRATION_HEAD = "0011"
+#: no backfill at either step and none would be honest - a task whose model
+#: turns nobody recorded has no count to migrate, no installation written
+#: before ``0012`` ever ran a probe, and inventing either number would be a
+#: ceiling built out of a guess.
+CURRENT_MIGRATION_HEAD = "0012"
 
 
 def test_an_upgrade_from_an_older_release_keeps_the_rows_it_found(

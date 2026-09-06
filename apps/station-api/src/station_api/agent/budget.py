@@ -114,6 +114,43 @@ CEILING: Final[RunCeiling] = RunCeiling(
 )
 
 
+#: Most connection probes **one stored credential** may ever spend.
+#:
+#: The connection check is a metered ``chat/completions`` turn (ADR-0015): it
+#: is the only request that can prove the saved key authenticates, because it
+#: is the only one the provider refuses without it. That makes it a model call,
+#: and a model call that nothing counts is a way to spend past the ceiling next
+#: door - which is the hole ADR-0013 closed for the planning lane and would
+#: have been reopened here under a different button.
+#:
+#: It lives in this module and not beside the connection for ADR-0013 2's
+#: reason: this file **is** the place a limit is written, and a second limit
+#: kept next to the thing it bounds is a second place to look. This module
+#: imports nothing but the standard library, so depending on it from
+#: :mod:`station_api.opencode.service` adds no capability and closes no cycle.
+#:
+#: It is **not** a field of :data:`CEILING`. That value is one *run's* limits
+#: and is spent per task; this one is spent per credential and outlives every
+#: run. Folding them together would have made "the ceiling is per task" false
+#: for one of its fields.
+#:
+#: The unit is the one :data:`BUDGET_UNITS` already names - a model call - so
+#: no new unit is introduced and the refusal in ADR-0008 4 stands.
+#:
+#: The number is :attr:`RunCeiling.max_model_calls`'s, written out rather than
+#: derived from it: the two are the same size because the same reasoning
+#: applies (a handful of turns is enough for a question a person asks by hand),
+#: and a derivation would make lowering one silently lower the other.
+#:
+#: **The cost of this number is stated rather than hidden** (ADR-0013 3's
+#: rule): a credential whose eight probes are spent has no reset route, no
+#: method and no tool, and there will not be one - a reset is ``forget``
+#: returning under another name. What a person has instead is a different key,
+#: which is a different secret and a different question, and the count is keyed
+#: to the fingerprint so re-saving the *same* key is not an escape.
+MAX_CONNECTION_PROBES: Final[int] = 8
+
+
 @dataclass(frozen=True, slots=True)
 class RunUsage:
     """What a run has spent so far, in the units above and no others."""
@@ -212,6 +249,7 @@ def describe_ceiling(ceiling: RunCeiling | None = None) -> str:
 __all__ = [
     "BUDGET_UNITS",
     "CEILING",
+    "MAX_CONNECTION_PROBES",
     "MODEL_CALLS_EXHAUSTED",
     "REFUSED_UNITS",
     "REFUSED_UNITS_DETAIL",

@@ -212,6 +212,7 @@ STATE_WRITER_DIRS = (
     "agent",
     "proof",
     "planner",
+    "workreader",
     "workscan",
 )
 

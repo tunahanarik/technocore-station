@@ -80,6 +80,7 @@ from station_api.workscan.authority import (
     UNLISTED_NEVER_LISTED,
     AuthorityLevel,
 )
+from station_api.workscan.candidates import SignalId
 from station_api.workscan.client import RoomScanClient
 from station_api.workscan.discovery import (
     DENIED_ROOM_LINE,
@@ -114,6 +115,7 @@ from tests.security.workscan_fixtures import (
     MARKERS,
     ROOM,
     SECOND_ROOM,
+    StubReader,
     index_document,
     json_transport,
     message,
@@ -370,7 +372,14 @@ def test_a_poisoned_topic_never_reaches_the_planners_model_context() -> None:
         f"/r/{ROOM}": room_document(messages=[message(1, HELP_LINE)]),
     }
     transport, _ = routing_transport(documents)
-    service = WorkScanService(client=RoomScanClient(transport=transport))
+    # A stub reading, because this test is about the *topic* and a real one
+    # would make it about a model. The reading says "there is work on line 1",
+    # which is the strongest setting for this assertion: the candidate exists,
+    # so a topic that could reach one would have somewhere to be found.
+    service = WorkScanService(
+        client=RoomScanClient(transport=transport),
+        reader=StubReader(verdicts={1: SignalId.HELP_WANTED}),
+    )
     service.refresh_room_index()
     result = service.scan([ROOM], markers=MARKERS)
 

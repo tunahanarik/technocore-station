@@ -3,6 +3,7 @@
     GET  /api/opencode/status           the whole connection, read-only
     POST /api/opencode/credential       store the provider key
     POST /api/opencode/credential/forget  remove it
+    POST /api/opencode/check            probe the key: one metered call
     POST /api/opencode/catalog/refresh  fetch the public model catalog
     POST /api/opencode/model            choose a model, or be refused
 
@@ -19,11 +20,14 @@ What is deliberately absent
   no body at all and ``model`` takes an identifier that is resolved through
   the compile-time table. There is no code path from a request body to an
   outbound address.
-* **No verification badge.** ``status`` reports ``key_saved_unverified`` at
-  best, with the reasons attached (ADR-0005 4).
-* **No completion route.** Sending a metered request is the executor
-  package's, and adding a button for it here would have made "Station never
-  spends money on its own" a claim with a footnote.
+* **No badge from a read.** ``status`` contacts nobody and reports the
+  *stored* verdict with the date it was earned. A verified state exists since
+  ADR-0015, and ``POST /check`` is the only thing that can produce one.
+* **No completion route.** Composing a task's turn is the planner package's,
+  and a button for it here would have made "Station never spends money on its
+  own" a claim with a footnote. ``/check`` does spend, once, on a press, from
+  a body that carries nothing a caller wrote - which is the narrowest metered
+  surface that can answer the question the button asks.
 * **No fallback.** A model that cannot be addressed is a 400 naming the
   reason, never a quiet substitution.
 """
@@ -164,6 +168,9 @@ def _to_response(view: ConnectionView) -> OpenCodeStatusResponse:
             state=view.check.state.value,
             reasons=list(view.check.reasons),
             detail=view.check.detail,
+            checked_at=view.check.checked_at,
+            probes_used=view.check.probes_used,
+            probe_ceiling=view.check.probe_ceiling,
         ),
         selected_model=view.selected_model,
         auth_header_caveat=AUTH_HEADER_CAVEAT,
@@ -256,6 +263,51 @@ def forget_credential(request: Request, session: CurrentSession) -> Response:
             headers=_NO_STORE,
         ) from exc
     except CredentialEnvelopeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+            headers=_NO_STORE,
+        ) from exc
+    return _json(_to_response(view))
+
+
+@router.post("/check", response_model=OpenCodeStatusResponse)
+def check_connection(request: Request, session: CurrentSession) -> Response:
+    """Probe the stored credential. **The only metered route on this surface.**
+
+    ``POST`` and not ``GET``, for three reasons that all point the same way: it
+    spends money, so it must be a press rather than a navigation; it changes
+    stored state, so it belongs behind the CSRF, Origin and Sec-Fetch-Site
+    middleware every other write here sits behind; and a ``GET`` is the thing a
+    browser, a prefetcher or a reload repeats on its own.
+
+    Blocking, and therefore ``def``: it waits on a network round trip bounded
+    by the client's own 120-second read timeout.
+
+    Takes no body. There is no prompt, no model, no address and no ceiling
+    parameter: the model is the one already selected in the backend, the
+    address comes from the closed endpoint registry, and the sentence sent is a
+    compile-time constant. There is no path from anything a caller can type to
+    what this request contains.
+
+    A spent ceiling is **not** an error here. It comes back as a 200 carrying
+    the status document, whose ``check.reasons`` already names the ceiling and
+    whose ``check.probes_used`` says where the caller stands - the same call
+    ``refresh_catalog`` makes about a failed fetch, and for the same reason:
+    "this connection has no probes left" is a state of the connection, not a
+    malformed request.
+    """
+    del session
+    service = _service(request)
+    try:
+        view = service.probe_connection()
+    except ModelNotSelectableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+            headers=_NO_STORE,
+        ) from exc
+    except OpenCodeConfigurationError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
