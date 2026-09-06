@@ -13,9 +13,17 @@ bir kaza değil, kayıtlı bir karardır.
 Kılavuzun bilerek **söylemediği** şeyler vardır. Örneğin size "Technocore'a
 mesaj gönderebilirsiniz" demez: gönderim yolu koddadır, ama bu depoda hiçbir
 gerçek yazma **hiç** yapılmamıştır ve kapı altı koşulun **hepsini** ister.
-Aynı sebeple "bir agent'a görev yaptırabilirsiniz", "OpenCode ile model
-çalıştırabilirsiniz", "indirin ve kurun" veya "kaldığınız yerden devam
-edersiniz" de demez. Neyin neden söylenmediği ilgili bölümlerde yazılıdır.
+Aynı sebeple "bir agent'a görev yaptırabilirsiniz", "indirin ve kurun" veya
+"kaldığınız yerden devam edersiniz" de demez. Neyin neden söylenmediği ilgili
+bölümlerde yazılıdır.
+
+Bu listede bir madde daha vardı ve **artık orada değil.** Kılavuz eskiden
+"OpenCode ile model çalıştırabilirsiniz" demezdi, çünkü model yolu kapalıydı.
+ADR-0012 o yolu ölçerek açtı. Bugünkü doğru cümle "model çalıştırırsınız"
+değil, **"model bir plan önerir"**dir: model çağrısı gerçekten yapılır,
+gerçekten **para harcar**, ve ürettiği şey bir sonuç değil, bir kişinin
+onaylayacağı bir plandır. Ayrıntısı §5.3'tedir ve maliyet orada, düğmeyi
+anlatan cümlenin yanındadır.
 
 ---
 
@@ -263,7 +271,35 @@ kendiliğinden yenilenmez.
 
 Seçtiğiniz açık odalar **bir kez** okunur ve okunanlardan aday iş çıkarılır.
 Akış: "Oda listesini oku" → listeden oda seç → "Secili odalari tara" →
-istersen "Secili adayi yerel gorev olarak ac".
+istersen "Secili adayi yerel gorev olarak ac". Seçimi ayrıca servisin kendi
+**keşif günlüğünden** de yapabilirsiniz; ikisi de aynı taramaya girdi olur.
+
+**Neyi tarayacağınızı sabit bir liste değil, siz seçersiniz.** Oda listesi
+canlı okunur ve okunduğunda üstüne dört şey yazılır: servisin bildirdiği
+**toplam**, burada **tutulan** sayı, listenin **kırpılıp kırpılmadığı** ve
+okunan belgenin **özeti**. Bu dört alan belgenin künyesidir; hiçbir yerde
+"hepsi bu" denmez, çünkü çoğu zaman değildir. Altında üç şey ayrı ayrı
+durur: listenin **okunduğu an**, sunucunun kendi saniye beyanı, ve o beyanın
+**nereden okunduğu**. Station "taze"/"bayat" diye bir hüküm vermez, çünkü
+öyle bir eşiği uydurması gerekirdi.
+
+**Her odanın iki yarısı ayrı kutulardadır ve bu bilinçlidir.** Oda **adı**
+ve **başlığı** bir yabancının yazdığı metinlerdir; uyarı çerçeveli kendi
+kutularında, biçimlendirilmemiş metin olarak dururlar — bağlantı yok, markup
+yok — ve üstlerinde bunu kimin yazdığı yazar. Servisin **kendi ölçümleri**
+başka bir kutudadır. İkisinin tek satırda birleşmemesi, "bir yabancının
+cümlesi" ile "servisin sayısı" arasındaki farkı okurken hatırlamak zorunda
+kalmamanız içindir.
+
+**Keşif günlüğü** servisin kendi kaydıdır: her yeni kamu odası için bir
+satır. Onu okumak için **önce resmî kaynak denetimini geçmeniz gerekir**
+(§4.1'deki `manifest_current`), çünkü keşif günlüğü de bir odadır ve
+doğrulanmamış bir oda-sınıfı konvansiyonuyla adlandırılmaz. Satır biçimi
+yayımlanmadığı için Station bir ayrıştırıcı **uydurmaz**: tamamı geçerli bir
+oda adı olan satırlar seçilebilir olur, diğerleri **geldiği gibi**,
+seçilemez hâlde ve nedeni yanında gösterilir. Okuma bir imleçle ilerler ve
+imleci **siz** taşırsınız; hatırlanan bir imleç, birinin zamanlayacağı bir
+döngünün ilk yarısı olurdu.
 
 Her aday **sekiz öğeyle** gösterilir: birebir alıntı ve kaynağı, kime
 faydası var, teslimat, başarı koşulu ve nasıl test edileceği, araç/veri
@@ -306,6 +342,19 @@ Bilmeniz gerekenler:
 - Dış servis kayıtları için **hiçbir adapter yazılmadı ve hiçbir istek
   gönderilmedi**; kaydın doğrulanan ve doğrulanamayan sütunları yan yana
   gösterilir.
+- **`lobby` ve `meta` taranmaz.** İkisi de buluşma noktasıdır ve Station bu
+  iki odayı okumak için **de** adlandırmaz; ret, listeye değil **ada**
+  bağlıdır ve türü düzeyinde durur — o adla bir tarama hedefi kurulamaz.
+  Oda listesinde görünürlerse seçebilirsiniz, ama tarama onları adıyla
+  reddeder ve reddi "Okunamayan odalar" altında yazar. Keşif günlüğünde ise
+  hiç seçilebilir olmazlar ve satırlarının **metni de** gösterilmez: bir adı,
+  onu ekrandan uzak tutan denetimin içinden geçirerek ekrana getirmek
+  istenmedi.
+- **Boş bir liste ile okunamayan bir okuma aynı şey değildir.** Okunamayan
+  bir oda listesi veya günlük bir **rettir**; hiçbir zaman "oda yok" ya da
+  "yeni oda açılmadı" diye gösterilmez. Aynı şekilde okunamayan bir oda,
+  taramada adıyla sayılır — boş bir aday listesi, kimsenin ulaşamadığı bir
+  odanın yerine geçmez.
 
 ### 5.3 Gorevler
 
@@ -347,6 +396,30 @@ koyduğu tavandır.** Sayılan şey Station'ın kendi yaptığı istek sayısıd
 
 Agent'ın tavanı okuyan veya yazan bir aracı yoktur.
 
+**Planı elle yazmak zorunda değilsiniz: modelden isteyebilirsiniz — ve bu
+gerçek para harcar.** "Modelden plan oner (calistirmaz)" düğmesi, Ayarlar'da
+kaydettiğiniz anahtarla **ölçülü (metered) bir uca** giden gerçek bir istek
+yapar (ADR-0012 §0 o ucu ölçerken böyle kaydeder). Bir istek bir tur harcar,
+tur isteğin içinde biter — zamanlayıcı, arka plan görevi ve otomatik ikinci
+tur yoktur — ve harcanan tur sayısı tavanıyla birlikte ekranda durur.
+Sağlayıcının bildirdiği kullanım ile maliyet **olduğu gibi** gösterilir ve
+"bu bizim ölçümümüz değil" diye etiketlenir.
+
+İki şeyi düğmeye basmadan bilin. **Kaybolan bir yanıt da harcanmış olabilir:**
+istek çıkıp cevabı gelmediyse ürün bunu ayrı bir sonuç olarak söyler ve
+**kendiliğinden yeniden denemez**, çünkü yeniden deneme "belki ödendi"yi
+"kesin ödendi"ye çevirir. Ve **hiçbir sonuç "çalıştı" değildir:** bir turun
+en iyi bitişi, dört onayı bekleyen kaydedilmiş bir plandır.
+
+Turu harcamadan görebilecekleriniz de vardır. Anahtar kaydedilmemişse ya da
+model seçilmemişse düğme size eksiği **adıyla** söyler ve **hiçbir istek
+kurulmaz**. Aynısı, araç çağrısı biçimi ölçülmemiş bir protokol ailesinden
+model seçtiğinizde de olur: model **adıyla** reddedilir ve okunmamış bir
+sözleşmeye istek gönderilmez.
+
+**Oturumu unutmak** bellekteki konuşmayı düşürür; kaydedilmiş planlar,
+çalışma alanı ve kanıtlar olduğu gibi kalır.
+
 **Çalışma alanı** `<veri dizini>/workspace/v1/<görev kimliği>/` altındadır ve
 dört katman korur: dosya adı süzülmez, **yeniden kurulur**; her okuma ve her
 yazımda yol çözülüp köke kapsanır; dosyadan köke kadar her bileşende symlink
@@ -376,9 +449,18 @@ arşivinizi bu ürünün dışında bir kez siz açarsınız.
   şey yok" diyerek değil, çıktıyı kapalı bir registry'den geçirerek.
 - **Başarı ölçütü artık koşulabiliyor.** Planınız kabul koşulu taşıyorsa
   çalışma sonrası **gerçekten değerlendirilir** ve `test_result`
-  `passed`/`failed` üretir. `not_implemented` yalnız **koşulsuz** bir plan
-  için kalır, ve gerekçesini söyler. Koşullar planın özetinin **içindedir**:
-  onaydan sonra bir koşulu düzenlemek planı geçersiz kılar.
+  `passed`/`failed` üretir. Koşullar kapalı bir kayıttan seçilir — beş tane
+  vardır ve serbest metin bir koşul olarak **koşulmaz** — ve hüküm her
+  okumada çalışma alanının o anki baytları üzerinde **yeniden** verilir, yani
+  dünkü "geçti" bugüne taşınmaz. `not_implemented` yalnız **koşulsuz** bir
+  plan için kalır, ve gerekçesini söyler: söz verdiği her dosyayı üretmiş bir
+  plan bile, koşul yazmadıysa "uygulanmadı" alır. Koşullar planın özetinin
+  **içindedir**: onaydan sonra bir koşulu düzenlemek planı geçersiz kılar.
+- **Kabul koşulunu model yazmaz, siz yazarsınız.** Modelin önerdiği bir plan
+  başarı ölçütü olarak yalnız bir **cümle** kaydeder ve o cümle koşulmaz;
+  yani model önerisiyle kurulan bir çalışma, koşulları bir kişi eklemedikçe
+  `not_implemented` raporlar ve görev yayımın eşiğinde durur. Bu bilerek
+  böyledir: kendi ölçütünü de yazan bir öneren, ölçülmemiş demektir.
 - **`ready_to_publish` erişilebilir, ama istenebilir değil.** Yayın
   hazırlığını değerlendiren bir yol vardır; fakat o isteğin gövdesinde
   **hedef alanı yoktur**, yani hiçbir istek bu durumu **adıyla
@@ -551,6 +633,36 @@ paketin özeti değişir ve eski onay artık eşleşmez. Paketi yeniden okumak
 bekleyen onayı **düşürür**, çünkü onay tam da yeniden okumanın değiştirmiş
 olabileceği özete bağlıdır. Paket bu makinede hiçbir yola yazılmaz.
 
+**Paket artık işin kendisini de taşır, yalnız envanterini değil.** Eskiden
+indirdiğiniz belge dosyalarınızın adını, boyutunu ve özetini taşıyordu;
+gövdeler diskte kalıyordu. Bugün gövdeler pakete **birebir** girer — çünkü
+girmeleri gerekir: yanındaki özet o baytları tanımlar, ve süzülmüş,
+maskelenmiş veya kırpılmış bir gövde artık o dosya değildir. Aynı sebeple
+**tek bir dosyayı kendisi olarak da** indirebilirsiniz; aynı tek kullanımlık
+onaydan geçer ve düz metin olarak, ek olarak teslim edilir — tarayıcıda
+çalıştırılabilecek bir biçimde değil. **Bir onay bir teslim eder:** paketi
+indirmek ile tek bir dosyayı indirmek aynı onayı harcayan iki seçenektir.
+
+Gövdeler çalışma alanının kendi savunmalarından okunur (ad izin listesi,
+bağlantı/junction denetimi, köke kapsama, tavanlar) ve her gövdenin özeti
+**yeniden türetilip** listedeki özetle karşılaştırılır. Bir gövde pakete
+alınamıyorsa bu **o girdinin yanında, gerekçesiyle** yazılır ve dosya adıyla,
+boyutuyla ve özetiyle listede **kalır**: dışlama dosyayı değil, yalnız
+içeriğin taşınmasını engeller. İki gerekçe özellikle kayda değer:
+
+- **Gizli değer taraması bir rettir.** Paket bu üründe başkasına verilmek
+  üzere yapılmış tek belgedir, bu yüzden bir kural eşleşmesinde gövde
+  redakte edilmez, **dışarıda bırakılır**; eşleşen değer hiçbir yere
+  yazılmaz, yalnız kuralın adı görünür.
+- **Dil kaydı bir rapordur, ret değil.** Metninizde bu ürünün kendi
+  cümlelerinde kullanmadığı bir ifade geçiyorsa gövde **değiştirilmeden**
+  aktarılır ve yanına bunun geçtiği not düşülür. Maskelemek özetin altındaki
+  baytları değiştirirdi; ve bir veri metni size kendi kanıtınızı
+  reddettiremez.
+
+Bir dışlama bütün paketi düşürmez, yalnız o girdiyi düşürür — tek bir
+okunamayan dosyanın sizi geri kalan her şeyin kanıtından etmesi istenmedi.
+
 **Yapmadıkları:** sayfalama yoktur (kayıtlar budanmadığı için uzun ömürlü
 bir kurulum uzun bir liste render eder); DPAPI yoksa kanıt katmanı çalışmaz
 ve gönderim `evidence_recorded=false` raporlar; seviye 4 tasarım gereği
@@ -590,9 +702,15 @@ Ama panelin kendisi de sınırlarını söyler ve bu kılavuz onları tekrarlar:
   gelmez.
 - **Model kataloğu bayat olabilir** ve panel bunu söyler.
 
-**Kısacası (H4 öncesi cümle, tarihsel):** bu sürümde OpenCode ile model çalıştıramazsınız. Model lane'i
-kapalıdır; bu panel bir bağlantı kaydı ve bir katalogdur, bir çalıştırma
-yüzeyi değil.
+**Kısacası: bu panel bir bağlantı kaydı ve bir katalogdur.** Model çağrısı bu
+sayfada yapılmaz; anahtarınızı burada kaydeder, modelinizi burada seçersiniz
+ve harcama **Gorevler** bölümünde, sizin bastığınız düğmeyle olur (§5.3).
+
+> Bu paragraf eskiden şöyle bitiyordu: *"bu sürümde OpenCode ile model
+> çalıştıramazsınız. Model lane'i kapalıdır."* O cümle yazıldığı gün doğruydu
+> ve ADR-0012 ile yanlış oldu. Burada kaydı tutuluyor, çünkü bu kılavuzun
+> okuru bir cümlenin ne zaman değiştiğini görebilmelidir; ama artık geçerli
+> olan yukarıdaki cümledir.
 
 **Sorun bildirirken** hata kutusundaki "Tani bilgisini kopyala" çıktısını
 kullanın. O çıktı bilerek redaktedir: yalnızca hata kodu, HTTP durumu, hata
@@ -655,6 +773,8 @@ Ayrıca:
 - **Model plan önerir, çalıştırmaz.** Model yolu ADR-0012 ile ölçülerek
   açıldı; modelin önerdiği plan bir kişinin yazdığı planla aynı dört onaydan
   geçer, model kendi planını onaylayamaz ve bir çalışmayı başlatamaz.
+  **Bu, ürünün sizden para harcamanızı isteyen tek yeridir** — bir model turu
+  ölçülü bir uca giden gerçek bir istektir ve düğme bunu söyler (§5.3).
 - **Yayımlanmış bir artefakt yoktur** ve kaldırma akışı hiç denenmedi.
 - **HTTP isteği iptali yoktur.** Uçuştaki bir istek iptal edilemez;
   uygulama genelinde bir boşluktur ve en görünür hâli iş taramasıdır. Bir

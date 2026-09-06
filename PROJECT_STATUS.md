@@ -3035,3 +3035,131 @@ dosyanın (`test_module_registry.py`, `test_task_evidence.py`,
 `test_task_states.py` ve artık `test_language_scope.py`) hepsi ağacı hem
 paketler hem gevşek modüller için yürüyen bir muhafız taşıyor. Açık kalan
 risk yok; insan güvenlik incelemesi ADR-0001 §5'teki hâliyle duruyor.
+
+---
+
+## Kabul listesi ve kılavuz, H4'ün beş yeteneğine yetiştirildi (6 Eylül 2026)
+
+Yalnız belge turu. **Hiçbir ürün kodu ve hiçbir test değişmedi**; iki markdown
+dosyası ve bu bölüm değişti. Kullanıcının bu tur için verdiği talimat şuydu:
+*"Kullanım kılavuzunu, kabul listesini ve proje durumunu gerçek yeteneklerle
+eşleştir."*
+
+### Boşluk
+
+`docs/kullanim-kilavuzu.md` H4'ten sonra iki turda düzeltilmişti;
+`docs/kullanici-kabul-listesi.md` ise **hiç** güncellenmemişti — `af2482b`'de
+tek satırı (G3) değişti ve o kadar. Yani ürün beş yeni yetenek kazanmışken,
+kullanıcıdan bunları kabul etmesini isteyen belgede tek bir madde yoktu.
+
+### Kod okunarak doğrulananlar (iddia → bulgu)
+
+Beş iddianın hepsi belgeye geçmeden önce koda karşı denetlendi. **Dördü
+doğrulandı, biri daraltıldı, biri de daha keskin çıktı:**
+
+| İddia | Bulgu |
+|---|---|
+| Model plan **önerir**, kapalı registry'den geçer, dört onaya girer | Doğrulandı (`planner/service.py`, `opencode/planner.py`) |
+| Kabul koşulları gerçek bir `test_result` üretir, `plan_sha256`'nın içindedir | Doğrulandı (`agent/acceptance.py`, `_plan_digest` `v: 2`) — **ve daha keskin:** `_condition_sentence` yalnız bir **cümle** yazar, yani **model önerisiyle kurulan bir plan koşulsuzdur** ve bir kişi koşul eklemedikçe `not_implemented` raporlar |
+| Gövde teslimi çalışma alanının savunmalarından geçer, per-girdi ret | Doğrulandı (`proof/artifacts.py`) |
+| `/rooms` **ve** `/r/events` arayüzden okunur | Doğrulandı (`workscan/discovery.py`, `routes/workscan.py`) — **ama `workscan/targets.py`'nin modül düzyazısı hâlâ "`/r/events` … kapsam dışı" diyor.** Ürün metni değil, geliştirici düzyazısı; bu turda **dokunulmadı** (kod değişmez kuralı) ve açık not olarak burada duruyor |
+| `ready_to_publish` erişilebilir ama istenemez | Doğrulandı (`routes/agent.py::derive_publish_readiness`, `TaskPublishReadinessRequest`) |
+
+Ayrıca ölçülemeyen bir sayı **yazılmadı**: incelemenin verdiği canlı oda
+sayısı bu depoda hiçbir belgede yok, o yüzden kabul listesi sayı yerine
+**özelliği** ister (künye satırının dört alanı: toplam, tutulan, kırpıldı mı,
+özet).
+
+### Kabul listesine eklenenler
+
+- **E6–E10** (Kanitlar): gövdesi pakete alınan dosya sayısının nereden
+  türediği, tek dosya teslimi ve yanıt başlığındaki özet, tek onayın iki
+  seçenekten yalnız birini karşıladığı, gizli değer taramasının **ret**,
+  dil kaydının **rapor** olduğu.
+- **H4** (9 madde): oda listesinin künyesi, bayatlık beyanı, yabancı yazımı
+  iki alanın ayrı kutusu, on odalık seçim sınırı, keşif günlüğünün manifest
+  ön koşulu, okunamayan satırın ham gösterimi, boş günlük ile okunamayan
+  günlüğün ayrımı, `lobby`/`meta` reddi, ve kendiliğinden yenileme yokluğu.
+- **H5** (10 madde): **her maddenin başında bir tur harcayıp harcamadığı
+  yazılı.** Yedisi hiçbir şey harcamıyor; harcayan tek madde adıyla
+  işaretli. Bölümün başı ölçülü uç ile kaybolan yanıtın da harcanmış
+  olabileceğini söylüyor.
+- **H6** (8 madde): koşulsuz plan → "uygulanmadı", koşullu plan → "geçti",
+  sağlanmayan koşul → "kaldı", serbest metin koşul alanının **olmadığı**,
+  yol benzeri adın plan kaydını reddettirdiği, ve yayın hazırlığının
+  istenmeyip **türetildiği**.
+- **"Nasıl kullanılır"** bloğu düzeltildi: eski "bu listede hiçbir gerçek
+  harcama yoktur" cümlesi H5 ile **yanlış olurdu**; yerine harcamanın nerede
+  olduğunu adıyla söyleyen bir paragraf kondu.
+
+### "İstenmeyecekler"e eklenenler — ve nedenleri
+
+ADR-0011 §6'nın kuralı: liste yalnız kullanıcının **gerçekten
+doğrulayabileceği** şeyi ister. Beş yetenekten dört parça bu testi geçemedi:
+
+1. **"Modelin iyi bir plan önerdiğini doğrulayın"** — ölçülebilir değil ve
+   böyle bir alan yok.
+2. **"Modele kayıtlı olmayan bir araç adı önerdirin"** — ret yolu gerçek,
+   ama kullanıcı onu **tetikleyemez**. Yerine H5-4: kullanıcının kendi
+   seçimiyle üretebildiği, hiçbir istek göndermeyen bir ret.
+3. **"Onaylı bir planın koşulunu düzenleyin"** — bu üründe plan düzenleme
+   **yok**; ekranda ulaşılamayan bir kapı.
+4. **"Bir dosyayı tavanın üstüne çıkarın"** — bir araç çağrısı en çok
+   20 000 karakter yazar, tekil dosya tavanı 512 KiB, çalışma alanı en çok
+   64 dosya: **bu ürünle üretilen bir çalışma alanı tavanı geçemez.** Yerine
+   E9, aynı per-girdi ret mekanizmasını kullanıcının gerçekten
+   üretebileceği bir yoldan (64 karakterlik onaltılık dizi) soruyor.
+
+### Kılavuzda düzeltilenler
+
+- **Giriş paragrafı** hâlâ "OpenCode ile model çalıştırabilirsiniz" cümlesini
+  *söylemediği şeyler* arasında sayıyordu; ADR-0012'den sonra bu bayattı.
+  Çıkarıldı ve yerine neyin değiştiği yazıldı.
+- **§5.2** oda listesinin künyesini, iki kutulu yabancı-yazımı ayrımını ve
+  **keşif günlüğünü hiç anlatmıyordu**; üçü de eklendi. `lobby`/`meta` reddi
+  ve "okunamayan okuma bir rettir" kuralı "yapmadıkları"na girdi.
+- **§5.3** model turunun **para harcadığını hiçbir yerde söylemiyordu.**
+  Eklendi: ölçülü uç, kaybolan yanıtın da harcanmış olabileceği, ve turu
+  harcamadan görülebilen retler. Ayrıca modelin kendi kabul koşulunu
+  yazmadığı eklendi.
+- **§5.8** paketi hâlâ "dosyalar, özetleri ve eksikler" diye anlatıyordu;
+  gövdelerin birebir taşındığı, tek dosya teslimi, ve iki dışlama
+  gerekçesinin (ret ile rapor) farkı yazıldı.
+- **§5.9**'un "(H4 öncesi cümle, tarihsel)" ile başlayan kapanışı, bugün
+  geçerli olanı söyleyen bir cümleyle değiştirildi; eski cümle alıntı olarak,
+  ne zaman yanlış olduğu yazılarak bırakıldı.
+- **§7**'ye model turunun ürünün **para harcamanızı isteyen tek yeri** olduğu
+  eklendi.
+
+### Koşulan kapı
+
+`uv run --directory apps/station-api pytest ../../tests -p no:warnings` iki
+kez koşuldu (belge düzenlemelerinden önce ve sonra): **2653 passed in
+186.19s** ve **2653 passed in 180.36s**. Önceki turla aynı sayı; bu tur test
+eklemedi, silmedi ve zayıflatmadı. `tests/security/` altında hiçbir dosyaya
+dokunulmadı. Ürün kodu değişmediği için lint, type-check ve build yeniden
+koşulmadı.
+
+Kayda değer bir gözlem: `tests/security/` altında **bu iki markdown dosyasını
+okuyan bir belge muhafızı yok.** `docs/security-invariants.md`'yi okuyan
+`test_security_invariants_doc.py` ve `docs/task-modules.md`'ye bakan bir
+iddia var; kılavuz ile kabul listesi hiçbir testin kapsamında değil. Yani bu
+iki dosyanın doğruluğunu bugün **yalnız insan incelemesi** tutuyor.
+
+### Açık kalan iki not
+
+- **`workscan/targets.py`'nin modül düzyazısı `/r/events`'i "kapsam dışı"
+  diye anlatıyor** ve `workscan/discovery.py` onu okuyor. Bu bir ürün metni
+  değil, geliştirici düzyazısıdır ve kullanıcıya çıkmaz; bu tur belge turu
+  olduğu için **düzeltilmedi**, kaydı buraya alındı.
+- **`ModelPlannerService.forget` model turu sayacını sıfırlıyor** —
+  `_sessions.pop` oturumu düşürüyor ve `session_state` eksik oturum için
+  `model_calls_used = 0` döndürüyor
+  (`test_model_planner.py::test_forgetting_a_session_does_not_forget_the_spend`
+  bunu zaten iddia ediyor). Buna karşılık arayüzdeki cümle "tavan
+  sifirlanmaz" diyor ve `routes/planner.py::forget_session`'ın düzyazısı da
+  bunu "tavanın etrafından dolaşmanın yolu değil" diye anlatıyor. **İkisi
+  aynı anda doğru olamaz.** Kabul listesinin H5-10 maddesi bu yüzden yalnız
+  tartışmasız olanı — kayıtlı planların, çalışma alanının ve kanıtların
+  yerinde kaldığını — soruyor; kılavuz da tavan hakkında bir şey söylemiyor.
+  Ayrı bir tur konusudur ve **kod değişikliği ister**.
