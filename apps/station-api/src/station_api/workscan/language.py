@@ -3,11 +3,27 @@
 Package E built a forbidden-phrase registry for the evidence layer and proved
 it two ways: at runtime, on the sentences the product writes, and statically,
 over **every string literal in the package**. The static half is why this
-module exists at all. That scan is scoped to ``station_api/evidence``, so a
-new package's wording is outside it, and a rule that does not cover the text
-being written is not a rule (ADR-0007 10).
+module exists at all: a rule that does not cover the text being written is
+not a rule (ADR-0007 10).
 
 So H1 gets the same two halves, over its own tree, with its own additions.
+
+Package scope is no longer what decides coverage
+-------------------------------------------------
+This paragraph used to say that Package E's scan was scoped to
+``station_api/evidence``, so a new package's wording was outside it - a true
+sentence with nothing behind it, and the twelfth instance of this
+repository's signature defect. It was measured: the same three phrases that
+turn one package's scan red sat in ``opencode/service.py`` with the whole
+security suite green.
+
+What covers a package now is not that somebody wrote it a test file.
+``tests/security/test_language_scope.py`` walks ``station_api`` and applies
+the **union** registry to every string literal in it - eighteen packages,
+fourteen loose modules, every route - and the four registries are the only
+files outside. The per-package scan below still runs and still applies this
+package's own registry; it is no longer the only thing between a new
+package's wording and a user.
 
 Reused rather than reimplemented
 --------------------------------

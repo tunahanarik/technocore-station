@@ -1,13 +1,21 @@
 """The claims the agent runtime may not make, and the ones it makes instead.
 
 Package E built this control for the evidence layer and H1 extended it to the
-work scan (ADR-0007 10). Both scans are scoped to their own directory, so a
-new package's wording is covered by nothing at all until it brings its own -
-and a rule that does not cover the text being written is not a rule. ADR-0008
-9 asks H2 for the same two halves over its own tree: a runtime guard on the
-sentences this package writes, and a static scan over **every string literal
-in the package**, plus a mutation control that proves the guard is
-load-bearing.
+work scan (ADR-0007 10) - a rule that does not cover the text being written
+is not a rule. ADR-0008 9 asks H2 for the same two halves over its own tree:
+a runtime guard on the sentences this package writes, and a static scan over
+**every string literal in the package**, plus a mutation control that proves
+the guard is load-bearing.
+
+This docstring used to add that both earlier scans were scoped to their own
+directory, so a new package's wording was covered by nothing at all until it
+brought its own. That was true, and stating it in prose while nothing checked
+it is the shape this repository has now closed twelve times. It no longer
+holds: ``tests/security/test_language_scope.py`` walks the whole of
+``station_api`` and applies the union of all four registries to every string
+literal in it, so a package that brings no registry of its own is covered by
+the widest one rather than by nothing. What a package still gets by bringing
+its own is the *runtime* half and its own additions.
 
 Reused rather than reimplemented
 --------------------------------

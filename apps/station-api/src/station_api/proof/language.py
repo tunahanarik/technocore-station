@@ -1,10 +1,17 @@
 """The claims the proof workspace may not make, and the ones it makes instead.
 
 Package E built this control for the evidence layer, H1 extended it to the
-work scan and H2 to the agent runtime. Every one of those scans is scoped to
-its own directory, so a new package's wording is covered by **nothing at all**
-until it brings its own - and a rule that does not cover the text being
-written is not a rule (ADR-0007 10, ADR-0008 9, ADR-0009 5).
+work scan and H2 to the agent runtime - a rule that does not cover the text
+being written is not a rule (ADR-0007 10, ADR-0008 9, ADR-0009 5).
+
+Each of those scans is scoped to its own directory, and for three packages
+this docstring said what followed from that: a new package's wording was
+covered by **nothing at all** until it brought its own. The sentence was
+right and nothing tested it, which is how it survived three packages. It is
+now false by construction - ``tests/security/test_language_scope.py`` walks
+``station_api`` and applies the registry this module composes, all
+twenty-seven phrases, to every string literal under it. The registry below is
+therefore the one the whole tree is measured against, not only this package.
 
 Reused rather than reimplemented
 --------------------------------

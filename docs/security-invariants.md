@@ -878,37 +878,98 @@ tablo, farklı yaşam döngüsü). O pakette ikinci bir `.state` yazısı belirs
 cümle hâlâ paketi tarif ediyormuş gibi okunurdu; artık sayılıyor — bu,
 `test_task_evidence.py`'nin tavanı **tam üç** import'çıya sabitlemesinin aynısı.
 
-### Aynı kusurun **on ikinci** örneği: yasak ifade denetiminin kapsamı (açık)
+### Aynı kusurun **on ikinci** örneği: yasak ifade denetiminin kapsamı (kapatıldı)
 
 On birincisi kapatılırken bütün `tests/security` ağacı bu kalıp için tarandı
-(yöntem `PROJECT_STATUS.md`'de) ve bir örnek daha bulundu. Sessizce
-düzeltilmedi ve sessizce geçilmedi: **adı konuldu ve ölçüldü**.
+(yöntem `PROJECT_STATUS.md`'de) ve bir örnek daha bulundu, **açık** olarak
+kayda geçti. Bu tur onu kapatıyor; aşağıdaki ölçümler önce **bağımsız olarak
+tekrarlandı**, sonra düzeltildi.
 
 Yasak ifade kuralını (`FORBIDDEN_PHRASES`) uygulayan testler paket paket
-yazılmıştır; kapsam, beş test dosyasına dağılmış elle tutulan **altı paket
-adıdır** — `evidence`, `workscan`, `agent`, `proof`, `routes` (dört
-`*_language.py`) ve `planner` (`test_planner_boundary.py`). Bu altılığın
-tamlığını ağaca karşı denetleyen **hiçbir muhafız yoktur**.
+yazılmıştı; kapsam, beş test dosyasına dağılmış elle tutulan **altı paket
+adıydı** — `evidence`, `workscan`, `agent`, `proof` (dört `*_language.py`),
+`planner` (`test_planner_boundary.py`) ve `routes`'un **on üç dosyasından
+dördü**. Bu altılığın tamlığını ağaca karşı denetleyen hiçbir muhafız yoktu.
 
-Dosyaların kendisi bunu düzyazıda söylüyor — *"Each scan is scoped to its own
-directory, so a new package's wording is covered by nothing at all until it
-brings its own"* — ki bu onuncu örneğin birebir şeklidir: kusur bir yoruma
-yazılmış, muhafıza değil.
+Dosyaların kendisi bunu düzyazıda söylüyordu — *"Each scan is scoped to its
+own directory, so a new package's wording is covered by nothing at all until
+it brings its own"* — ki bu onuncu örneğin birebir şeklidir: kusur bir yoruma
+yazılmış, muhafıza değil. **O düzyazı bu turda düzeltildi**; üç
+`*_language.py` modülünün kapsam cümlesi artık ağaç genelinde koşan taramaya
+işaret ediyor.
 
-`station_api` altındaki on sekiz paketin **on dördü** kullanıcıya görünen
-Türkçe cümle üretiyor, yalnız altısı kapsanıyor. Kapsanmayanların en
-büyükleri `opencode` (53 cümle), `modules` (43), `compose` (33), `tasks` (26).
+| Ekim (yerinde, izlenen dosyaya) | Eski kural | Yeni kural |
+|---|---|---|
+| `planner/service.py`'ye üç yasak ifade | **1 kırmızı** | kırmızı |
+| `opencode/service.py`'ye **aynı** üç ifade | **2269 geçti, sıfır kırmızı** | kırmızı |
+| **On iki kapsanmayan pakete + `routes/opencode.py`'ye** aynı ifade, on üç dosya birden | **2269 geçti, sıfır kırmızı** | 15 ihlalin tamamı adıyla raporlanır |
 
-| Ekim | Sonuç |
-|---|---|
-| `planner/service.py`'ye iki yasak ifade | **1 kırmızı** (`test_planner_boundary.py::test_no_string_literal_in_the_planner_carries_a_forbidden_phrase`) |
-| `opencode/service.py`'ye **aynı** iki yasak ifade | **2269 geçti, sıfır kırmızı** |
+İkinci ve üçüncü satır belirleyicidir: ekim izlenen dosyalara **yerinde**
+yapıldı, `git status` yalnız `M` gösterdi, dosya listeleri değişmedi ve
+`tests/security` baştan sona yeşil kaldı — temiz temel çizgiyle bayt bayt
+aynı sayı. Kuralın kendisi hakkında sıfır kapsam.
 
-Aynı iki cümle, bir pakette kırmızı, komşusunda görünmez. Kapsamı belirleyen
-kuralın konusu değil, birinin o paket için ayrı bir test dosyası yazmış
-olmasıdır. Genişletmek ayrı bir iştir (ürün metinlerinde gerçek bulgu
-çıkarabilir) ve bu turun kapsamı SI-226'ydı; **açık** olarak kayda geçti.
+**Ne değişti.** Tarama birimi artık paket değil, `station_api` altındaki
+**her `.py` dosyası**: on sekiz paket, on dört gevşek modül, on üç rota
+dosyası — **136 dosya, 6857 string literal**; eski kural 45 dosya açıyordu.
+Uygulanan registry de en genişi: `proof.language`'ın birleştirdiği **yirmi
+yedi** ifade, paketin kendi dar listesi değil. Paket başına yazılmış beş test
+olduğu gibi duruyor; bu onların **altına** konan bir taban.
 
+**Muafiyet bir tane ve ölçülüyor.** Taramanın dışındaki tek şey dört
+registry'nin kendisidir, ve *ad* olarak değil **tam yol** olarak: `language.py`
+adını taşıyan herhangi bir dosyayı muaf etmek kendini genişleten bir
+muafiyettir. Her biri ayrıca registry olduğu ölçülerek muaftır — dosya var
+olmalı, `FORBIDDEN_PHRASES` tanımlamalı ve kayıtlı bir ifadeyi gerçekten
+yazmalıdır; registry olmaktan çıkan bir dosya muafiyetini aynı commit'te
+kaybeder.
+
+**"Kullanıcıya görünen Türkçe" tanımı ve iki yönlü ölçümü.** Her şeyi taramak,
+hiçbir şey söylemeyen bir pakette bedavaya yeşildir; bu yüzden her birim ayrıca
+Türkçe üretip üretmediğine göre **yürüyerek** sınıflandırılır. Bir dize sabiti,
+katlanmış biçiminde `TURKISH_MARKERS`'tan bir kelimeyi **tam kelime olarak**
+taşıyorsa Türkçe düzyazıdır. Liste kapalı sınıf sözcüklerden oluşur ve
+`her`, `once`, `var` bilerek **dışarıdadır**: üçü de hem Türkçe hem İngilizce
+kelimedir.
+
+* *Fazla gevşek değil*: kırk üç işaretin hiçbiri, bu dosyanın sahibi olmadığı
+  bir derlemde — `packages/technocore-conform/src`, 608 literal, **4755 kelime
+  belirteci** İngilizce — eşleşmiyor. Derlemin boyutu da iddia ediliyor, yoksa
+  taşınmış bir dizin testi kendi kanıtını silerek yeşile çevirirdi.
+* *Fazla dar değil*: ürünün kendi yayımladığı cümleler ölçüt. Dört dil
+  modülünün dışa verdiği sabitlerden **sekiz belirteçten uzun olan her biri**
+  yakalanmak zorunda ve yakalanıyor. Eşik ölçülmüş bir boşluğa oturuyor:
+  yakalanmayan en uzun sabit **yedi** belirteç (`NEUTRALISED_ALL`, cümle değil
+  köşeli bir işaret), yakalanan en kısası **on altı**.
+
+**Dışarıda kalan on bir birim**, muafiyet olarak değil — hepsi taranıyor —
+**ne yaptıkları yazılarak** kayıtlı: `conformance`, `security`, `__init__.py`,
+`__main__.py`, `config.py`, `dependencies.py`, `digests.py`, `downloads.py`,
+`launcher.py`, `logging_setup.py`, `strict_json.py`. Belirli bir olgu iddia
+eden üç gerekçe sayıyla sabitlendi, `compose`'un `nonce.py:_settle_once`'ta
+sabitlenmesiyle aynı biçimde: `conformance`'ın dili `routes/conformance.py`'de
+(o dosya taramanın içinde **ve** Türkçe taşıyor), `security` altı makine
+koduyla yanıtlar (altısı da hâlâ pakette ve hâlâ çıplak birer belirteç),
+`downloads.py`'nin tek Türkçe belirteci `DEFAULT_STEM = 'indirme'` **tek
+kelimedir** ve en kısa kayıtlı ifade iki kelimedir — bu aritmetik bozulursa
+gerekçe de bozulur.
+
+**Muhafız mutasyonla sürüldü**, onuncu ve on birinci örnektekiyle aynı biçimde:
+keşif, ağacı yürümek yerine elle tutulan listeleri okuyacak biçimde çevrildi.
+
+| Mutasyon | Ekili ihlal | Sonuç |
+|---|---|---|
+| Keşif ağacı yürüyor (asıl hâli) | `opencode` + `conformance`, yerinde | **2 kırmızı** |
+| `_scan_files`, `_units` ve `_turkish_speaking_units` listeleri okuyor | aynı ihlaller, yerinde | **2 geçti, sıfır kırmızı** — muhafız kör |
+| Yürüyüş geri alındı | aynı ihlaller, yerinde | **2 kırmızı** |
+
+**Genişletmenin ürün metninde bulduğu tek şey** `technocore/evidence_client.py`
+içindeki bir docstring'di: `_error_excerpt`, kuralı anlatırken kayıtlı bir
+ifadeyi tırnak içinde **yazıyordu**. Kullanıcıya çıkan bir aşırı iddia değil;
+İngilizce geliştirici düzyazısı. Yine de dışlanmadı — bir taramayı susturmak
+için eklenen istisna bu kusurun doğduğu yerdir — ifade **adlandırıldı**,
+yazılmadı; anlam korundu. Ürün cümlelerinde, f-string ve birleştirme yoluyla
+kurulan cümleler de dahil, **başka hiçbir ihlal yok**: bu ayrıca ölçüldü.
 
 ---
 
@@ -1113,6 +1174,7 @@ Neyin neden değiştiği [`model-planning.md`](model-planning.md) §0'da yazıl�
 | SI-341 | `test_result` **koşuldan doğar**, çıktı değiştiğinde **bayatlar**, ve koşul yoksa **hiç yazılmaz** | koşullar sağlandığında alan `verified=True` ve `ref_id` çalışmanın kimliğidir; sağlanmadığında `verified=False` ve **hangi koşul** olduğu yazar; koşulsuz planda alan **hiç kaydedilmez** ve kapı `test_result` diye bloklar; çalışma alanı koşucunun dışından değiştiğinde hem çalışmanın hükmü hem kanıt **doğrulanmamışa** düşer | `test_agent_acceptance.py::test_a_run_whose_conditions_hold_records_a_verified_test_result`, `::test_a_run_whose_conditions_do_not_hold_records_an_unverified_one`, `::test_a_plan_with_no_condition_still_reports_not_implemented`, `::test_the_verdict_follows_the_bytes_rather_than_the_moment_it_was_taken` | H4 |
 | SI-342 | `ready_to_publish` **erişilebilir oldu** ve SI-222 **korundu**: istenerek değil, **kanıttan türeyerek** | `TaskUserTransitionName` hâlâ `ready_to_publish` **taşımaz** ve `publish-readiness` gövdesinde **hedef alanı yoktur** (hedef adı taşıyan gövde 422); üç alan tek tek eklenir ve kapı ancak **üçü de** doğrulanmışken açılır, ikisiyle `evidence_incomplete`; eksikken ret alanları **adıyla** söyler; geçişi yine `TaskService.transition` yazar | `test_agent_acceptance.py::test_a_task_reaches_ready_to_publish_only_from_three_verified_fields`, `::test_the_state_is_still_derived_and_still_cannot_be_named`, `::test_the_publish_readiness_body_cannot_name_a_state`, `::test_the_publish_readiness_route_refuses_and_names_the_missing_fields`, `::test_the_publish_readiness_route_derives_the_state_when_the_evidence_is_there`, `test_agent_http.py::test_a_person_cannot_ask_for_the_runners_states_over_http` | H4 |
 | SI-343 | Model yolunun **kendi dili** de denetlenir ve sistem istemi bu build'in gerçeğini söyler | planner ağacındaki **her dize sabiti** yasak ifade taramasından geçer ve tarama boş değildir; sistem istemi "yürütülmez", "araç listesindeki" ve "insan" ifadelerini taşır ve Türkçe işaretli harf içermez | `test_planner_boundary.py::test_no_string_literal_in_the_planner_carries_a_forbidden_phrase`, `::test_the_language_scan_is_actually_scanning_something`, `::test_the_system_prompt_states_the_closed_capabilities` | H4 |
+| SI-344 | Yasak ifade kuralının **kapsamı elle tutulan bir paket listesi değildir**: `station_api` altındaki **her** `.py` dosyası taranır ve **birleşik** registry (yirmi yedi ifade) uygulanır | Kapsam, altı paket adı yerine ağacı **yürüyerek** bulunur — on sekiz paket, on dört gevşek modül, on üç rota dosyasının tamamı: **136 dosya, 6857 string literal** (eski kural 45 dosya açıyordu). Taramanın dışındaki tek dosya dört registry'nin kendisidir ve her biri **registry olduğu ölçülerek** muaftır: dosya var olmalı, `FORBIDDEN_PHRASES` tanımlamalı ve kayıtlı bir ifadeyi gerçekten yazmalıdır. Her tarama birimi ayrıca **kullanıcıya görünen Türkçe üretiyor mu** diye sınıflandırılır ve sınıflandırma da yürüyerek yapılır: üretmeyen on bir birim gerekçesiyle yazılıdır, üreten bir birim o listede kalırsa **bayat gerekçe** olarak kırmızıdır. Üç gerekçe belirli bir olgu iddia ediyor ve **sayıyla sabitlenmiştir**: `conformance`'ın dili `routes/conformance.py`'dedir (dosya taramada ve Türkçe taşıyor), `security` altı makine kodu ile yanıtlar, `downloads.py`'nin tek Türkçe belirteci `DEFAULT_STEM = 'indirme'` **tek kelimedir** ve en kısa kayıtlı ifade iki kelimedir. Türkçe dedektörü iki yönde de ölçülür: kırk üç işaretin hiçbiri **bağımsız bir İngilizce derlemde** (technocore-conform, 4755 kelime belirteci) eşleşmez, ve ürünün kendi yayımladığı **sekiz belirteçten uzun her cümle** yakalanır | `test_language_scope.py::test_no_string_literal_under_station_api_carries_a_forbidden_claim`, `::test_every_package_is_scanned_and_every_scanned_package_exists`, `::test_every_loose_module_is_scanned_and_every_scanned_module_exists`, `::test_the_scan_opens_the_whole_tree_rather_than_six_packages`, `::test_a_planted_forbidden_claim_is_reported_from_every_scanned_package`, `::test_a_planted_forbidden_claim_is_reported_from_every_scanned_loose_module`, `::test_the_scan_reaches_a_package_no_list_here_names`, `::test_the_scan_applies_the_union_of_every_registry`, `::test_the_registry_exemption_is_exactly_four_files_that_are_registries`, `::test_every_scan_unit_either_speaks_turkish_or_is_a_written_down_silence`, `::test_every_written_down_silence_names_a_unit_that_exists_with_a_reason`, `::test_the_derivation_sees_a_package_no_list_here_names`, `::test_a_package_that_says_nothing_is_not_reported_as_speaking`, `::test_no_turkish_marker_is_an_english_word`, `::test_the_detector_sees_every_sentence_this_product_certifies`, `::test_the_detector_sees_the_planted_sentence_and_not_a_machine_code`, `::test_the_detector_reads_a_string_the_way_the_registry_does`, `::test_the_conformance_wording_lives_in_the_route_that_is_scanned`, `::test_the_security_package_answers_with_codes_rather_than_sentences`, `::test_the_download_stem_is_one_word_and_no_registered_phrase_is` | E, H1, H2, H3, H4 |
 
 ### SI-252, SI-286 ve SI-225 neden **güncellendi**, silinmedi
 

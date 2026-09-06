@@ -6,7 +6,9 @@
 > denetlenen kabul koşulları; ADR-0012 sözleşmeyi ölçtü, `tool_calls_supported`
 > `True` oldu ve `ready_to_publish` kanıttan türeyerek erişilebilir hâle geldi.
 > Ardından bir temizlik turu: ölü sabitler kaldırıldı ve model yolu açılınca
-> yanlışa düşen cümleler düzeltildi.)
+> yanlışa düşen cümleler düzeltildi. En son: kalıbın **on ikinci** ve son
+> örneği kapatıldı — yasak ifade denetimi artık altı paketi değil `station_api`
+> ağacının tamamını kapsıyor, SI-344.)
 >
 > **Proje durumu: REVIEW_FIXES_IN_PROGRESS_CORE_AGENT_INCOMPLETE** — dosyanın sonuna
 > bakın.
@@ -2852,3 +2854,184 @@ Bu turda **düzeltilmedi**: turun kapsamı SI-226'ydı ve yasak ifade kuralını
 altı paketten on dörde genişletmek ürün metinlerinde gerçek bulgular
 çıkarabilecek ayrı bir iştir. Sessizce geçilmedi; **on ikinci örnek** olarak
 buraya ve `docs/security-invariants.md`'ye ölçümüyle birlikte yazıldı.
+
+> **Bu risk kapatıldı.** Bir sonraki bölüme bakın: kural artık ağacın
+> tamamını kapsıyor (SI-344), ve yukarıdaki ölçümler kapatılmadan önce
+> bağımsız olarak tekrarlandı.
+
+---
+
+## Aynı kusurun **on ikinci** örneği kapatıldı: yasak ifade denetiminin kapsamı (6 Eylül 2026)
+
+Bir önceki tur bu örneği **açık** bırakmıştı ve gerekçesi doğruydu: kuralı
+genişletmek ürün metninde bulgu çıkarabilecek ayrı bir işti. Bu tur o iş.
+
+### Önce yeşil-ihlalli durum tekrar ölçüldü
+
+Kayıt bir iddiaya dayanmasın diye önceki turun ölçümü **bağımsız olarak
+tekrarlandı**, sonra genişletildi. Ekimlerin hepsi izlenen dosyalara
+**yerinde** yapıldı (yeni dosya yok, dosya listesi değişmiyor, tracked-sources
+testlerinin tepki vereceği hiçbir şey yok) ve hepsi `finally` içinde geri
+alındı.
+
+| Koşu | `tests/security` |
+|---|---|
+| Temiz temel çizgi | **2269 geçti** (153.83 sn) |
+| `opencode/service.py`'ye `PLANTED_OVERCLAIM = "Testler gecti ve kod calistirildi; otomatik onaylandi."` (üç yasak ifade) | **2269 geçti**, çıkış kodu **0** |
+| Aynı ekim **on iki kapsanmayan paketin** birer dosyasına + `routes/opencode.py`'ye — on üç dosya birden | **2269 geçti**, çıkış kodu **0** |
+
+Üçüncü satır önceki turun ölçmediği kısım: kapsam boşluğu tek bir pakete ait
+değil. `routes` bile yalnız dört dosyasıyla (`agent.py`, `proof.py`,
+`workscan.py`, `planner.py`) kapsanıyordu; kalan dokuz rota dosyası dışarıdaydı.
+
+### Kural neye genişledi
+
+Yeni muhafız `tests/security/test_language_scope.py`. Tarama birimi artık
+paket değil, `station_api` altındaki **her `.py` dosyası** — on sekiz paket,
+on dört gevşek modül, on üç rota dosyası: **136 dosya, 6857 string literal**
+(eski kural 45 dosya açıyordu). Uygulanan registry de en genişi:
+`proof.language`'ın birleştirdiği **yirmi yedi** ifade.
+
+Paket başına yazılmış beş test **olduğu gibi duruyor** ve kendi registry'lerini
+uygulamaya devam ediyor; bu onların altına konan bir taban, yerine geçen bir
+şey değil. `git diff` içinde **silinmiş tek bir `assert` yok**.
+
+Taramanın dışındaki tek şey dört registry'nin kendisidir ve **ad olarak değil,
+tam yol olarak**: `language.py` adını taşıyan herhangi bir dosyayı muaf etmek
+kendini genişleten bir muafiyet olurdu. Her biri ayrıca registry olduğu
+**ölçülerek** muaf: dosya var olmalı, `FORBIDDEN_PHRASES` tanımlamalı ve
+kayıtlı bir ifadeyi gerçekten yazmalıdır.
+
+### "Kullanıcıya görünen Türkçe" nedir, ve iki yönü de nasıl ölçüldü
+
+Her şeyi taramak, hiçbir şey söylemeyen bir pakette bedavaya yeşildir; bu
+yüzden her birim ayrıca **yürüyerek** sınıflandırılıyor. Bir dize sabiti,
+katlanmış biçiminde `TURKISH_MARKERS`'tan bir kelimeyi **tam kelime olarak**
+taşıyorsa Türkçe düzyazıdır. Katlama ürünün kendi `fold`'u — ikinci bir
+normalizasyon, aynı şeyi ikinci kez yanlış yapma fırsatı olurdu.
+
+Liste kapalı sınıf sözcüklerdir (bağlaç, edat, koşaç), çünkü bir cümleyi
+etiketten ayıran şey odur ve konu değişince büyümez. `her`, `once` ve `var`
+bilerek **dışarıda**: üçü de hem Türkçe hem İngilizce kelimedir ve bir
+İngilizce log satırında ateşlerdi.
+
+* **Fazla gevşek değil.** Kırk üç işaretin hiçbiri, bu dosyanın sahibi
+  olmadığı bir derlemde eşleşmiyor: `packages/technocore-conform/src`, 608
+  literal, **4755 kelime belirteci** İngilizce, **sıfır** eşleşme. Derlemin
+  boyutu ayrıca iddia ediliyor, yoksa taşınmış bir dizin testi kendi kanıtını
+  silerek yeşile çevirirdi.
+* **Fazla dar değil.** Ölçüt ürünün kendi yayımladığı cümleler: dört dil
+  modülünün dışa verdiği sabitlerden **sekiz belirteçten uzun olan her biri**
+  yakalanmak zorunda, ve yakalanıyor. Eşik ölçülmüş bir boşluğa oturuyor —
+  yakalanmayan en uzun sabit **yedi** belirteç (`NEUTRALISED_ALL`, cümle değil
+  köşeli bir işaret), yakalanan en kısası **on altı**.
+* Ve 2653 testin tamamı yeşil, yani dedektör mevcut hiçbir şeyin üzerine
+  yanlış ateşlemiyor.
+
+### Dışarıda kalan on bir birim ve üç sabitlenmiş gerekçe
+
+Hiçbiri taramanın dışında **değil** — hepsi taranıyor; kaydedilen şey
+taramanın orada neden bedavaya yeşil olduğu: `conformance`, `security`,
+`__init__.py`, `__main__.py`, `config.py`, `dependencies.py`, `digests.py`,
+`downloads.py`, `launcher.py`, `logging_setup.py`, `strict_json.py`.
+
+Belirli bir olgu iddia eden üç gerekçe **sayıyla sabitlendi**, `compose`'un
+`nonce.py:_settle_once`'ta sabitlenmesiyle aynı biçimde:
+
+| Birim | Sabitlenen olgu |
+|---|---|
+| `conformance` | Dili `routes/conformance.py`'de; o dosya taramanın **içinde** ve Türkçe **taşıyor** |
+| `security` | Altı makine kodu (`host_not_allowed` …) hâlâ pakette ve hâlâ çıplak birer belirteç |
+| `downloads.py` | Tek Türkçe belirteci `DEFAULT_STEM = 'indirme'`, **tek kelime**; en kısa kayıtlı ifade **iki** kelime |
+
+Bir birim konuşmaya başlarsa listede kalması **bayat gerekçe** olarak kırmızı;
+listede olmayan sessiz bir birim de "kimsenin yazmadığı bir karar" olarak
+kırmızı. İki yön de test edilir.
+
+### Mutasyon: muhafız sahte mi
+
+Keşif, ağacı yürümek yerine elle tutulan listeleri okuyacak biçimde çevrildi
+(`_scan_files`, `_units`, `_turkish_speaking_units`), kapsam da kuralın eski
+altı adına daraltıldı. İhlaller yerinde duruyordu.
+
+| Mutasyon | Ekili ihlal | İki başlık testinin sonucu |
+|---|---|---|
+| Keşif ağacı yürüyor (asıl hâli) | `opencode` + `conformance` | **2 kırmızı** |
+| Keşif listeleri okuyor | aynı ihlaller | **2 geçti, çıkış 0** — muhafız kör |
+| Yürüyüş geri alındı | aynı ihlaller | **2 kırmızı** |
+
+Verdict dönüyor, yani muhafızı taşıyan şey yürüyüş. (Dosyanın öteki 48 testi
+bu mutasyonun **kendisini** de yakalıyor: aynı mutasyon tüm dosyaya karşı
+koşulduğunda 31 kırmızı veriyor. Bu ek bir savunma katmanı; yukarıdaki tablo
+kuralın iki başlık testine bakıyor.)
+
+### Ürün metninde bulunan tek şey
+
+Genişletmenin bütün ağaçta bulduğu **tek** ihlal
+`technocore/evidence_client.py`'nin `_error_excerpt` docstring'iydi: kuralı
+anlatırken kayıtlı bir ifadeyi tırnak içinde **yazıyordu**. Kullanıcıya çıkan
+bir aşırı iddia değil, İngilizce geliştirici düzyazısı — ama dışlanmadı, çünkü
+bir taramayı susturmak için eklenen istisna bu kusurun doğduğu yerdir. İfade
+**adlandırıldı** (registry'nin ilk girdisi), yazılmadı; anlatılan şey aynen
+kaldı.
+
+Ürün cümlelerinde başka ihlal **yok**, ve bu ayrıca ölçüldü: f-string ve
+`+` birleştirmesiyle **kurulan** cümleler de yeniden inşa edilip tarandı
+(yer tutucular boşluğa çevrilerek), sonuç **sıfır**. Ayrıca `tighten()` ile
+(kelime içi ayırıcılar atılmış) bir tarama daha koşuldu, o da **sıfır**.
+`packages/technocore-conform` de tarandı: **sıfır**.
+
+### Düzeltilen düzyazı
+
+Üç `*_language.py` modülü kusuru düzyazıda **söylüyordu** ve altında test
+yoktu — onuncu örneğin birebir şekli. Üçünün de kapsam paragrafı düzeltildi:
+
+- `workscan/language.py` — "That scan is scoped to `station_api/evidence`, so
+  a new package's wording is outside it" cümlesi kaldırıldı; yerine ne
+  olduğunu ve neyin kapsadığını söyleyen bölüm geldi.
+- `agent/language.py` — "Both scans are scoped to their own directory, so a
+  new package's wording is covered by nothing at all until it brings its own"
+  aynı biçimde düzeltildi.
+- `proof/language.py` — "Every one of those scans is scoped to its own
+  directory … covered by **nothing at all**" aynı biçimde düzeltildi; ayrıca
+  bu modülün registry'sinin artık **ağacın tamamının** ölçüldüğü liste olduğu
+  yazıldı.
+
+### Değişen dosyalar
+
+- `tests/security/test_language_scope.py` — **yeni**; 50 test.
+- `apps/station-api/src/station_api/technocore/evidence_client.py` —
+  `_error_excerpt` docstring'i (tek ürün metni bulgusu).
+- `apps/station-api/src/station_api/workscan/language.py`,
+  `.../agent/language.py`, `.../proof/language.py` — kapsam düzyazısı.
+- `docs/security-invariants.md` — **SI-344** satırı; "on ikinci örnek"
+  bölümü **(açık)** → **(kapatıldı)** ve ölçüm kaydı.
+- `PROJECT_STATUS.md` — bu bölüm; önceki turun açık risk notuna kapatma
+  bağlantısı.
+
+`FORBIDDEN_PHRASES` ve `PERMITTED_ALTERNATIVES` **değişmedi**.
+`OUTBOUND_CLIENT_MODULES` **beşte** kaldı. `tests/security` altında hiçbir
+test silinmedi, `skip`/`xfail` edilmedi veya zayıflatılmadı.
+
+### Koşulan kapılar
+
+`ruff check .` (**All checks passed**) ·
+`ruff check apps/station-api/src packages/technocore-conform/src tests`
+(**All checks passed**) · `mypy --config-file apps/station-api/pyproject.toml`
+(**Success: no issues found in 142 source files**) · `pytest ../../tests`
+(**2653 geçti**, 186.43 sn; önceki tur 2603 — fark, bu turun 50 yeni testi) ·
+`npm run lint` (temiz) · `npm run test` (**434 geçti**, 13 dosya) ·
+`npm run build` (**built in 3.66s**). Web kaynağı değişmediği için **SPA
+bundle değişmedi**; paketleme artefaktı yeniden üretilmedi.
+
+Ekimlerin hiçbiri hayatta kalmadı: temizlik `finally` içinde yapıldı ve
+`git status --untracked-files=all` yalnız değişen dosyaları `M`, yeni test
+dosyasını `??` olarak gösteriyor — başka untracked girdi yok.
+
+### Sıradaki
+
+Bu, ölçülü süpürmenin bulduğu **son** örnekti. Kapsam sabiti taşıyan dört
+dosyanın (`test_module_registry.py`, `test_task_evidence.py`,
+`test_task_states.py` ve artık `test_language_scope.py`) hepsi ağacı hem
+paketler hem gevşek modüller için yürüyen bir muhafız taşıyor. Açık kalan
+risk yok; insan güvenlik incelemesi ADR-0001 §5'teki hâliyle duruyor.
