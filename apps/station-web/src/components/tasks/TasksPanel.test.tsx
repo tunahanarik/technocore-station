@@ -520,11 +520,37 @@ async function openTask(user: ReturnType<typeof userEvent.setup>): Promise<void>
   await screen.findByRole("region", { name: "Gorev ayrintisi" });
 }
 
-/** Tick all four approvals on the run card that carries them. */
-async function approveAll(user: ReturnType<typeof userEvent.setup>): Promise<void> {
-  for (const label of [/Plani okudum/, /Veri paylasimini/, /Calisma alanini/, /Butceyi/]) {
-    await user.click(screen.getByRole("checkbox", { name: label }));
+/**
+ * Give the consent and carry the plan out: one press, on the one control.
+ *
+ * It replaces a helper that ticked four checkboxes, and the rule it drives is
+ * the same one: the four statements are on screen, above this control, and a
+ * person consents to them before anything runs. What changed is the number of
+ * acts, which is why this helper *asserts* the four statements are there
+ * rather than quietly pressing a button - a one-press flow that stopped
+ * showing them would be the relaxation this whole change is not.
+ */
+async function consentAndRun(
+  user: ReturnType<typeof userEvent.setup>,
+  label: string = "Onayla ve baslat",
+): Promise<void> {
+  // `toBeVisible()` was here and it was a false guard: measured by replacing
+  // the list's classes with Tailwind's `hidden`, all 78 cases in this file
+  // stayed green. jsdom loads no stylesheet, so a class that compiles to
+  // `display: none` is invisible to it - the assertion passed because it
+  // could not see, not because there was nothing to see. The same mutation
+  // fails three tests in Chromium, where the stylesheet is real, and that is
+  // where the visibility half of this rule is held (`agent.spec.ts`).
+  //
+  // What this layer can check, it checks: the four sentences exist, they are
+  // the four the product consents to, and none of them is behind a
+  // disclosure a person would have to open first.
+  const statements = screen.getByTestId("tasks-consent-statements");
+  expect(statements.closest("details"), "the consent must not be folded").toBeNull();
+  for (const sentence of [/Plani okudum/, /Veri paylasimini/, /Calisma alanini/, /Butceyi/]) {
+    expect(within(statements).getByText(sentence)).toBeInTheDocument();
   }
+  await user.click(screen.getByRole("button", { name: label }));
 }
 
 /** The `src` tree, found from the working directory (heroui-surface pattern). */
@@ -804,70 +830,102 @@ describe("Gorevler: the honesty surface", () => {
 });
 
 describe("Gorevler: approval and control", () => {
-  it.each(["start", "resume"] as const)("can stop while %s is still pending on this screen", async (action) => {
-    let release: () => void = () => {};
-    const pending = new Promise<void>((resolve) => { release = resolve; });
-    let stopped = 0;
-    const initial = action === "start" ? PLANNED_RUN : PAUSED_RUN;
-    const mock = stub(runsFor([initial]));
-    const original = mock.getMockImplementation();
-    mock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = typeof input === "string" ? input : new URL(input as URL).pathname;
-      if (url.endsWith(`/${action}`) && init?.method === "POST") {
-        return pending.then(() => jsonOk(runsFor([PAUSED_RUN])));
+  it.each([
+    ["start", "Onayla ve baslat", "awaiting_approval", "Calistiriliyor..."],
+    ["resume", "Onayla ve devam et", "paused", "Surduruluyor..."],
+  ] as const)(
+    "can stop while %s is still pending on this screen",
+    async (action, label, state, pendingLabel) => {
+      let release: () => void = () => {};
+      const pending = new Promise<void>((resolve) => { release = resolve; });
+      let stopped = 0;
+      const initial = action === "start" ? PLANNED_RUN : PAUSED_RUN;
+      const mock = stub({ ...runsFor([initial]), task: { ...TASK, state } });
+      const original = mock.getMockImplementation();
+      mock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : new URL(input as URL).pathname;
+        if (url.endsWith(`/${action}`) && init?.method === "POST") {
+          return pending.then(() => jsonOk(runsFor([PAUSED_RUN])));
+        }
+        if (url.endsWith("/stop") && init?.method === "POST") {
+          stopped += 1;
+          return Promise.resolve(jsonOk(runsFor([PAUSED_RUN])));
+        }
+        return original!(input, init) as Promise<Response>;
+      });
+      await bootstrapSession();
+      const user = userEvent.setup();
+      render(<TasksPanel />);
+      await ready();
+      await openTask(user);
+      await consentAndRun(user, label);
+      try {
+        // The one control that can interrupt a run is reachable *while* the
+        // run is being carried out - the block it lives in is forced open for
+        // exactly as long as this screen has something in flight.
+        const stop = screen.getByRole("button", { name: "Durdur" });
+        expect(stop).toBeEnabled();
+        await user.click(stop);
+        expect(stopped).toBe(1);
+      } finally {
+        release();
       }
-      if (url.endsWith("/stop") && init?.method === "POST") {
-        stopped += 1;
-        return Promise.resolve(jsonOk(runsFor([PAUSED_RUN])));
-      }
-      return original!(input, init) as Promise<Response>;
+      await waitFor(() =>
+        expect(screen.queryByText(pendingLabel)).not.toBeInTheDocument(),
+      );
+    },
+  );
+
+  it("shows the four statements and offers exactly one way to carry a plan out", async () => {
+    // The rewrite of "refuses to carry out a plan until all four approvals are
+    // given". The rule it drove is intact and is driven here through the
+    // action a person can still take: a person is shown four specific things
+    // and consents before anything runs. What changed is that the consent is
+    // one deliberate press instead of five, so what has to be pinned is that
+    // the four things are still shown, that the press is still the only way
+    // in, and that reading costs nothing.
+    const sent: Recorded[] = [];
+    stub(runsFor([PLANNED_RUN]), {
+      sent,
+      onPost: (url) => (url.endsWith("/start") ? jsonOk(runsFor([RUNNING_RUN])) : null),
     });
     await bootstrapSession();
     const user = userEvent.setup();
     render(<TasksPanel />);
     await ready();
     await openTask(user);
-    await approveAll(user);
-    await user.click(screen.getByRole("button", { name: action === "start" ? "Onayli plani calistir" : "Devam et" }));
-    try {
-      const stop = screen.getByRole("button", { name: "Durdur" });
-      expect(stop).toBeEnabled();
-      await user.click(stop);
-      expect(stopped).toBe(1);
-    } finally {
-      release();
-    }
-    await waitFor(() => expect(screen.queryByText("Calistiriliyor...")).not.toBeInTheDocument());
-  });
 
-  it("refuses to carry out a plan until all four approvals are given", async () => {
-    const sent: Recorded[] = [];
-    stub(runsFor([PLANNED_RUN]), { sent });
-    await bootstrapSession();
-    const user = userEvent.setup();
-    render(<TasksPanel />);
-    await ready();
-    await openTask(user);
+    // The four ticks are gone and nothing replaced them with a second tick:
+    // there is no checkbox at all between a person and this run.
+    expect(screen.queryAllByRole("checkbox")).toEqual([]);
 
-    const start = screen.getByRole("button", { name: "Onayli plani calistir" });
-    expect(start).toBeDisabled();
+    const statements = screen.getByTestId("tasks-consent-statements");
+    expect(within(statements).getAllByRole("listitem")).toHaveLength(4);
 
-    // Three of four is still not four.
-    await user.click(screen.getByRole("checkbox", { name: /Plani okudum/ }));
-    await user.click(screen.getByRole("checkbox", { name: /Veri paylasimini/ }));
-    await user.click(screen.getByRole("checkbox", { name: /Calisma alanini/ }));
-    expect(screen.getByRole("button", { name: "Onayli plani calistir" })).toBeDisabled();
+    // Exactly one control on the whole surface consents to and carries out a
+    // plan, and it is the one the four statements sit above.
+    const consenting = screen
+      .getAllByRole("button")
+      .filter((button) => (button.textContent ?? "").startsWith("Onayla ve"));
+    expect(consenting).toHaveLength(1);
+    expect(
+      statements.compareDocumentPosition(consenting[0]!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeGreaterThan(0);
 
-    await user.click(screen.getByRole("checkbox", { name: /Butceyi/ }));
-    expect(screen.getByRole("button", { name: "Onayli plani calistir" })).toBeEnabled();
-
-    // And nothing has been sent while the approvals were being collected.
+    // Reading is free: nothing was sent while the statements were on screen.
     expect(sent).toHaveLength(0);
+
+    await consentAndRun(user);
+    await waitFor(() => {
+      expect(sent.map((entry) => entry.url)).toEqual([
+        `/api/tasks/${TASK.id}/runs/${PLANNED_RUN.id}/start`,
+      ]);
+    });
   });
 
   it("says a change of scope needs a new approval, and a new plan is unapproved", async () => {
-    // Approvals are keyed to a run id, so a second plan cannot inherit the
-    // first plan's approvals. The second plan used to be hand-written here;
+    // Consent is keyed to a run id, so a second plan cannot inherit the
+    // first plan's consent. The second plan used to be hand-written here;
     // the hand-written composer is gone, so it comes from the model - which
     // is the same claim about the same rule, made where a person can still
     // make it. The model proposing is exactly the case that matters: a plan
@@ -890,15 +948,27 @@ describe("Gorevler: approval and control", () => {
       "kapsam veya risk degisirse yeni bir plan kaydedilir ve yeni plan yeniden onay ister",
     );
 
-    await approveAll(user);
-    expect(screen.getByRole("button", { name: "Onayli plani calistir" })).toBeEnabled();
+    // The consent is on screen and it names the plan it was given to. It has
+    // not been given yet, so it names none.
+    expect(screen.getByTestId("tasks-consent-record")).toHaveTextContent(
+      "henuz hicbir plana onay verilmedi",
+    );
 
     await user.click(screen.getByRole("button", { name: /Modelden plan oner/ }));
     await screen.findByTestId("tasks-model-outcome");
 
-    // The new run is on screen and its start control is disabled again.
-    await screen.findByText(new RegExp(SECOND_RUN.id.slice(0, 12)));
-    expect(screen.getByRole("button", { name: "Onayli plani calistir" })).toBeDisabled();
+    // The new run is on screen, and the control now belongs to *it*: the four
+    // statements are shown again, above it, for the plan nobody has looked at
+    // yet. The consent record names the new plan rather than carrying the old
+    // one forward.
+    await screen.findByTestId(`tasks-scope-change-${SECOND_RUN.id}`);
+    expect(screen.getAllByText(new RegExp(SECOND_RUN.id.slice(0, 12))).length)
+      .toBeGreaterThan(0);
+    expect(screen.getByTestId("tasks-consent-record")).toHaveTextContent(
+      SECOND_RUN.id.slice(0, 12),
+    );
+    expect(within(screen.getByTestId("tasks-consent-statements")).getAllByRole("listitem"))
+      .toHaveLength(4);
 
     // Proposing ran nothing: the only write was the turn itself.
     expect(sent.map((entry) => entry.url)).toEqual([`/api/tasks/${TASK.id}/model-plan`]);
@@ -970,9 +1040,8 @@ describe("Gorevler: approval and control", () => {
     render(<TasksPanel />);
     await ready();
     await openTask(user);
-    await approveAll(user);
 
-    await user.click(screen.getByRole("button", { name: "Onayli plani calistir" }));
+    await consentAndRun(user);
     const busy = await screen.findByRole("button", { name: "Calistiriliyor..." });
     expect(busy).toBeDisabled();
 
@@ -986,7 +1055,7 @@ describe("Gorevler: approval and control", () => {
     });
   });
 
-  it("uses no browser-side persistence for the plan, the approvals or the result", async () => {
+  it("uses no browser-side persistence for the plan, the consent or the result", async () => {
     const setItem = vi.fn();
     vi.stubGlobal("localStorage", { getItem: () => null, setItem, removeItem: vi.fn() });
     vi.stubGlobal("sessionStorage", { getItem: () => null, setItem, removeItem: vi.fn() });
@@ -997,7 +1066,7 @@ describe("Gorevler: approval and control", () => {
     render(<TasksPanel />);
     await ready();
     await openTask(user);
-    await approveAll(user);
+    await consentAndRun(user);
 
     expect(setItem).not.toHaveBeenCalled();
   });
@@ -1014,9 +1083,8 @@ describe("Gorevler: approval and control", () => {
     render(<TasksPanel />);
     await ready();
     await openTask(user);
-    await approveAll(user);
 
-    await user.click(screen.getByRole("button", { name: "Onayli plani calistir" }));
+    await consentAndRun(user);
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Calisma baslatilamadi");
@@ -1523,7 +1591,16 @@ describe("Gorevler: the model proposes and cannot approve or start", () => {
     // model is never told about it and never asked for one, which is the
     // point - a proposer that writes the criterion it will be judged by has
     // not been given a criterion.
-    expect(turn?.body).toEqual({ instruction: "TEST-ONLY yonerge", acceptance: [] });
+    // Three keys and no fourth. `check_promised_files` is the person's own
+    // ask - "judge the plan by the files it promises" - and it is `false`
+    // here because this is the long road, where a person writes the criterion
+    // themselves. It widens nothing either way: the model is never told about
+    // it and never asked for a criterion.
+    expect(turn?.body).toEqual({
+      instruction: "TEST-ONLY yonerge",
+      acceptance: [],
+      check_promised_files: false,
+    });
   });
 
   it("shows the proposed plan, the provider's own usage, and that it started nothing", async () => {
@@ -1558,7 +1635,7 @@ describe("Gorevler: the model proposes and cannot approve or start", () => {
     );
   });
 
-  it("makes a model-proposed plan meet the same four approvals as a written one", async () => {
+  it("makes a model-proposed plan meet the same four statements as a written one", async () => {
     const sent: Recorded[] = [];
     modelStub(proposal(), sent);
     await bootstrapSession();
@@ -1567,23 +1644,36 @@ describe("Gorevler: the model proposes and cannot approve or start", () => {
     await ready();
     await openTask(user);
 
+    // Before the turn there is no plan, so there is no start control at all -
+    // not a disabled one. A proposal cannot start itself because there is
+    // nothing for it to press.
+    expect(screen.queryByRole("button", { name: "Onayla ve baslat" })).toBeNull();
+
     await user.click(screen.getByRole("button", { name: /Modelden plan oner/ }));
     await screen.findByTestId("tasks-model-outcome");
 
-    // The proposed run is on screen, in `planned`, and its start control is
-    // refused: being the model's idea buys no approval at all.
-    const start = await screen.findByRole("button", { name: /Onayli plani calistir/ });
-    expect(start).toBeDisabled();
+    // The proposed run is on screen, in `planned`, and it meets the same four
+    // statements a hand-written plan meets - being the model's idea buys no
+    // consent at all, and the consent record says so by name.
+    await screen.findByRole("button", { name: "Onayla ve baslat" });
+    const statements = screen.getByTestId("tasks-consent-statements");
+    expect(within(statements).getAllByRole("listitem")).toHaveLength(4);
+    expect(screen.getByTestId("tasks-consent-record")).toHaveTextContent(
+      "henuz hicbir plana onay verilmedi",
+    );
 
-    await approveAll(user);
-    expect(screen.getByRole("button", { name: /Onayli plani calistir/ })).toBeEnabled();
-
-    // And nothing was started by the turn itself.
+    // And the turn started nothing by itself: the run begins on a person's
+    // press and on nothing else.
     expect(sent.filter((entry) => entry.url.endsWith("/start"))).toHaveLength(0);
     expect(screen.getByTestId("tasks-model-approval-rule")).toHaveTextContent(
       "hicbir adimi atlatmaz",
     );
-  });
+
+    await consentAndRun(user);
+    await waitFor(() => {
+      expect(sent.filter((entry) => entry.url.endsWith("/start"))).toHaveLength(1);
+    });
+  }, 20_000);
 
   it("shows a refusal on screen instead of swallowing it or trimming the plan", async () => {
     modelStub(
@@ -2318,13 +2408,13 @@ describe("Gorevler: a completion is not automatically an accomplishment", () => 
     expect(phases).toHaveLength(8);
   });
 
-  it("warns before the four approvals rather than after the run", async () => {
+  it("warns before the consent rather than after the run", async () => {
     // The card already prints "Bu plan bir cikti dosyasi soz vermedi", which
     // is a fact about the promise and not about the plan: a plan may promise
     // nothing and still write something. The stronger reading is derived from
-    // the step scopes, and it sits in the card being approved, above the four
-    // checkboxes - so a person meets it before spending four approvals and a
-    // run rather than after.
+    // the step scopes, and it moved with the consent it qualifies - it is now
+    // above the four statements and the one press, so a person still meets it
+    // before consenting rather than after the run.
     const planned: AgentRunStatus = { ...READ_ONLY_RUN, phase: "planned" };
     stub(runsFor([planned]));
     await bootstrapSession();
@@ -2335,10 +2425,14 @@ describe("Gorevler: a completion is not automatically an accomplishment", () => 
 
     const warning = screen.getByTestId(`tasks-writes-nothing-${planned.id}`);
     expect(warning).toHaveTextContent("hicbir dosya olusturmaz");
-    // Above the approvals it belongs to, in document order.
-    const fieldset = screen.getByRole("group", { name: "Bu plan icin dort onay" });
+    // Above the four statements and the control, in document order.
+    const statements = screen.getByTestId("tasks-consent-statements");
+    const start = screen.getByRole("button", { name: "Onayla ve baslat" });
     expect(
-      warning.compareDocumentPosition(fieldset) & Node.DOCUMENT_POSITION_FOLLOWING,
+      warning.compareDocumentPosition(statements) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      warning.compareDocumentPosition(start) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 
@@ -2508,14 +2602,16 @@ describe("Gorevler: what to do next", () => {
 
     // The line exists, it is at the top of the task, and it names the single
     // control this state permits. Not "here are your options": in `suggested`
-    // there is exactly one, and the screen used to make a person find it.
+    // there is exactly one, and it is now the one press that both takes the
+    // task on and asks for a plan - two of the seven actions this screen used
+    // to ask a person to find and perform in order.
     const next = screen.getByTestId("tasks-next-step");
-    expect(next).toHaveTextContent("Onaya al");
+    expect(next).toHaveTextContent("Bu isi yap");
 
     // ...and the control it names is really there, really enabled, and really
     // ahead of the explanation. A pointer at a control below three regions is
     // the defect with a sentence added to it.
-    const control = screen.getByRole("button", { name: "Onaya al" });
+    const control = screen.getByRole("button", { name: "Bu isi yap" });
     expect(control).toBeEnabled();
     const acceptance = screen.getByRole("region", { name: "Kullanici kabulu" });
     expect(
@@ -2597,8 +2693,10 @@ describe("Gorevler: what to do next", () => {
     // run that one.
     const empty = deriveNextStep("awaiting_approval", []);
     const planned = deriveNextStep("awaiting_approval", [PLANNED_RUN]);
-    expect(empty.control).toBe("Modelden plan oner (calistirmaz)");
-    expect(planned.control).toBe("Onayli plani calistir");
+    expect(empty.control).toBe("Bu isi yap");
+    expect(planned.control).toBe("Onayla ve baslat");
+    // Both live in the same block, so the line never sends a person hunting.
+    expect(empty.where).toBe(planned.where);
   });
 
   it("collapses what cannot act here without deleting a single claim", async () => {
@@ -2656,17 +2754,27 @@ describe("Gorevler: what to do next", () => {
     await ready();
     await openTask(user);
 
-    // The line moved with the state: in `suggested` it named "Onaya al", and
-    // here it names the model turn. A literal written into the JSX would
-    // agree with one of the two and fail the other.
-    expect(screen.getByTestId("tasks-next-step")).toHaveTextContent(
-      "Modelden plan oner (calistirmaz)",
-    );
+    // The line names the one press this state offers, and the control it
+    // names is not inside a disclosure at all: the two primary controls sit
+    // in the open, above every explanation.
+    expect(screen.getByTestId("tasks-next-step")).toHaveTextContent("Bu isi yap");
+    const primary = screen.getByRole("region", { name: "Bu gorevi yaptir" });
+    expect(primary.closest("details"), "the primary block may not be folded").toBeNull();
+    expect(screen.getByRole("button", { name: "Bu isi yap" })).toBeEnabled();
 
+    // The long road is secondary now, and secondary means folded rather than
+    // removed: both blocks are closed, both still hold their controls, and
+    // both say why they are closed without claiming they cannot act.
     for (const label of ["Basari olcutu", "Modelden plan onerisi"]) {
-      const open = screen.getByRole("region", { name: label }).querySelector("details")?.open;
-      expect(open, `${label} must be open where it can act`).toBe(true);
+      const region = screen.getByRole("region", { name: label });
+      expect(region.querySelector("details")?.open, `${label} is not folded`).toBe(false);
+      expect(
+        region.querySelector("summary")?.textContent ?? "",
+        `${label} folded without saying its controls still work`,
+      ).toContain("Buradaki kontroller calisir");
     }
+    expect(screen.getByRole("button", { name: /Modelden plan oner/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Kosulu plana ekle" })).toBeInTheDocument();
 
     // The publication gate can only move a task out of `review_needed`, so
     // here it is one keystroke away rather than in the way.
@@ -2675,5 +2783,349 @@ describe("Gorevler: what to do next", () => {
       .querySelector("details");
     expect(readiness?.open, "the gate cannot act from awaiting_approval").toBe(false);
     expect(screen.getByTestId("tasks-readiness-rule")).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Two presses, not seven.
+//
+// The measured defect: a person who had scanned rooms, found real work and
+// picked it still could not get it done. Seven actions stood between the task
+// and a started run - "Onaya al", a criterion, "Modelden plan oner", four
+// checkboxes and "Onayli plani calistir" - and the owner's report was that
+// having work done was an ordeal.
+//
+// The rule that must survive the fix, and every assertion below is one half of
+// it: **a person is shown four specific things and consents before anything
+// runs.** What changes is that the consent is one deliberate act instead of
+// five, not that it is weaker. So the four statements are pinned in the DOM,
+// visible, above the control; the control is pinned absent until a plan is
+// recorded; the start is pinned as the only path to a run; and a *different*
+// plan is pinned as unconsented, which is what `SECOND_RUN` is for.
+// ---------------------------------------------------------------------------
+
+/** The four consent statements, as a person reads them, in order. */
+const CONSENT_STATEMENTS: readonly RegExp[] = [
+  /Plani okudum/,
+  /Veri paylasimini onayliyorum/,
+  /Calisma alanini onayliyorum/,
+  /Butceyi onayliyorum/,
+];
+
+/**
+ * The whole flow behind one mock: a task that moves, a turn that records a
+ * plan, and a start that carries it out.
+ *
+ * A frozen document cannot show a two-press flow at all: the second press only
+ * exists because the first one changed what the screen holds.
+ */
+function twoPressStub(
+  options: {
+    readonly initial?: TaskStateName;
+    /** The plan a turn records. `null` records none. */
+    readonly proposed?: AgentRunStatus | null;
+    /** Fail the model turn, after the transition has already succeeded. */
+    readonly turnFails?: boolean;
+  } = {},
+): { readonly sent: Recorded[] } {
+  const sent: Recorded[] = [];
+  let state: TaskStateName = options.initial ?? "suggested";
+  let runs: readonly AgentRunStatus[] = [];
+  const proposed = options.proposed === undefined ? MODEL_RUN : options.proposed;
+
+  const mock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : new URL(input as URL).pathname;
+    if (url === "/api/session/bootstrap") {
+      return Promise.resolve(
+        jsonOk({
+          csrf_token: "test-only-value-not-a-real-token",
+          csrf_header: "X-Station-CSRF",
+        }),
+      );
+    }
+    const detail = (): AgentTaskRunsResponse => ({
+      ...runsFor(runs),
+      task: { ...TASK, state },
+    });
+    if (init?.method === "POST") {
+      const body: unknown =
+        typeof init.body === "string" ? (JSON.parse(init.body) as unknown) : null;
+      sent.push({ url, body });
+      if (url === `/api/tasks/${TASK.id}/transition`) {
+        state = "awaiting_approval";
+        return Promise.resolve(jsonOk({ ...TASK, state }));
+      }
+      if (url === `/api/tasks/${TASK.id}/model-plan`) {
+        if (options.turnFails === true) {
+          return Promise.resolve(jsonOk({ detail: "Saglayici cevap vermedi." }, 502));
+        }
+        runs = proposed === null ? [] : [proposed];
+        return Promise.resolve(
+          jsonOk({
+            ...proposal({ runs: [...runs] }),
+            run_id: proposed === null ? "" : proposed.id,
+            outcome: proposed === null ? "provider_failed" : "planned",
+            task: { ...TASK, state },
+          }),
+        );
+      }
+      if (url.endsWith("/start")) {
+        runs = runs.map((run) => ({
+          ...run,
+          phase: "completed" as const,
+          started_at: "2026-09-05T09:07:00Z",
+          finished_at: "2026-09-05T09:07:01Z",
+          steps: run.steps.map((step) => ({
+            ...step,
+            phase: "ran" as const,
+            artifact_name: "rapor.md",
+            artifact_sha256: "77665544332211",
+          })),
+        }));
+        return Promise.resolve(jsonOk(detail()));
+      }
+      return Promise.resolve(jsonOk({ detail: "not_found" }, 404));
+    }
+    if (url === "/api/tasks/surface") return Promise.resolve(jsonOk(SURFACE));
+    if (url === "/api/tasks") {
+      return Promise.resolve(jsonOk({ ...LIST, tasks: [{ ...TASK, state }] }));
+    }
+    if (url === `/api/tasks/${TASK.id}/runs`) return Promise.resolve(jsonOk(detail()));
+    return Promise.resolve(jsonOk({ detail: "not_found" }, 404));
+  });
+  vi.stubGlobal("fetch", mock);
+  return { sent };
+}
+
+describe("Gorevler: iki basista bir is", () => {
+  it("takes a suggested task with no plan to a started run in two presses", async () => {
+    const { sent } = twoPressStub();
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    // Press one. The task is a scan suggestion with no plan at all, and this
+    // is the only primary control the screen offers it.
+    await user.click(screen.getByRole("button", { name: "Bu isi yap" }));
+    await screen.findByRole("button", { name: "Onayla ve baslat" });
+
+    // One press did the two things a person used to do by hand: it moved the
+    // task and it asked the model for a plan.
+    expect(sent.map((entry) => entry.url)).toEqual([
+      `/api/tasks/${TASK.id}/transition`,
+      `/api/tasks/${TASK.id}/model-plan`,
+    ]);
+
+    // Press two. Nothing else is required in between: no criterion, no four
+    // ticks, no separate "run it".
+    await user.click(screen.getByRole("button", { name: "Onayla ve baslat" }));
+
+    await waitFor(() => {
+      expect(sent.map((entry) => entry.url)).toEqual([
+        `/api/tasks/${TASK.id}/transition`,
+        `/api/tasks/${TASK.id}/model-plan`,
+        `/api/tasks/${TASK.id}/runs/${MODEL_RUN.id}/start`,
+      ]);
+    });
+
+    // Two presses, and the run really was carried out.
+    await waitFor(() => {
+      expect(screen.getByTestId(`tasks-run-ending-${MODEL_RUN.id}`)).toHaveTextContent(
+        "Bitti: her adim yapildi, soz verilen her cikti var",
+      );
+    });
+  }, 20_000);
+
+  it("asks for the promised files to be checked and adds nothing to an explicit choice", async () => {
+    const { sent } = twoPressStub();
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.click(screen.getByRole("button", { name: "Bu isi yap" }));
+    await screen.findByRole("button", { name: "Onayla ve baslat" });
+
+    const turn = sent.find((entry) => entry.url === `/api/tasks/${TASK.id}/model-plan`);
+    // Three keys and no fourth. `check_promised_files` is what stops the
+    // verdict being "uygulanmadi" forever: the product reads the promise off
+    // the write calls the model proposed and judges the plan by it. The
+    // criterion list is empty *because* the flag is set - an explicit choice
+    // is never added to, so sending both would be a contradiction.
+    expect(turn?.body).toEqual({
+      instruction: "",
+      acceptance: [],
+      check_promised_files: true,
+    });
+  }, 20_000);
+
+  it("says the task moved when the turn fails after moving it", async () => {
+    const { sent } = twoPressStub({ turnFails: true });
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.click(screen.getByRole("button", { name: "Bu isi yap" }));
+
+    // The half that succeeded is reported as having succeeded. A person who
+    // reads "nothing happened" and presses again spends a second turn.
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Gorev onaya alindi");
+    expect(alert).toHaveTextContent("plan kaydedilmedi");
+    expect(alert).toHaveTextContent(/model turu/i);
+
+    // And the move really did happen, so the screen says the new state.
+    expect(screen.getAllByText(STATE_LABEL.awaiting_approval).length).toBeGreaterThan(0);
+    expect(sent.map((entry) => entry.url)).toEqual([
+      `/api/tasks/${TASK.id}/transition`,
+      `/api/tasks/${TASK.id}/model-plan`,
+    ]);
+  }, 20_000);
+
+  it("shows the four consent statements, visible, immediately above the button", async () => {
+    twoPressStub({ initial: "awaiting_approval", proposed: PLANNED_RUN });
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+    await user.click(screen.getByRole("button", { name: "Bu isi yap" }));
+
+    const button = await screen.findByRole("button", { name: "Onayla ve baslat" });
+    const statements = screen.getByTestId("tasks-consent-statements");
+
+    // Nothing folded and nothing behind a disclosure: the four sentences are
+    // on screen, in the open, above the control that acts on them.
+    expect(statements.closest("details"), "the consent may not be folded away").toBeNull();
+    expect(statements).toBeVisible();
+    for (const statement of CONSENT_STATEMENTS) {
+      expect(within(statements).getByText(statement)).toBeVisible();
+    }
+    expect(
+      statements.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING,
+      "the four statements must come before the control, not after it",
+    ).toBeGreaterThan(0);
+  }, 20_000);
+
+  it("offers no start control at all until a plan is recorded", async () => {
+    // Two shapes of "no plan": nothing recorded, and a run that is not a plan
+    // waiting to be carried out. Neither may put a start control on screen.
+    for (const runs of [[], [PASSED_RUN]]) {
+      stub({ ...runsFor(runs), task: { ...TASK, state: "awaiting_approval" } });
+      await bootstrapSession();
+      const user = userEvent.setup();
+      const view = render(<TasksPanel />);
+      await ready();
+      await openTask(user);
+
+      expect(screen.queryByRole("button", { name: "Onayla ve baslat" })).toBeNull();
+      expect(screen.queryByTestId("tasks-consent-statements")).toBeNull();
+      // ...and the one control there is, is the one that produces a plan.
+      expect(screen.getByRole("button", { name: "Bu isi yap" })).toBeEnabled();
+      view.unmount();
+      vi.unstubAllGlobals();
+      resetSessionState();
+    }
+  }, 20_000);
+
+  it("does not let a second plan inherit the first plan's consent", async () => {
+    // Consent is keyed to a plan. One press carries the four approvals *for
+    // the plan on screen*, so a second, different plan is unconsented by
+    // construction rather than by a reset somebody has to remember.
+    const sent: Recorded[] = [];
+    let runs: readonly AgentRunStatus[] = [PLANNED_RUN];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : new URL(input as URL).pathname;
+        if (url === "/api/session/bootstrap") {
+          return Promise.resolve(
+            jsonOk({
+              csrf_token: "test-only-value-not-a-real-token",
+              csrf_header: "X-Station-CSRF",
+            }),
+          );
+        }
+        if (init?.method === "POST") {
+          sent.push({
+            url,
+            body: typeof init.body === "string" ? (JSON.parse(init.body) as unknown) : null,
+          });
+          if (url === `/api/tasks/${TASK.id}/model-plan`) {
+            runs = [SECOND_RUN];
+            return Promise.resolve(
+              jsonOk({ ...proposal({ runs: [SECOND_RUN] }), run_id: SECOND_RUN.id }),
+            );
+          }
+          if (url.endsWith("/start")) return Promise.resolve(jsonOk(runsFor(runs)));
+          return Promise.resolve(jsonOk({ detail: "not_found" }, 404));
+        }
+        if (url === "/api/tasks/surface") return Promise.resolve(jsonOk(SURFACE));
+        if (url === "/api/tasks") return Promise.resolve(jsonOk(LIST));
+        if (url === `/api/tasks/${TASK.id}/runs`) return Promise.resolve(jsonOk(runsFor(runs)));
+        return Promise.resolve(jsonOk({ detail: "not_found" }, 404));
+      }),
+    );
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    // Consent given to the first plan, and carried out.
+    await user.click(screen.getByRole("button", { name: "Onayla ve baslat" }));
+    await waitFor(() => {
+      expect(sent.filter((entry) => entry.url.endsWith("/start"))).toHaveLength(1);
+    });
+    expect(screen.getByTestId("tasks-consent-record")).toHaveTextContent(
+      PLANNED_RUN.id.slice(0, 12),
+    );
+
+    // A different plan arrives. It is a different run, and the consent that
+    // was given does not reach it.
+    await user.click(screen.getByRole("button", { name: /Modelden plan oner/ }));
+    await screen.findByTestId("tasks-model-outcome");
+    await waitFor(() => {
+      expect(screen.getByTestId("tasks-consent-record")).toHaveTextContent(
+        SECOND_RUN.id.slice(0, 12),
+      );
+    });
+    expect(screen.getByTestId("tasks-consent-record")).toHaveTextContent(
+      "kendi onayini ister",
+    );
+
+    // ...and pressing again consents to, and carries out, the plan on screen.
+    // A start that reached for the previously consented id would be running
+    // something nobody looked at.
+    await user.click(screen.getByRole("button", { name: "Onayla ve baslat" }));
+    await waitFor(() => {
+      expect(sent.filter((entry) => entry.url.endsWith("/start"))).toHaveLength(2);
+    });
+    const starts = sent
+      .filter((entry) => entry.url.endsWith("/start"))
+      .map((entry) => entry.url);
+    expect(starts[1]).toBe(`/api/tasks/${TASK.id}/runs/${SECOND_RUN.id}/start`);
+    expect(starts[1], "the second press may not re-run the first plan").not.toContain(
+      PLANNED_RUN.id,
+    );
+  }, 20_000);
+
+  it("keeps the cost of the one press beside the button that spends it", async () => {
+    stub({ ...runsFor([]), task: { ...TASK, state: "suggested" } });
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    const cost = screen.getByTestId("tasks-primary-cost");
+    expect(cost).toBeVisible();
+    expect(cost).toHaveTextContent(/bir model turu/i);
+    expect(cost).toHaveTextContent(/maliyet/i);
   });
 });

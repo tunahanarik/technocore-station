@@ -1348,6 +1348,20 @@ export async function proposeModelPlan(input: {
     readonly kind: string;
     readonly arguments: Readonly<Record<string, string>>;
   }[];
+  /**
+   * Judge the plan by the files it promises, without naming them here.
+   *
+   * The caller **cannot** name them: the promise is read off the write calls
+   * the model proposes, so it does not exist until the turn has happened.
+   * This flag is the person saying *what* should be checked; the product
+   * derives *which* files from the plan, and the model is still not asked for
+   * a criterion. It is what stops a proposed plan reporting "uygulanmadi"
+   * forever without somebody hand-writing a condition first.
+   *
+   * The server ignores it when `acceptance` is non-empty - an explicit choice
+   * is never added to - so a caller sends one or the other, never both.
+   */
+  readonly checkPromisedFiles?: boolean;
 }): Promise<ModelProposalResponse> {
   return mutate(
     `/api/tasks/${encodeURIComponent(input.taskId)}/model-plan`,
@@ -1358,6 +1372,7 @@ export async function proposeModelPlan(input: {
         kind: entry.kind,
         arguments: { ...entry.arguments },
       })),
+      check_promised_files: input.checkPromisedFiles ?? false,
     },
     MODEL_PLAN_TIMEOUT_MS,
   );

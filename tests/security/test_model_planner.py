@@ -1858,3 +1858,64 @@ def test_the_wire_cap_on_an_instruction_is_the_service_cap(
         if getattr(item, "max_length", None) is not None
     ]
     assert caps == [MAX_INSTRUCTION_CHARS]
+
+
+def test_the_promise_becomes_the_criterion_when_a_person_asks_for_it(
+    planner, agent, task: TaskView  # type: ignore[no-untyped-def]
+) -> None:
+    """Two clicks, and still nobody's criterion but the person's.
+
+    A person cannot name the files in advance: the promise is read off the
+    write calls the model proposes, so it does not exist until the turn has
+    happened. The flag is them saying *what* should be checked; the product
+    reads *which* files off the plan. The model is still not asked.
+    """
+    service, _ = planner([_tool_call_body([_write_call("rapor.json")]), _closing_body()])
+    view = service.propose(task.id, check_promised_files=True)
+
+    run = agent.get_run(view.run_id)
+    assert [
+        (item.kind, item.argument_map.get("name")) for item in run.acceptance
+    ] == [("artifact_exists", "rapor.json")]
+    agent.start_run(view.run_id)
+    assert agent.get_run(view.run_id).test_result_state == "passed"
+
+
+def test_an_explicit_choice_is_never_added_to(
+    planner, agent, task: TaskView  # type: ignore[no-untyped-def]
+) -> None:
+    """A person who named their conditions has said what they want judged."""
+    service, _ = planner([_tool_call_body([_write_call("rapor.json")]), _closing_body()])
+    view = service.propose(
+        task.id,
+        acceptance_conditions=(("artifact_is_json", {"name": "rapor.json"}),),
+        check_promised_files=True,
+    )
+
+    assert [item.kind for item in agent.get_run(view.run_id).acceptance] == [
+        "artifact_is_json"
+    ]
+
+
+def test_a_plan_that_promises_nothing_earns_no_verdict_from_the_flag(
+    planner, agent, task: TaskView  # type: ignore[no-untyped-def]
+) -> None:
+    """The flag cannot manufacture a pass.
+
+    A read-only plan promises no file, so there is nothing to check and the
+    verdict stays ``not_implemented``. This is the case the owner actually
+    met - three read tools and a green tick - and the flag must not turn it
+    into one.
+    """
+    service, _ = planner(
+        [
+            _tool_call_body([("read_run_status", {})]),
+            _closing_body(),
+        ]
+    )
+    view = service.propose(task.id, check_promised_files=True)
+
+    run = agent.get_run(view.run_id)
+    assert run.acceptance == ()
+    agent.start_run(view.run_id)
+    assert agent.get_run(view.run_id).test_result_state == "not_implemented"

@@ -166,6 +166,7 @@ def propose_plan(
             acceptance_conditions=tuple(
                 (item.kind, dict(item.arguments)) for item in body.acceptance
             ),
+            check_promised_files=body.check_promised_files,
         )
     except RunError as exc:
         raise _refuse(exc) from exc

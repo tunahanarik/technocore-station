@@ -725,7 +725,7 @@ riski (A1-R1) yeniden değerlendirilmedi ve tarayıcı QA borcu artmadı.
 Activity Desk `Card` + `Alert` + `Separator` + `Button` + `Checkbox` +
 `TextField`/`Label`/`Input`/`TextArea` ve `StatusPill` üzerinden `Chip` ile
 kuruldu. Bir `Table` istenmedi: her çalışma satırının altında plan özeti, dört
-alan, adım listesi, dört onay ve üç kontrol vardır ve bunlar bir hücreye
+alan, adım listesi ve harcama satırı vardır ve bunlar bir hücreye
 sığmaz. Böylece CSP inline-style hash riski (A1-R1) yeniden değerlendirilmedi
 ve tarayıcı QA borcu artmadı.
 
@@ -965,11 +965,16 @@ tamamına** uygular: "dogrulanmis itibar", "itibar puani", "uygunluk puani",
 Bölüm `src/pages/TasksPage.tsx` → `components/tasks/TasksPanel.tsx`. Akış tek
 yönlüdür ve her adımı kullanıcı başlatır:
 
-> görevi seç → **"sırada ne var" satırını oku** → o tek adımı yap → (plan yaz,
-> çalıştırmaz) → dört onay → çalıştır → durdur / devam et
+> görevi seç → **"sırada ne var" satırını oku** → **"Bu isi yap"** → dört
+> cümleyi oku → **"Onayla ve baslat"** → durdur
 
-Ekranın geri kalanı silinmedi: iş göremeyen her blok tek satırlık bir özete
-katlanır ve istenince açılır (§13.0.2).
+**İki basış.** Önce yedi eylemdi ("Onaya al" → ölçüt seç → "Modelden plan
+oner" → dört onay kutusu → "Onayli plani calistir") ve sahibi ölçülmüş
+raporunda iş yaptırmayı "eziyet" diye adlandırdı. Yediyi ikiye indiren şey bir
+kuralın gevşetilmesi değil, iki eylemin birleştirilmesidir (§13.4).
+
+Ekranın geri kalanı silinmedi: uzun yol da dâhil her ikincil blok tek satırlık
+bir özete katlanır ve istenince açılır (§13.0.2).
 
 ### 13.0 "Sırada ne var" satırı ve ilerlemeli açılım
 
@@ -1016,11 +1021,11 @@ Görev ayrıntısının **ilk** satırı (`tasks-next-step`, kontrol adı
 
 | Durum | Sonraki adım (özet) | Kontrol | Bölüm |
 |---|---|---|---|
-| `suggested` | Görevi onaya al | "Onaya al" | Durum degisikligi |
-| `awaiting_approval` (kayıtlı plan yok) | Modelden plan iste | "Modelden plan oner (calistirmaz)" | Modelden plan onerisi |
-| `awaiting_approval` (kayıtlı plan **var**) | Dört onayı ver, sonra çalıştır | "Onayli plani calistir" | Calismalar |
+| `suggested` | Onaya al **ve** modelden plan iste (tek basış) | "Bu isi yap" | Bu gorevi yaptir |
+| `awaiting_approval` (kayıtlı plan yok) | Modelden plan iste | "Bu isi yap" | Bu gorevi yaptir |
+| `awaiting_approval` (kayıtlı plan **var**) | Dört cümleyi oku, tek basışla onayla ve çalıştır | "Onayla ve baslat" | Bu gorevi yaptir |
 | `running` | Durdur | "Durdur" | Calismalar |
-| `paused` | Onaylı kapsamda sürdür | "Devam et" | Calismalar |
+| `paused` | Dört cümleyi oku, tek basışla onayla ve sürdür | "Onayla ve devam et" | Bu gorevi yaptir |
 | `blocked` | Engel kalktıysa yeniden onaya al | "Onaya al" | Durum degisikligi |
 | `failed` | — (son durum) | yok | yok |
 | `review_needed` | Yayın hazırlığını değerlendir | "Yayin hazirligini degerlendir (durumu istemez)" | Yayin hazirligi |
@@ -1034,9 +1039,17 @@ değiştirmesi. Onuncu bir durum, etiketi olup sonraki adımı olmadığında
 `deriveNextStep` üzerinde kırmızı verir (mutasyonla ölçüldü) — ayrıca
 `Record<TaskStateName, TaskNextStep>` derleme hatası verir.
 
-**"Durum degisikligi" bloğu yukarı taşındı**: dokuz durumun dördünde sonraki
-adım oradadır ve daha önce ekrandaki her açıklamanın altındaydı. Beş geçişin
-kendisi değişmedi; yalnız kullanıcının onlarla ne zaman karşılaştığı değişti.
+**"Bu gorevi yaptir" bloğu katlanmaz.** İki birincil kontrol ve — çalıştırma
+söz konusuysa — dört onay cümlesi orada, açıkta, "sırada ne var" satırının
+hemen altında durur. `derivePrimaryAction` bu bloğun içeriğini görevin **kendi
+durumundan ve kendi çalışmalarından** türetir: kayıtlı bir plan yoksa
+çalıştırma kontrolü **hiç çizilmez** — devre dışı bir düğme değil, olmayan bir
+düğme. Test: `TasksPanel.test.tsx::offers no start control at all until a plan
+is recorded` (mutasyonla ölçüldü).
+
+**"Durum degisikligi" bloğu ikincildir** ama silinmedi: beş geçişin beşi de
+yerindedir ve `blocked` ile `ready_to_publish` durumlarında sonraki adım hâlâ
+oradadır.
 
 #### 13.0.2 İlerlemeli açılım (native `details`/`summary`)
 
@@ -1052,8 +1065,8 @@ kendi kuralıdır:
 |---|---|---|
 | Yurutme durumu, Butce ve tavan, Guven siniri, Kesilen calismalar, Dort alan, Calisma alani | hiçbiri | bu bloklarda **kontrol yoktur** |
 | Yayin hazirligi | `review_needed` | kapı `transition(READY_TO_PUBLISH)` çağırır; bu kenar yalnız `review_needed`'dan tanımlı |
-| Modelden plan onerisi, Basari olcutu | `awaiting_approval` | planlayıcı bu durum dışındaki öneriyi bütünüyle reddeder |
-| Calismalar | `awaiting_approval`, `running`, `paused` | başlat / durdur / devam, üç çalışma durumuna aittir |
+| Modelden plan onerisi, Basari olcutu | hiçbiri (**ikincil**) | iki birincil kontrol aynı işi iki basışta yapar; bu iki blok elle yürütülen uzun yolu tutar, kontrolleri çalışır ve hiçbiri kaldırılmadı |
+| Calismalar | `running`, **ve ekranda yürüyen bir çalışma varken** | "Durdur" oradadır; bir çalışma sürerken onu kesecek tek kontrolün katlanması, açılırın bir şeyi geri alması olurdu |
 | Kullanici kabulu, Public paylasim isareti | `suggested` ve `awaiting_approval` **dışında** | rotaların hiçbir durum ön koşulu **yoktur** ve bu satır bir ön koşul iddiası değildir: iki blok o iki durumda kapanır çünkü orada kabul edilecek bir paket ve paylaşılacak bir gönderim henüz yoktur. İkisi de her durumda açılabilir |
 
 Son iki satır bilerek öyle: ilk denemede "kayıtlı çalışma yoksa kabul
@@ -1062,10 +1075,14 @@ bir insanın paketi kabul ettiği durumdur. Backend'in koymadığı bir ön koş
 ekranda varmış gibi göstermek, koyduğu bir ön koşulu gizlemekle aynı sınıf
 yalandır; bu yüzden bu iki blok hiç katlanmaz.
 
-**Katlamak asla bir kapı değildir.** Açılan bloktaki kontrollerin ön koşulları
-birebir aynıdır: dört onay dört onaydır, "Onayli plani calistir" hâlâ
-dördü işaretlenmeden `isDisabled`'dır, ve hiçbir kontrol bu turda
-kolaylaşmadı.
+**Katlamak asla bir kapı değildir.** Katlanan bloklardaki kontrollerin ön
+koşulları birebir aynıdır ve hiçbiri kaldırılmadı: "Modelden plan oner
+(calistirmaz)" hâlâ bir tur harcar, ölçüt seçici hâlâ seçilen koşulları
+gönderir. Dört onay da dört onaydır: dört cümle ekranda, açıkta,
+**düğmenin hemen üstünde** durur (§13.4). İki blok "kontrol yok" demez —
+`SECONDARY_HERE` cümlesi kontrollerin **çalıştığını** açıkça yazar, çünkü
+sahip olduğu bir yeteneği gizleyen ekran, olmayan bir ön koşulu iddia eden
+ekranla aynı sınıf yalandır.
 
 Testler iki katmanda ve **bilerek farklı şeyleri** ölçer:
 
@@ -1089,9 +1106,11 @@ Testler iki katmanda ve **bilerek farklı şeyleri** ölçer:
 | (mount) | `fetchAgentSurface` `GET /api/tasks/surface` + `fetchTasks` `GET /api/tasks` | 15 sn (varsayılan) | "Gorev yuzeyi okunuyor..." | `ErrorRegion` + "Yeniden dene" |
 | Görev seçimi (radio) | `fetchTaskRuns` `GET /api/tasks/{id}/runs` | 15 sn | (radio devre dışı) | `ErrorRegion`, retry yok |
 | Durum düğmeleri (5) | `transitionTask` `POST /transition` | 15 sn | (düğmeler devre dışı) | `ErrorRegion`, retry yok |
-| Onayli plani calistir | `startTaskRun` `POST /runs/{id}/start` | **150 sn** | "Calistiriliyor..." | `ErrorRegion`, retry yok |
+| **Bu isi yap** | `transitionTask` `POST /transition` (yalnız `suggested` iken) **sonra** `proposeModelPlan` `POST /model-plan` | 15 sn + **60 sn** | "Yapiliyor..." | `ErrorRegion`; iki hata başlığı, §13.6.1 |
+| **Onayla ve baslat** | `startTaskRun` `POST /runs/{id}/start` | **150 sn** | "Calistiriliyor..." | `ErrorRegion`, retry yok |
 | Durdur | `stopTaskRun` `POST /runs/{id}/stop` | 15 sn | "Durduruluyor..." | `ErrorRegion`, retry yok |
-| Devam et | `resumeTaskRun` `POST /runs/{id}/resume` | **150 sn** | "Surduruluyor..." | `ErrorRegion`, retry yok |
+| **Onayla ve devam et** | `resumeTaskRun` `POST /runs/{id}/resume` | **150 sn** | "Surduruluyor..." | `ErrorRegion`, retry yok |
+| Modelden plan oner (calistirmaz) | `proposeModelPlan` `POST /model-plan` | **60 sn** | "Tur harcaniyor..." | `ErrorRegion`, retry yok |
 
 Başlatma ve devam etme zaman aşımı uzundur çünkü **sunucu isteği açık tutar**:
 arkada zamanlayıcı ve arka plan görevi yoktur (SI-272), çalışma isteğin kendi
@@ -1160,23 +1179,45 @@ Durum etiketleri: `dogrulandi` / `engelli` / `uygulanmadi`. Üçüncüsü bir bo
 değil bir değerdir: yapılmamış bir gereksinim asla geçmiş sayılmaz ve bir ürün
 eksiği bir kullanıcı hatası gibi gösterilmez.
 
-### 13.4 Onay akışı
+### 13.4 Onay akışı: dört cümle, tek basış
 
-Bir plan **dört ayrı onay** ister ve dördü de işaretlenmeden "Onayli plani
-calistir" düğmesi `isDisabled` kalır:
+Bir plan hâlâ **dört ayrı onay** ister ve dördü de kullanıcının önüne
+konmadan hiçbir şey çalışmaz:
 
 1. plan (adımlar, sözü verilen çıktılar, başarı ölçütü),
 2. veri paylaşımı (yalnız onaylanmış girdi okunur, hiçbir şey dışarı gitmez),
 3. çalışma alanı (dosyalar yalnız bu görevin alanında oluşur),
 4. bütçe (tavan aşılırsa çalışma durur).
 
-**Onaylar bir oturuma değil bir plana aittir.** Kod bunu bir hatırlatmayla
-değil yapısal olarak sağlıyor: onay durumu bir `run id` ile anahtarlanır, ve
-farklı bir plan **yeni bir çalışmadır** (backend plan düzenlemeye izin vermez,
-ADR-0008 §5.1). Dolayısıyla yeniden planlamak onayları "sıfırlamaz" — yeni
-çalışma zaten onaysız doğar. Test:
-`TasksPanel.test.tsx::says a change of scope needs a new approval, and a new
-plan is unapproved`.
+Değişen **kaç eylem** olduğudur, **neye onay verildiği** değil. Dört ayrı onay
+kutusu yerine, aynı dört cümle `tasks-consent-statements` listesinde —
+katlanmamış, gizlenmemiş, hiçbir açılırın içinde olmayan bir `ul` içinde —
+**düğmenin hemen üstünde** durur ve tek bir kasıtlı basış dördünü birden
+verir. Kural aynen ayakta: **bir kişiye dört belirli şey gösterilir ve bir şey
+çalışmadan önce onaylar.**
+
+Testlerle sabitlenenler:
+
+- dört cümle DOM'da, **görünür** ve kontrolün **üstünde**
+  (`TasksPanel.test.tsx::shows the four consent statements, visible,
+  immediately above the button`, ve gerçek tarayıcıda
+  `agent.spec.ts::still shows the four statements before a proposed plan may
+  be carried out`);
+- **kayıtlı bir plan yoksa kontrol hiç çizilmez** — devre dışı değil, yok
+  (`::offers no start control at all until a plan is recorded`, mutasyonla
+  ölçüldü);
+- çalıştırmanın **tek yolu** o kontroldür; bir öneri kendini başlatamaz
+  (`::makes a model-proposed plan meet the same four statements as a written
+  one`);
+- **onay bir plana aittir, oturuma değil.** Onay bir `run id` ile
+  anahtarlanır; basış her zaman *ekrandaki* plana onay verir ve onu çalıştırır,
+  ekranın son tuttuğu kimliğe değil. Farklı bir plan **yeni bir çalışmadır**
+  (backend plan düzenlemeye izin vermez, ADR-0008 §5.1), yani yeniden
+  planlamak onayı "sıfırlamaz" — yeni çalışma zaten onaysız doğar ve
+  `tasks-consent-record` satırı bunu adıyla yazar. Testler:
+  `::does not let a second plan inherit the first plan's consent` (mutasyonla
+  ölçüldü) ve `::says a change of scope needs a new approval, and a new plan
+  is unapproved`.
 
 Kapsam içindeki küçük ve güvenli dosya işlemleri için adım adım yeniden onay
 istenmez; bu, ekranda `tasks-scope-change-<run>` satırında yazılıdır.
@@ -1189,8 +1230,8 @@ istenmez; bu, ekranda `tasks-scope-change-<run>` satırında yazılıdır.
   `atlandi` fazı ve backend'in kendi cümlesiyle ekranda görünür. Test:
   `TasksPanel.test.tsx::stops a run, and shows that the late result produced no
   side effect`.
-- **Devam et** yalnız `paused` fazında ve **yalnız dört onay verilmişken**
-  etkindir; onaylı kapsama yeni adım eklemez.
+- **Onayla ve devam et** yalnız `paused` durumunda ve **yalnız aynı dört cümle
+  ekranda, düğmenin üstünde** çizilir; onaylı kapsama yeni adım eklemez.
 - **Çökme sonrası otomatik devam yoktur.** `interrupted_runs` yalnızca
   listelenir (`resumed_any` tipi zaten `false`), ve ekran bunu boş listede bile
   yazar — bir uyarının yalnızca kötü bir şey olduğunda görünmesi, o uyarıyı
@@ -1208,6 +1249,35 @@ içindedir, yani onaylanmış bir plana sonradan eklemek onayı geçersiz kılar
 "Modelden plan oner (calistirmaz)" bir tur harcar ve `POST /model-plan` yapar.
 Çalıştırmak ayrı bir istektir — bestecinin iki onay kalıbının aynısı
 (ADR-0002 §2).
+
+#### 13.6.1 "Bu isi yap": tek basış, iki mevcut çağrı
+
+Yeni rota yoktur ve gerekmez. Düğme, kullanıcının elle yaptığı iki işi sırayla
+yapar: görev `suggested` ise `transitionTask(awaiting_approval)`, sonra
+`proposeModelPlan`. **Hiçbir şey çalıştırmaz**; bir turun varabileceği en iyi
+son, `planned` fazında kaydedilmiş bir plandır.
+
+İstek gövdesi üç alandır: `instruction`, `acceptance: []` ve
+`check_promised_files: true`. Üçüncüsü sonucun sonsuza kadar "uygulanmadi"
+kalmasını engelleyen şeydir: ürün, modelin önerdiği **yazma çağrılarından**
+sözü verilen dosyaları okur ve planı onların varlığıyla denetler. Kişi *neyin*
+denetleneceğini söyler, ürün *hangi dosyaların* olduğunu plandan türetir, ve
+modele yine bir ölçüt sorulmaz. `acceptance` bilerek boştur: açık bir seçime
+hiçbir şey **eklenmez**, o yüzden ikisini birlikte göndermek bir çelişki
+olurdu. Elle ölçüt seçen kişi uzun yolu kullanır ve seçtiği koşullar aynen
+gider (`check_promised_files: false`).
+
+**Maliyet düğmenin yanındadır** (`tasks-primary-cost`): bir model turu harcanır
+ve o turun sağlayıcıda bir para maliyeti vardır.
+
+**İki yarı ayrı raporlanır.** Geçiş tutup tur tutmazsa hata başlığı görevin
+**taşındığını** söyler ("Gorev onaya alindi, plan kaydedilmedi: model turu
+tamamlanamadi ve yeniden basmak bir model turu daha harcayabilir"). "Hiçbir şey
+olmadı" okuyan biri yeniden basar ve bu ikinci bir tur harcayabilir; bu yüzden
+`Step` birliğinde `doWork` ve `doWorkAfterMove` **iki ayrı üyedir**. Yüzey
+mevcut `ErrorRegion`'dır; ikinci bir hata yüzeyi eklenmedi. Test:
+`TasksPanel.test.tsx::says the task moved when the turn fails after moving
+it`.
 
 Registry'de `path` ve `url` tipinde parametre yoktur: bir araca adres
 verilemez. Ekranda gösterilen parametre tipleri bunu doğrudan gösterir

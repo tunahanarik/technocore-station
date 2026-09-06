@@ -1960,6 +1960,15 @@ class ModelProposeRequest(StrictModel):
     acceptance: list[AgentAcceptanceConditionRequest] = Field(
         default_factory=list, max_length=8
     )
+    #: Judge the plan by the files it promises, without naming them here.
+    #:
+    #: The caller cannot name them: the promise is read off the write calls
+    #: the model proposes, so it does not exist until the turn has happened.
+    #: This flag is the person saying *what* should be checked; the product
+    #: derives *which* files from the plan, and the model is still not asked
+    #: for a criterion. Ignored when ``acceptance`` is non-empty, because an
+    #: explicit choice is not something to add to.
+    check_promised_files: bool = False
 
 
 class ModelProposalResponse(StrictModel):

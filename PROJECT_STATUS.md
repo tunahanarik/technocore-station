@@ -22,7 +22,12 @@
 > buldu ve *yaptıramadık*: koşu mesajı yazdı, composer onu göremiyordu, tek yol
 > baytları elle yeniden yazmaktı. İki yarım artık birleşti; **gönderim insan
 > eylemi kaldı**, registry'ye araç eklenmedi ve hedef odayı hâlâ kullanıcı
-> yazıyor. Dosyanın sonuna bakın.)
+> yazıyor.
+> **En son:** aynı oturumun üçüncü bulgusu — oda tarandı, model gerçek iş
+> buldu, kullanıcı onu seçti ve *yaptıramadı*: bir görevi başlatmak **yedi
+> eylemdi**. İkiye indi ("Bu isi yap" → dört cümleyi oku → "Onayla ve
+> baslat"); dört onay **dört cümle olarak ekranda, düğmenin üstünde** kaldı ve
+> hiçbir dürüstlük cümlesi silinmedi. Dosyanın sonuna bakın.)
 >
 > **Proje durumu: REVIEW_FIXES_IN_PROGRESS_CORE_AGENT_INCOMPLETE** — dosyanın sonuna
 > bakın.
@@ -4658,3 +4663,79 @@ gevşetilmedi.
 - Elle plan yolunu süren üç bileşen testi silinmedi, **model yolundan
   sürecek şekilde yeniden yazıldı**: aynı kural, hâlâ yapılabilen bir eylemle
   kanıtlanıyor.
+
+---
+
+## İki basış: bir görevi yaptırmak yedi eylemdi (6 Eylül 2026)
+
+Sahibinin ölçülmüş raporu: *"görev yaptırma kısmı tam bir eziyet abi 2-3 tıkla
+halledebileyim istiyorum … ben yap diyince ne gerekiyorsa her şeyi yapsın daha
+sonra ben başla diyince başlasın"*. Oda tarandı, model gerçek iş buldu,
+kullanıcı onu seçti — ve orada durdu.
+
+Yedi eylem: **Onaya al** → ölçüt seç → **Modelden plan oner** → dört onay
+kutusu → **Onayli plani calistir**. Her biri kendi başına savunulabilirdi;
+toplamı kusurdu.
+
+### İki kontrol
+
+| Kontrol | Ne yapar | Nerede |
+|---|---|---|
+| **"Bu isi yap"** | `suggested` ise `transitionTask(awaiting_approval)`, sonra `proposeModelPlan(check_promised_files: true, acceptance: [])`. **Hiçbir şey çalıştırmaz.** | "Bu gorevi yaptir" bloğu, "sırada ne var" satırının hemen altında, katlanmaz |
+| **"Onayla ve baslat"** | Dört onayı tek kasıtlı basışla verir ve çalışmayı başlatır | aynı blok; **dört cümle düğmenin hemen üstünde**, açıkta |
+
+Duraklamış bir çalışma için aynı kalıp: dört cümle ve **"Onayla ve devam et"**.
+
+Yeni rota yok, yeni istemci fonksiyonu yok. `proposeModelPlan`'a backend'in
+zaten taşıdığı `check_promised_files` alanı eklendi: ürün, modelin önerdiği
+yazma çağrılarından sözü verilen dosyaları okuyup planı onların varlığıyla
+denetliyor — sonucun sonsuza kadar "uygulanmadi" kalmasını durduran şey bu.
+`acceptance` bilerek boş gidiyor: açık bir seçime hiçbir şey eklenmez, ikisini
+birlikte göndermek çelişki olurdu.
+
+### Gevşetilmeyen kural
+
+**Bir kişiye dört belirli şey gösterilir ve bir şey çalışmadan önce onaylar.**
+Değişen kaç eylem olduğu, neye onay verildiği değil. Sabitlenenler:
+
+- dört cümle DOM'da, **görünür**, kontrolün **üstünde** ve hiçbir açılırın
+  içinde değil;
+- **kayıtlı bir plan yoksa çalıştırma kontrolü hiç çizilmez** — devre dışı
+  değil, yok. Mutasyon: `derivePrimaryAction` `completed` bir koşuyu da plan
+  saysın → `::offers no start control at all until a plan is recorded` kırmızı;
+- çalıştırmanın tek yolu o kontroldür; bir öneri kendini başlatamaz;
+- **farklı bir plan önceki onayı miras almaz.** Onay bir `run id` ile
+  anahtarlanır ve basış her zaman *ekrandaki* plana onay verip onu çalıştırır.
+  Mutasyon: basış hatırlanan onay kimliğini kullansın →
+  `::does not let a second plan inherit the first plan's consent` kırmızı.
+
+### Silinmeyenler
+
+`execution_unavailable` ve gerekçesi, "model onerir calistirmaz", "uretilmis
+bir dosya gecmis bir test degildir", tur maliyeti ve tavan cümlesi — hepsi
+yerinde. Ölçüt seçici, "Modelden plan oner (calistirmaz)" ve çalışma kartları
+**ikincil** oldu: katlandılar, kaldırılmadılar, ve özet satırları
+kontrollerinin hâlâ çalıştığını açıkça yazıyor. "Durdur" bir çalışma
+yürürken bulunduğu blok zorla açık kalıyor.
+
+Geçiş tutup tur tutmazsa hata başlığı görevin **taşındığını** söylüyor:
+"Gorev onaya alindi, plan kaydedilmedi: model turu tamamlanamadi ve yeniden
+basmak bir model turu daha harcayabilir". Yüzey mevcut `ErrorRegion`'dır;
+ikinci bir hata yüzeyi eklenmedi.
+
+### Yeniden yazılan testler
+
+Eski yedi adımlı yolu süren on üç bileşen testi ve dört e2e testi silinmedi;
+**yeni akıştan sürecek şekilde yeniden yazıldı** — aynı kural, hâlâ
+yapılabilen eylemlerle kanıtlanıyor. `approveAll` yerine `consentAndRun`
+geldi ve yardımcı, basmadan **önce** dört cümlenin ekranda olduğunu iddia
+ediyor. Yedi yeni test eklendi (iki basış, `check_promised_files`, taşınan
+görev, dört cümlenin yeri, kontrolün yokluğu, onay mirası, maliyet satırı) ve
+biri e2e'de gerçek tarayıcıda klavyeyle sürülüyor.
+
+### Kapılar
+
+ruff ×2 temiz · mypy temiz · **2797 pytest** · **493 Vitest** · **92
+Playwright** · 82 paketleme. SPA değişti, paketleme artefaktı yeniden
+derlendi. `tests/security/` altında hiçbir test atlanmadı, silinmedi veya
+gevşetilmedi; backend'e dokunulmadı.

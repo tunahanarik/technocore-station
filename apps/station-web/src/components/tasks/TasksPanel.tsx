@@ -117,7 +117,13 @@ type Step =
   | "modelLane"
   | "modelTurn"
   | "modelForget"
-  | "readiness";
+  | "readiness"
+  // The one press that moves a `suggested` task and then asks for a plan.
+  // Two members, not one, and the split is the whole point: "nothing
+  // happened" and "the first half happened" are different findings, and only
+  // the second one has to warn that pressing again may spend another turn.
+  | "doWork"
+  | "doWorkAfterMove";
 
 type Busy = Step | null;
 
@@ -136,6 +142,12 @@ const ERROR_TITLE: Record<Step, string> = {
   modelTurn: "Model turu tamamlanamadi",
   modelForget: "Model oturumu unutulamadi",
   readiness: "Yayin hazirligi degerlendirilemedi",
+  doWork: "Bu is baslatilamadi: gorev onaya alinamadi ve model turu istenmedi",
+  // Precise on purpose. The task really did move, and a person who read
+  // "nothing happened" here would press again - which may spend a turn the
+  // first press already paid for.
+  doWorkAfterMove:
+    "Gorev onaya alindi, plan kaydedilmedi: model turu tamamlanamadi ve yeniden basmak bir model turu daha harcayabilir",
 };
 
 /**
@@ -440,18 +452,32 @@ export interface TaskNextStep {
   readonly where: string;
 }
 
+/**
+ * The two controls this screen is built around, named once.
+ *
+ * They are constants because three places have to agree on the exact words: a
+ * button's label, the next-step line that tells a reader to look for it, and
+ * the table that derives which of them applies. A literal repeated three
+ * times is a literal that goes out of step twice.
+ */
+export const DO_THE_WORK_LABEL = "Bu isi yap";
+export const START_THE_PLAN_LABEL = "Onayla ve baslat";
+export const RESUME_THE_RUN_LABEL = "Onayla ve devam et";
+/** The block both controls live in; the next-step line names it verbatim. */
+export const PRIMARY_BLOCK_LABEL = "Bu gorevi yaptir";
+
 const NEXT_STEP: Record<TaskStateName, TaskNextStep> = {
   suggested: {
     action:
-      "Bu gorev bir tarama onerisidir ve bu durumda plan kaydedilemez, modelden plan istenemez. Once onaya alin.",
-    control: "Onaya al",
-    where: "Durum degisikligi",
+      "Tek dugmeye basin: gorev onaya alinir ve ayni basista modelden bir plan istenir. Bir model turu harcanir ve o turun saglayicida bir para maliyeti vardir. Hicbir sey calistirilmaz; calistirma ikinci ve ayri bir onaydir.",
+    control: DO_THE_WORK_LABEL,
+    where: PRIMARY_BLOCK_LABEL,
   },
   awaiting_approval: {
     action:
-      "Modelden bir plan isteyin. Bu bir tur harcar; oneri hicbir seyi calistirmaz ve calistirmak dort onaydan sonra ayri bir islemdir. Sonucun 'gecti' veya 'kaldi' olabilmesi icin once bir basari olcutu secin - yoksa sonuc 'uygulanmadi' kalir.",
-    control: "Modelden plan oner (calistirmaz)",
-    where: "Modelden plan onerisi",
+      "Gorev onaya alindi ama kaydedilmis bir plan yok. Tek dugmeye basin: modelden bir plan istenir, bir tur harcanir ve plan, soz verdigi dosyalarin varligiyla denetlenmek uzere kaydedilir. Hicbir sey calistirilmaz.",
+    control: DO_THE_WORK_LABEL,
+    where: PRIMARY_BLOCK_LABEL,
   },
   running: {
     action:
@@ -461,9 +487,9 @@ const NEXT_STEP: Record<TaskStateName, TaskNextStep> = {
   },
   paused: {
     action:
-      "Durdurulmus calismayi ayni onayli kapsamda surdurun. Devam yeni bir adim eklemez.",
-    control: "Devam et",
-    where: "Calismalar",
+      "Durdurulmus calismayi ayni onayli kapsamda surdurun. Dugmenin ustundeki dort cumleyi okuyun; tek basis o dort onayi birlikte verir ve calismayi surdurur. Devam yeni bir adim eklemez.",
+    control: RESUME_THE_RUN_LABEL,
+    where: PRIMARY_BLOCK_LABEL,
   },
   blocked: {
     action:
@@ -501,16 +527,16 @@ const NEXT_STEP: Record<TaskStateName, TaskNextStep> = {
  * In `awaiting_approval`, a recorded plan changes what comes next.
  *
  * The one refinement the table alone cannot make, and it is derived from the
- * task's own runs rather than from a second state: "write a plan" and "run
- * the plan you already wrote" are different sentences, and pointing a person
- * at the composer when a plan is already sitting there unapproved is the same
+ * task's own runs rather than from a second state: "ask for a plan" and "run
+ * the plan you already have" are different sentences, and pointing a person
+ * at the planner when a plan is already sitting there unconsented is the same
  * class of mistake this whole line exists to fix.
  */
 const RUN_THE_RECORDED_PLAN: TaskNextStep = {
   action:
-    "Kaydedilmis bir plan var. Dort onayi ayri ayri verin, sonra plani calistirin. Onaylar bu plana aittir; farkli bir plan yeni bir calismadir ve yeniden onay ister.",
-  control: "Onayli plani calistir",
-  where: "Calismalar",
+    "Kaydedilmis bir plan var. Dugmenin hemen ustundeki dort cumleyi okuyun; tek basis o dort onayi birlikte verir ve calismayi baslatir. Onay bu plana aittir; farkli bir plan yeni bir calismadir ve kendi onayini ister.",
+  control: START_THE_PLAN_LABEL,
+  where: PRIMARY_BLOCK_LABEL,
 };
 
 /** Derive the next step from the task's own state and its own runs. */
@@ -518,10 +544,67 @@ export function deriveNextStep(
   state: TaskStateName,
   runs: readonly AgentRunStatus[],
 ): TaskNextStep {
-  if (state === "awaiting_approval" && runs.some((run) => run.phase === "planned")) {
+  if (state === "awaiting_approval" && lastInPhase(runs, "planned") !== null) {
     return RUN_THE_RECORDED_PLAN;
   }
   return NEXT_STEP[state];
+}
+
+// --- the two controls ------------------------------------------------------
+
+/**
+ * The one act this task needs next, and the plan it would act on.
+ *
+ * The whole of this screen's answer to a measured defect: a person who had
+ * scanned rooms, found real work and picked it still could not get it done.
+ * Seven actions stood in the way - "Onaya al", a criterion, "Modelden plan
+ * oner", four separate checkboxes and "Onayli plani calistir" - and each of
+ * them was correct on its own.
+ *
+ * Three properties, and each of them is a test:
+ *
+ * * **`start` is impossible without a recorded plan.** It is not a disabled
+ *   button: there is no `run` to name, so there is no action at all. That is
+ *   what makes "no proposal may start itself" a shape rather than a rule
+ *   somebody has to keep;
+ * * **the plan is read from the runs, every time.** Never remembered from the
+ *   last press: a *different* plan is a different run, and a consent given to
+ *   one may not carry the next one into a start nobody looked at;
+ * * **it is derived here, not written into the JSX**, for the same reason
+ *   {@link deriveNextStep} is: the next-step line and the control it names
+ *   have to be the same decision, or the line points at a button that is not
+ *   there.
+ */
+export type PrimaryAction =
+  | { readonly kind: "do"; readonly label: string }
+  | { readonly kind: "start"; readonly label: string; readonly run: AgentRunStatus }
+  | { readonly kind: "resume"; readonly label: string; readonly run: AgentRunStatus };
+
+/** The last run in a given phase, or `null`. Latest wins: a re-plan is newer. */
+function lastInPhase(
+  runs: readonly AgentRunStatus[],
+  phase: AgentRunPhaseName,
+): AgentRunStatus | null {
+  const matching = runs.filter((run) => run.phase === phase);
+  return matching.length === 0 ? null : matching[matching.length - 1]!;
+}
+
+export function derivePrimaryAction(
+  state: TaskStateName,
+  runs: readonly AgentRunStatus[],
+): PrimaryAction | null {
+  if (state === "suggested") return { kind: "do", label: DO_THE_WORK_LABEL };
+  if (state === "awaiting_approval") {
+    const planned = lastInPhase(runs, "planned");
+    return planned === null
+      ? { kind: "do", label: DO_THE_WORK_LABEL }
+      : { kind: "start", label: START_THE_PLAN_LABEL, run: planned };
+  }
+  if (state === "paused") {
+    const paused = lastInPhase(runs, "paused");
+    if (paused !== null) return { kind: "resume", label: RESUME_THE_RUN_LABEL, run: paused };
+  }
+  return null;
 }
 
 // --- progressive disclosure ------------------------------------------------
@@ -600,17 +683,37 @@ const BLOCK_ACTS: Record<
   // expand on demand everywhere else.
   acceptance: (task) => task?.state !== "suggested" && task?.state !== "awaiting_approval",
   share: (task) => task?.state !== "suggested" && task?.state !== "awaiting_approval",
-  model: (task) => task?.state === "awaiting_approval",
-  composer: (task) => task?.state === "awaiting_approval",
-  runs: (task) =>
-    task?.state === "awaiting_approval" ||
-    task?.state === "running" ||
-    task?.state === "paused",
+  // Three blocks that *can* act and are folded anyway, which is the one place
+  // this table stopped being about capability.
+  //
+  // The two controls above them carry a task from a scan suggestion to a
+  // finished run, so these three are the second way of doing the same thing:
+  // choose the criterion by hand, spend the turn by hand, start the plan by
+  // hand. Nothing here is removed and nothing here got harder to press - a
+  // person who wants the long road opens the heading and takes it. What they
+  // stopped doing is standing between a person and the one button that
+  // answers the question they arrived with.
+  model: () => false,
+  composer: () => false,
+  // `running` is the exception: the only control that can act on a run in
+  // flight is "Durdur", and it lives here.
+  runs: (task) => task?.state === "running",
 };
 
 /** Said of every block that has nothing to press, so the absence is a claim. */
 const NO_CONTROL_HERE =
   "Bu bolumde basilacak bir kontrol yoktur: yalnizca olculmus bilgi ve gerekce. Hicbir cumle silinmedi; basligi secerek tamamini acabilirsiniz.";
+
+/**
+ * Said of the three blocks that can act and are folded anyway.
+ *
+ * The distinction matters and is why this is not {@link NO_CONTROL_HERE}:
+ * those blocks have nothing to press, and these have controls that work
+ * exactly as they did. Calling them "closed" without saying they still work
+ * would be the screen hiding a capability it still has.
+ */
+const SECONDARY_HERE =
+  "Buradaki kontroller calisir ve hicbiri kaldirilmadi; yukaridaki iki dugme ayni isi daha kisa yoldan yapar. Bu bolum ayrintiyi ve elle yurutulen uzun yolu tutar: basligi secerek acabilirsiniz.";
 
 /**
  * Why a block is closed, in states rather than in adjectives.
@@ -641,9 +744,9 @@ const BLOCK_CLOSED_REASON: Record<BlockId, (task: TaskStatusResponse | null) => 
   // the type is what stops a thirteenth block shipping without a reason.
   acceptance: () => "",
   share: () => "",
-  model: (task) => needsState(task, ["awaiting_approval"]),
-  composer: (task) => needsState(task, ["awaiting_approval"]),
-  runs: (task) => needsState(task, ["awaiting_approval", "running", "paused"]),
+  model: () => SECONDARY_HERE,
+  composer: () => SECONDARY_HERE,
+  runs: () => SECONDARY_HERE,
 };
 
 /**
@@ -715,7 +818,21 @@ function blockSummary(base: string, whyClosed: string): string {
   return whyClosed === "" ? base : `${base} ${whyClosed}`;
 }
 
-/** The four approvals one plan needs before it may be carried out. */
+/**
+ * The four things a person is shown, and consents to, before a plan runs.
+ *
+ * They used to be four checkboxes and are now four sentences above one
+ * button, and the rule did not move: **a person is shown these four specific
+ * things and consents before anything runs.** What changed is that the
+ * consent is one deliberate act instead of five, which is a claim about the
+ * number of clicks and not about what is being agreed to. The four are still
+ * four, still in the open, still above the control, and still unreadable-past
+ * - nothing here is behind a disclosure.
+ *
+ * The set stays a list rather than a paragraph for the reason the four
+ * evidence fields do: four questions folded into prose are four questions a
+ * reader skips.
+ */
 type ApprovalKey = "plan" | "data" | "workspace" | "budget";
 
 const APPROVALS: readonly { readonly key: ApprovalKey; readonly label: string }[] = [
@@ -741,16 +858,6 @@ const APPROVALS: readonly { readonly key: ApprovalKey; readonly label: string }[
   },
 ];
 
-const APPROVAL_KEYS: readonly ApprovalKey[] = APPROVALS.map((entry) => entry.key);
-
-type ApprovalState = Readonly<Record<ApprovalKey, boolean>>;
-
-const NO_APPROVALS: ApprovalState = {
-  plan: false,
-  data: false,
-  workspace: false,
-  budget: false,
-};
 
 /**
  * The model lane, in this surface's own words.
@@ -1106,34 +1213,28 @@ function EvidenceFields({
   );
 }
 
-/** One run: its plan, its steps, its usage and its ending, kept apart. */
+/**
+ * One run: its plan, its steps, its usage and its ending, kept apart.
+ *
+ * The record of a run, and - apart from "Durdur" - no longer a place a run
+ * starts. Consent and starting moved to the one block above this one, so a
+ * person meets the four statements and the control that acts on them in the
+ * same place, rather than scrolling to the bottom of a list of every plan
+ * this task ever had to find the four ticks for one of them.
+ */
 function RunCard({
-  approvals,
-  approvalRunId,
-  busy,
-  onApprove,
-  onResume,
-  onStart,
   onStop,
   run,
   stopStatement,
   executionPending,
   stopPending,
 }: {
-  readonly approvals: ApprovalState;
-  readonly approvalRunId: string;
-  readonly busy: Busy;
-  readonly onApprove: (runId: string, key: ApprovalKey) => void;
-  readonly onResume: (runId: string) => void;
-  readonly onStart: (runId: string) => void;
   readonly onStop: (runId: string) => void;
   readonly run: AgentRunStatus;
   readonly stopStatement: string;
   readonly executionPending: boolean;
   readonly stopPending: boolean;
 }) {
-  const approvedHere = approvalRunId === run.id;
-  const fullyApproved = approvedHere && APPROVAL_KEYS.every((key) => approvals[key]);
   const scopes = [...new Set(run.steps.map((item) => item.scope))];
 
   return (
@@ -1278,68 +1379,17 @@ function RunCard({
         )} saniye tavan · eszamanlilik ${String(run.concurrency)}`}
       </p>
 
-      {/* The card already says "Bu plan bir cikti dosyasi soz vermedi", which
-          is a fact about the promise; a plan may promise nothing and still
-          write something. This is the stronger reading, taken from the step
-          scopes, and it sits above the four approvals so a person meets it
-          before spending them rather than after the run. */}
-      {run.phase === "planned" && run.expected_artifacts.length === 0 && !writesAnything(run) && (
-        <p
-          className="text-xs text-muted"
-          data-testid={`tasks-writes-nothing-${run.id}`}
-        >
-          Bu planin hicbir adimi yazma yetkisi tasimiyor: onaylanip
-          calistirilsa da hicbir dosya olusturmaz.
-        </p>
-      )}
-
-      {/* --- the four approvals, keyed to this run --------------------- */}
-      <fieldset className="flex flex-col gap-2 rounded-lg border border-border p-2">
-        <legend className="text-xs font-semibold text-foreground">
-          Bu plan icin dort onay
-        </legend>
-        {APPROVALS.map((approval) => (
-          <Checkbox
-            isDisabled={busy !== null}
-            isSelected={approvedHere && approvals[approval.key]}
-            key={approval.key}
-            onChange={() => onApprove(run.id, approval.key)}
-          >
-            <Checkbox.Content>
-              <Checkbox.Control>
-                <Checkbox.Indicator />
-              </Checkbox.Control>
-              {approval.label}
-            </Checkbox.Content>
-          </Checkbox>
-        ))}
-        <p className="text-xs text-muted" data-testid={`tasks-scope-change-${run.id}`}>
-          Onaylar bu plana aittir. Plan icindeki kucuk ve guvenli dosya
-          islemleri icin her adimda yeniden onay istenmez; kapsam veya risk
-          degisirse yeni bir plan kaydedilir ve yeni plan yeniden onay ister.
-        </p>
-      </fieldset>
-
+      {/* The one control that belongs to a single run rather than to the
+          task: a stop names *which* run to stop, and only a run in flight can
+          be stopped. Consent, starting and resuming are one press each, in
+          the block above; this card no longer offers a second way in. */}
       <div className="flex flex-wrap items-center gap-2">
-        <Button
-          isDisabled={busy !== null || run.phase !== "planned" || !fullyApproved}
-          onPress={() => onStart(run.id)}
-        >
-          {busy === "start" ? "Calistiriliyor..." : "Onayli plani calistir"}
-        </Button>
         <Button
           isDisabled={stopPending || (!executionPending && run.phase !== "running")}
           onPress={() => onStop(run.id)}
           variant="secondary"
         >
           {stopPending ? "Durduruluyor..." : "Durdur"}
-        </Button>
-        <Button
-          isDisabled={busy !== null || run.phase !== "paused" || !fullyApproved}
-          onPress={() => onResume(run.id)}
-          variant="secondary"
-        >
-          {busy === "resume" ? "Surduruluyor..." : "Devam et"}
         </Button>
       </div>
 
@@ -1352,6 +1402,147 @@ function RunCard({
         kesilen bir calisma listelenir, siz istemeden surdurulmez.
       </p>
     </li>
+  );
+}
+
+/**
+ * The two controls a person actually needs, and the consent one of them
+ * carries.
+ *
+ * This block exists because the screen it replaces was correct and unusable.
+ * Getting one scanned task done took seven actions - "Onaya al", pick a
+ * criterion, "Modelden plan oner", four checkboxes, "Onayli plani calistir" -
+ * and the owner's report was that having work done was an ordeal. Every one
+ * of those seven was defensible on its own; the sum of them was the defect.
+ *
+ * What is **not** relaxed, and each line below is the shape of it:
+ *
+ * * **the four statements are on screen, visible, above the control.** Not
+ *   folded, not behind a disclosure, not a link. A person is shown the same
+ *   four things they were shown before and consents to them before anything
+ *   runs; what changed is that the consent is one deliberate act rather than
+ *   five, which is a claim about clicks and not about what is agreed to;
+ * * **the control the consent belongs to does not exist until a plan does.**
+ *   `derivePrimaryAction` returns a `start` only when a run is recorded in
+ *   the `planned` phase, so this is an absence rather than a disabled button
+ *   - there is no run id to name, so there is nothing to press;
+ * * **the consent names its plan.** A different plan is a different run and
+ *   arrives unconsented; the record below says which plan the last consent
+ *   was given to, so "this is not the plan you approved" is readable rather
+ *   than merely true;
+ * * **the price is beside the button that charges it.** One model turn, and
+ *   a turn costs money at the provider. The ceiling sentence, the "model
+ *   proposes, does not run" sentence and the rest of the standing claims are
+ *   where they were - one heading away, deleted from nowhere.
+ */
+function PrimaryActionRegion({
+  action,
+  busy,
+  consentedRunId,
+  outcome,
+  onDoTheWork,
+  onConsentAndRun,
+}: {
+  readonly action: PrimaryAction;
+  readonly busy: Busy;
+  /** The plan the last consent on this screen was given to; "" when none. */
+  readonly consentedRunId: string;
+  /** A turn that produced no plan, so the press can report its own result. */
+  readonly outcome: ModelProposalResponse | null;
+  readonly onDoTheWork: () => void;
+  readonly onConsentAndRun: (action: PrimaryAction) => void;
+}) {
+  const pending = busy === "doWork" || busy === "start" || busy === "resume";
+  return (
+    <section
+      aria-label={PRIMARY_BLOCK_LABEL}
+      className="flex flex-col gap-2 rounded-lg border border-border p-3"
+      data-testid="tasks-primary-action"
+    >
+      <h4 className="text-xs font-semibold text-foreground">{PRIMARY_BLOCK_LABEL}</h4>
+
+      {action.kind === "do" ? (
+        <>
+          <div>
+            <Button isDisabled={busy !== null} onPress={onDoTheWork}>
+              {busy === "doWork" ? "Yapiliyor..." : action.label}
+            </Button>
+          </div>
+          <p className="text-xs text-muted" data-testid="tasks-primary-cost">
+            Bu dugme iki isi birlikte yapar: gorevi onaya alir ve modelden bir
+            plan ister. Bir model turu harcar ve o turun saglayicida bir para
+            maliyeti vardir; harcanan tur geri alinmaz. Hicbir sey
+            calistirilmaz - calistirmak, asagidaki dort cumleyi okuyup ikinci
+            dugmeye basmaktir.
+          </p>
+          {/* A turn that recorded no plan is reported here, where the press
+              was. The model block says the same thing at length; a person who
+              pressed this button must not have to go looking for the result
+              of their own press. */}
+          {outcome !== null && outcome.run_id === "" && (
+            <p className="text-xs text-muted" data-testid="tasks-primary-outcome">
+              {`${PROPOSAL_OUTCOME_LABEL[outcome.outcome]}. ${outcome.detail} Ayrinti "Modelden plan onerisi" bolumundedir.`}
+            </p>
+          )}
+        </>
+      ) : (
+        <>
+          {/* The card already says "Bu plan bir cikti dosyasi soz vermedi",
+              which is a fact about the promise; a plan may promise nothing and
+              still write something. This is the stronger reading, taken from
+              the step scopes, and it moved here with the consent it qualifies:
+              a person meets it before giving the consent rather than after the
+              run. */}
+          {action.run.phase === "planned" &&
+            action.run.expected_artifacts.length === 0 &&
+            !writesAnything(action.run) && (
+              <p
+                className="text-xs text-muted"
+                data-testid={`tasks-writes-nothing-${action.run.id}`}
+              >
+                Bu planin hicbir adimi yazma yetkisi tasimiyor: onaylanip
+                calistirilsa da hicbir dosya olusturmaz.
+              </p>
+            )}
+
+          <p className="text-xs text-muted">
+            {`Bu plan icin dort onay. Asagidaki dugmeye bir kez basmak bu dort cumlenin hepsini birlikte onaylar ve calismayi ${
+              action.kind === "resume" ? "surdurur" : "baslatir"
+            }.`}
+          </p>
+          <ul className="flex flex-col gap-1" data-testid="tasks-consent-statements">
+            {APPROVALS.map((approval) => (
+              <li className="text-xs text-foreground" key={approval.key}>
+                {`• ${approval.label}`}
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-muted" data-testid={`tasks-scope-change-${action.run.id}`}>
+            Onaylar bu plana aittir. Plan icindeki kucuk ve guvenli dosya
+            islemleri icin her adimda yeniden onay istenmez; kapsam veya risk
+            degisirse yeni bir plan kaydedilir ve yeni plan yeniden onay ister.
+          </p>
+          <p className="font-mono text-xs text-muted" data-testid="tasks-consent-record">
+            {consentedRunId === ""
+              ? `Bu ekranda henuz hicbir plana onay verilmedi. Ekrandaki plan: ${shortId(action.run.id)}.`
+              : consentedRunId === action.run.id
+                ? `Onay bu plana verildi: ${shortId(action.run.id)}.`
+                : `Onay baska bir plana verilmisti (${shortId(
+                    consentedRunId,
+                  )}). Ekrandaki plan ${shortId(action.run.id)} ve kendi onayini ister.`}
+          </p>
+          <div>
+            <Button isDisabled={busy !== null} onPress={() => onConsentAndRun(action)}>
+              {pending
+                ? action.kind === "resume"
+                  ? "Surduruluyor..."
+                  : "Calistiriliyor..."
+                : action.label}
+            </Button>
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 
@@ -1390,11 +1581,12 @@ export function TasksPanel() {
   const [gateRefusal, setGateRefusal] = useState("");
   const [gateMoved, setGateMoved] = useState(false);
 
-  // Approvals are keyed to a run id. A re-plan produces a *different* run, so
-  // it starts unapproved by construction rather than by a reset somebody has
-  // to remember to write.
-  const [approvalRunId, setApprovalRunId] = useState("");
-  const [approvals, setApprovals] = useState<ApprovalState>(NO_APPROVALS);
+  // The consent is keyed to a run id, exactly as the four checkboxes were. A
+  // re-plan produces a *different* run, so it arrives unconsented by
+  // construction rather than by a reset somebody has to remember to write -
+  // and the press always consents to the plan currently on screen, never to
+  // the one this field happens to hold.
+  const [consentedRunId, setConsentedRunId] = useState("");
 
   // --- Paket H3: the two fields a person fills --------------------------
   //
@@ -1453,8 +1645,7 @@ export function TasksPanel() {
     setCheckKind("");
     setCheckArgs({});
     setCheckDraft([]);
-    setApprovalRunId("");
-    setApprovals(NO_APPROVALS);
+    setConsentedRunId("");
     // A different task is a different planning session and a different gate.
     setProposal(null);
     setInstruction("");
@@ -1771,13 +1962,85 @@ export function TasksPanel() {
     }
   }
 
-  function approve(runId: string, key: ApprovalKey): void {
-    if (runId !== approvalRunId) {
-      setApprovalRunId(runId);
-      setApprovals({ ...NO_APPROVALS, [key]: true });
-      return;
+  // --- the two presses ----------------------------------------------------
+
+  /**
+   * Press one: take the task on and ask the model for a plan. **Runs nothing.**
+   *
+   * Two existing client calls in order, and no new route, because none is
+   * needed: the transition the person used to make by hand, then the turn
+   * they used to spend by hand. What it does not do is start anything - the
+   * best a turn can end in is a recorded plan in `planned`, and carrying that
+   * out is the second press.
+   *
+   * `check_promised_files` is what makes the result of this press worth
+   * having. Without it a model-proposed plan reports `not_implemented`
+   * forever unless somebody hand-writes a condition, because the criterion a
+   * proposer writes for itself is not a criterion. With it the product reads
+   * the promise off the write calls the model proposed and judges the plan by
+   * whether those files exist - the person asks *what* is checked, the
+   * product derives *which* files, and the model is still never asked for a
+   * criterion. `acceptance` goes up empty beside it on purpose: an explicit
+   * choice is never added to, so sending both would be a contradiction. The
+   * long road - choose conditions by hand, then "Modelden plan oner" - is
+   * still there, one heading down, and still sends what was chosen.
+   *
+   * The two halves are reported apart. If the move lands and the turn does
+   * not, the failure says the task moved: a person who reads "nothing
+   * happened" presses again, and pressing again may spend a turn the first
+   * press already paid for.
+   */
+  async function doTheWork(): Promise<void> {
+    const current = detail?.task ?? null;
+    if (busy !== null || selected === "" || current === null) return;
+    setBusy("doWork");
+    setError(null);
+    let moved = false;
+    try {
+      if (current.state === "suggested") {
+        const movedTask = await transitionTask({
+          taskId: selected,
+          target: "awaiting_approval",
+        });
+        moved = true;
+        // On screen before the turn is asked for, so a failure in the second
+        // half can never leave the first half invisible.
+        setDetail((current) => (current === null ? current : { ...current, task: movedTask }));
+      }
+      const next = await proposeModelPlan({
+        taskId: selected,
+        instruction,
+        acceptance: [],
+        checkPromisedFiles: true,
+      });
+      setProposal(next);
+      setDetail((current) =>
+        current === null ? current : { ...current, task: next.task, runs: [...next.runs] },
+      );
+      setList(await fetchTasks());
+    } catch (caught) {
+      setError(toApiError(caught));
+      setStep(moved ? "doWorkAfterMove" : "doWork");
+    } finally {
+      setBusy(null);
     }
-    setApprovals((current) => ({ ...current, [key]: !current[key] }));
+  }
+
+  /**
+   * Press two: give the four approvals in one deliberate act, and carry the
+   * plan out.
+   *
+   * The plan is the one `derivePrimaryAction` read off the task's own runs a
+   * moment ago and the one whose four statements are on screen above the
+   * button. It is passed in rather than looked up again here, and it is never
+   * taken from {@link consentedRunId}: reaching for the last id this screen
+   * held would start a plan nobody looked at, which is precisely the
+   * inheritance the run-keyed approvals existed to prevent.
+   */
+  function consentAndRun(chosen: PrimaryAction): void {
+    if (busy !== null || chosen.kind === "do") return;
+    setConsentedRunId(chosen.run.id);
+    void act(chosen.run.id, chosen.kind === "resume" ? "resume" : "start");
   }
 
   function addCondition(): void {
@@ -1820,6 +2083,7 @@ export function TasksPanel() {
    * through the JSX.
    */
   const nextStep = task === null ? null : deriveNextStep(task.state, runsNow);
+  const primary = task === null ? null : derivePrimaryAction(task.state, runsNow);
   const opened = (id: BlockId): boolean => BLOCK_ACTS[id](task, runsNow);
   const whyClosed = (id: BlockId): string =>
     opened(id) ? "" : BLOCK_CLOSED_REASON[id](task);
@@ -2001,6 +2265,24 @@ export function TasksPanel() {
               <p className="text-xs text-muted" data-testid="tasks-state-detail">
                 {task.state_detail}
               </p>
+
+              {/*
+                The two controls, immediately under the line that names them
+                and above every explanation on the screen. A state that has no
+                such act - a finished task, a run in flight - renders nothing
+                here rather than a disabled button pretending there is
+                something to press.
+              */}
+              {primary !== null && (
+                <PrimaryActionRegion
+                  action={primary}
+                  busy={busy}
+                  consentedRunId={consentedRunId}
+                  onConsentAndRun={consentAndRun}
+                  onDoTheWork={() => void doTheWork()}
+                  outcome={proposal}
+                />
+              )}
 
               {/*
                 Moved above the evidence blocks in this package, because this
@@ -2204,11 +2486,15 @@ export function TasksPanel() {
             <DisclosureBlock
               label="Calismalar"
               level={3}
-              open={opened("runs")}
+              // Forced open while this screen is carrying a run out: "Durdur"
+              // lives in here, and a block that folds away exactly while the
+              // one control that can interrupt a run is needed would be a
+              // disclosure that took something away.
+              open={opened("runs") || executionRunId !== null}
               summary={blockSummary(
                 `${String(
                   detail.runs.length,
-                )} kaydedilmis calisma. Dort onay, baslatma, durdurma ve devam burada.`,
+                )} kaydedilmis calisma; her birinin plani, adimlari, harcamasi ve sonu burada. Calisan bir isi durdurmak da burada.`,
                 whyClosed("runs"),
               )}
               summaryTestId="tasks-runs-summary"
@@ -2222,15 +2508,9 @@ export function TasksPanel() {
                 <ul className="flex flex-col gap-3">
                   {detail.runs.map((run) => (
                     <RunCard
-                      approvalRunId={approvalRunId}
-                      approvals={approvals}
-                      busy={busy}
                       key={run.id}
                       executionPending={executionRunId === run.id}
                       stopPending={stoppingRunId === run.id}
-                      onApprove={approve}
-                      onResume={(runId) => void act(runId, "resume")}
-                      onStart={(runId) => void act(runId, "start")}
                       onStop={(runId) => void act(runId, "stop")}
                       run={run}
                       stopStatement={surface.stop_statement}

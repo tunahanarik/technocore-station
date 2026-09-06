@@ -231,14 +231,11 @@ const TASK_LIST = {
   unproducible_detail: "TEST-ONLY: Bu surumde uretilemeyen durum yoktur; liste bos.",
 };
 
-function runsPayload(run: unknown): unknown {
-  return {
-    task: TASK,
-    runs: [run],
-    workspace_files: [{ name: "rapor.md", byte_count: 812, sha256: "77665544332211aabb" }],
-    honesty: RUN_HONESTY,
-  };
-}
+
+/** The one file this task's runs produce, listed by name and digest only. */
+const WORKSPACE_FILES = [
+  { name: "rapor.md", byte_count: 812, sha256: "77665544332211aabb" },
+];
 
 const ACTIVITY = {
   events: [
@@ -325,6 +322,13 @@ interface RunLedger {
   readonly starts: string[];
   /** Every model turn, so "a turn happens only inside a click" is checkable. */
   readonly turns: string[];
+  /** Every state transition, so "one press does both halves" is checkable. */
+  readonly moves: string[];
+}
+
+/** A fresh ledger. Three counters, because they answer three questions. */
+function ledgerFor(): RunLedger {
+  return { starts: [], turns: [], moves: [] };
 }
 
 /**
@@ -357,7 +361,19 @@ const MODEL_PROPOSAL = {
  * Registered before the app is opened, so the very first surface read is
  * already served from here and the backend is never asked to run anything.
  */
-async function mockAgentSurface(page: Page, ledger: RunLedger): Promise<void> {
+async function mockAgentSurface(
+  page: Page,
+  ledger: RunLedger,
+  options: { readonly initialState?: string; readonly noRecordedPlan?: boolean } = {},
+): Promise<void> {
+  // Mutable, because the flow under test is a flow: the second press only
+  // exists because the first one changed what the task holds. A frozen
+  // document can show a screen but it cannot show two presses.
+  let state = options.initialState ?? TASK.state;
+  let runs: unknown[] =
+    state === "suggested" || options.noRecordedPlan === true ? [] : [PLANNED_RUN];
+  const task = (): unknown => ({ ...TASK, state });
+
   await page.route(
     (url) =>
       url.pathname.startsWith("/api/tasks") || url.pathname.startsWith("/api/activity"),
@@ -368,17 +384,32 @@ async function mockAgentSurface(page: Page, ledger: RunLedger): Promise<void> {
         return;
       }
       if (url.pathname === "/api/tasks") {
-        await route.fulfill({ json: TASK_LIST });
+        await route.fulfill({ json: { ...TASK_LIST, tasks: [task()] } });
+        return;
+      }
+      if (url.pathname.endsWith("/transition")) {
+        ledger.moves.push(url.pathname);
+        state = "awaiting_approval";
+        await route.fulfill({ json: task() });
         return;
       }
       if (url.pathname.endsWith("/model-plan")) {
         ledger.turns.push(url.pathname);
-        await route.fulfill({ json: MODEL_PROPOSAL });
+        runs = [PLANNED_RUN];
+        await route.fulfill({ json: { ...MODEL_PROPOSAL, task: task(), runs } });
         return;
       }
       if (url.pathname.endsWith("/start")) {
         ledger.starts.push(url.pathname);
-        await route.fulfill({ json: runsPayload(COMPLETED_RUN) });
+        runs = [COMPLETED_RUN];
+        await route.fulfill({
+          json: {
+            task: task(),
+            runs,
+            workspace_files: WORKSPACE_FILES,
+            honesty: RUN_HONESTY,
+          },
+        });
         return;
       }
       if (url.pathname.startsWith("/api/activity")) {
@@ -386,27 +417,52 @@ async function mockAgentSurface(page: Page, ledger: RunLedger): Promise<void> {
         return;
       }
       await route.fulfill({
-        json: runsPayload(ledger.starts.length === 0 ? PLANNED_RUN : COMPLETED_RUN),
+        json: { task: task(), runs, workspace_files: WORKSPACE_FILES, honesty: RUN_HONESTY },
       });
     },
   );
 }
 
+/** Open one of the folded, secondary blocks by name. Idempotent. */
+async function openBlock(page: Page, label: string): Promise<void> {
+  // `exact` matters: Playwright matches an accessible name by substring by
+  // default, and "Calismalar" is a substring of "Kesilen calismalar".
+  const region = page.getByRole("region", { name: label, exact: true });
+  const details = region.locator("details");
+  if (await details.evaluate((node) => (node as HTMLDetailsElement).open)) return;
+  await region.locator("summary").click();
+  await expect(details).toHaveAttribute("open", "");
+}
+
 /**
- * Tick a checkbox the way a keyboard user does.
+ * Give the consent the way a keyboard user does, and check what it costs.
  *
- * The HeroUI checkbox keeps its real `<input>` in a visually hidden span
- * behind a styled control, so a pointer click lands on the decoration. Space
- * on the focused input is both the reliable path and the one a keyboard user
- * takes - which makes this say something extra: an approval can be given
- * without a mouse.
+ * It replaces a helper that ticked four checkboxes with Space. The four
+ * statements are still four statements and still have to be on screen, above
+ * the control, before this presses anything - so the assertion moved into the
+ * helper rather than out of the suite. What is gone is four keystrokes, not
+ * four sentences.
+ *
+ * Enter on the focused button rather than a click, for the same reason the
+ * old helper used Space: a consent that can only be given with a mouse is a
+ * consent half the keyboard cannot give.
  */
-async function tick(page: Page, name: RegExp): Promise<void> {
-  const box = page.getByRole("checkbox", { name });
-  await expect(box).not.toBeChecked();
-  await box.focus();
-  await box.press("Space");
-  await expect(box).toBeChecked();
+async function consentAndRun(page: Page, label: string): Promise<void> {
+  const statements = page.getByTestId("tasks-consent-statements");
+  await expect(statements).toBeVisible();
+  await expect(statements.getByRole("listitem")).toHaveCount(4);
+  for (const sentence of [
+    /Plani okudum/,
+    /Veri paylasimini onayliyorum/,
+    /Calisma alanini onayliyorum/,
+    /Butceyi onayliyorum/,
+  ]) {
+    await expect(statements.getByText(sentence)).toBeVisible();
+  }
+  const control = page.getByRole("button", { name: label });
+  await control.focus();
+  await expect(control).toBeFocused();
+  await control.press("Enter");
 }
 
 /** Open the one task and wait for its detail region. */
@@ -429,7 +485,7 @@ test.describe("Gorevler: modelden plan onerisi", () => {
   test("spends no turn until a control is pressed, and starts nothing when it does", async ({
     page,
   }) => {
-    const ledger: RunLedger = { starts: [], turns: [] };
+    const ledger: RunLedger = ledgerFor();
     await mockAgentSurface(page, ledger);
     await openApp(page);
     await navEntry(page, "Gorevler").click();
@@ -437,6 +493,13 @@ test.describe("Gorevler: modelden plan onerisi", () => {
 
     // Opening a task reads; it does not spend anything.
     expect(ledger.turns, "opening a task may not spend a model turn").toEqual([]);
+
+    // The block is secondary now: the two presses above it do the same work
+    // in two acts. Secondary means folded, never removed - the sentences are
+    // in the document from the first paint and the controls still work.
+    await expect(page.getByTestId("tasks-model-no-turn")).toHaveCount(1);
+    await expect(page.getByTestId("tasks-model-no-turn")).toBeHidden();
+    await openBlock(page, "Modelden plan onerisi");
     await expect(page.getByTestId("tasks-model-no-turn")).toBeVisible();
 
     // The two rules are readable before the control that would spend a turn.
@@ -463,40 +526,50 @@ test.describe("Gorevler: modelden plan onerisi", () => {
     );
   });
 
-  test("still refuses to carry out the proposed plan until all four approvals are given", async ({
+  test("still shows the four statements before a proposed plan may be carried out", async ({
     page,
   }) => {
-    const ledger: RunLedger = { starts: [], turns: [] };
-    await mockAgentSurface(page, ledger);
+    const ledger: RunLedger = ledgerFor();
+    // `awaiting_approval` with nothing recorded: the one state in which the
+    // planner accepts a proposal at all, and the state in which "there is no
+    // plan yet" is a real screen rather than an impossible one.
+    await mockAgentSurface(page, ledger, { noRecordedPlan: true });
     await openApp(page);
     await navEntry(page, "Gorevler").click();
     await openTask(page);
 
+    // No plan yet, so there is no start control at all - not a disabled one.
+    // A proposal cannot start itself because there is nothing to press.
+    await expect(page.getByRole("button", { name: "Onayla ve baslat" })).toHaveCount(0);
+    await expect(page.getByTestId("tasks-consent-statements")).toHaveCount(0);
+
+    await openBlock(page, "Modelden plan onerisi");
     await page.getByRole("button", { name: /Modelden plan oner/ }).click();
     await expect(page.getByTestId("tasks-model-outcome")).toBeVisible();
 
-    const start = page.getByRole("button", { name: /Onayli plani calistir/ });
-    await expect(start).toBeDisabled();
+    // Being the model's idea buys no consent: the same four statements appear,
+    // in the open, above the control, and the record says no plan has been
+    // consented to yet.
+    const statements = page.getByTestId("tasks-consent-statements");
+    await expect(statements).toBeVisible();
+    await expect(statements.getByRole("listitem")).toHaveCount(4);
+    await expect(page.getByTestId("tasks-consent-record")).toContainText(
+      "henuz hicbir plana onay verilmedi",
+    );
+    expect(ledger.starts, "a model turn may not start a run").toEqual([]);
 
-    // Three of four is not four. Every intermediate state is checked, because
-    // an off-by-one in the approval gate would pass a test that only looked
-    // at nought and four.
-    await tick(page, /Plani okudum/);
-    await expect(start).toBeDisabled();
-    await tick(page, /Veri paylasimini/);
-    await expect(start).toBeDisabled();
-    await tick(page, /Calisma alanini/);
-    await expect(start).toBeDisabled();
-    await tick(page, /Butceyi/);
-    await expect(start).toBeEnabled();
-
-    expect(ledger.starts, "nothing may have started while approvals were given").toEqual([]);
+    // ...and the four sentences are not behind a disclosure.
+    const folded = await page.evaluate(() => {
+      const list = document.querySelector('[data-testid="tasks-consent-statements"]');
+      return list === null ? "missing" : String(list.closest("details") !== null);
+    });
+    expect(folded, "the consent may not be folded away").toBe("false");
   });
 
   test("says the publish-ready state is derived and offers no control that names it", async ({
     page,
   }) => {
-    const ledger: RunLedger = { starts: [], turns: [] };
+    const ledger: RunLedger = ledgerFor();
     await mockAgentSurface(page, ledger);
     await openApp(page);
     await navEntry(page, "Gorevler").click();
@@ -515,27 +588,75 @@ test.describe("Gorevler: modelden plan onerisi", () => {
   });
 });
 
+test.describe("Gorevler: iki basista bir is", () => {
+  test("carries a scan suggestion to a finished run in two presses, in a real browser", async ({
+    page,
+  }) => {
+    // The measured defect, driven end to end: a person who had found real
+    // work could not get it done, because seven actions stood between the
+    // task and a started run. Two remain, and neither of them hides anything
+    // the seven showed.
+    const ledger: RunLedger = ledgerFor();
+    await mockAgentSurface(page, ledger, { initialState: "suggested" });
+    await openApp(page);
+    await navEntry(page, "Gorevler").click();
+    await openTask(page);
+
+    // The line at the top of the task names the one press this state offers,
+    // and says what it costs before it is pressed.
+    await expect(page.getByTestId("tasks-next-step")).toContainText("Bu isi yap");
+    await expect(page.getByTestId("tasks-primary-cost")).toContainText(/bir model turu/i);
+    await expect(page.getByTestId("tasks-primary-cost")).toContainText(/maliyet/i);
+    expect(ledger.moves, "reading a task moves nothing").toEqual([]);
+    expect(ledger.turns, "reading a task spends nothing").toEqual([]);
+
+    // Press one, from the keyboard: the task is taken on and a plan is asked
+    // for, in that order, from one act.
+    const first = page.getByRole("button", { name: "Bu isi yap" });
+    await first.focus();
+    await expect(first).toBeFocused();
+    await first.press("Enter");
+
+    await expect(page.getByRole("button", { name: "Onayla ve baslat" })).toBeVisible();
+    expect(ledger.moves).toHaveLength(1);
+    expect(ledger.turns).toHaveLength(1);
+    expect(ledger.starts, "asking for a plan may not start one").toEqual([]);
+
+    // Press two: the four statements, then one deliberate consent that also
+    // carries the plan out.
+    await consentAndRun(page, "Onayla ve baslat");
+
+    await expect
+      .poll(() => ledger.starts.length, { message: "the plan must have been carried out" })
+      .toBe(1);
+    await openBlock(page, "Calismalar");
+    await expect(
+      page.getByText("Bitti: her adim yapildi, soz verilen her cikti var"),
+    ).toBeVisible();
+  });
+});
+
 test.describe("Gorevler: what to do next", () => {
   test("answers the question a person opens a task with, before every explanation", async ({
     page,
   }) => {
-    const ledger: RunLedger = { starts: [], turns: [] };
+    const ledger: RunLedger = ledgerFor();
     await mockAgentSurface(page, ledger);
     await openApp(page);
     await navEntry(page, "Gorevler").click();
     await openTask(page);
 
     // The line is derived from this task's state and its own runs: a plan is
-    // already recorded here, so the next thing is to approve and run it
-    // rather than to write another one.
+    // already recorded here, so the next thing is to consent to it and run it
+    // rather than to ask for another one.
     const next = page.getByTestId("tasks-next-step");
     await expect(next).toBeVisible();
-    await expect(next).toContainText("Onayli plani calistir");
+    await expect(next).toContainText("Onayla ve baslat");
 
     // ...and the control it names really is ahead of the standing
     // explanations, which is the whole defect: the one actionable thing used
-    // to be the last item on the screen.
-    const start = page.getByRole("button", { name: "Onayli plani calistir" });
+    // to be the last item on the screen, behind six others.
+    const start = page.getByRole("button", { name: "Onayla ve baslat" });
     await expect(start).toBeVisible();
 
     // The state vocabulary, in a real browser: the button that produced this
@@ -550,7 +671,7 @@ test.describe("Gorevler", () => {
   test("appears in the navigation, opens from the keyboard and states why nothing runs", async ({
     page,
   }) => {
-    const ledger: RunLedger = { starts: [], turns: [] };
+    const ledger: RunLedger = ledgerFor();
     await mockAgentSurface(page, ledger);
     await openApp(page);
 
@@ -586,7 +707,7 @@ test.describe("Gorevler", () => {
   test("shows the budget in three units and refuses to denominate it in tokens", async ({
     page,
   }) => {
-    const ledger: RunLedger = { starts: [], turns: [] };
+    const ledger: RunLedger = ledgerFor();
     await mockAgentSurface(page, ledger);
     await openApp(page);
     await navEntry(page, "Gorevler").click();
@@ -614,29 +735,21 @@ test.describe("Gorevler", () => {
     await expect(boundary).toContainText("kendi butce tavanini yukseltmek");
   });
 
-  test("needs four approvals before a plan runs, and still reports the test as unimplemented", async ({
+  test("shows the four statements before a plan runs, and still reports the test as unimplemented", async ({
     page,
   }) => {
-    const ledger: RunLedger = { starts: [], turns: [] };
+    const ledger: RunLedger = ledgerFor();
     await mockAgentSurface(page, ledger);
     await openApp(page);
     await navEntry(page, "Gorevler").click();
     await openTask(page);
 
-    // Nothing may be carried out before the four approvals exist.
-    const start = page.getByRole("button", { name: "Onayli plani calistir" });
-    await expect(start).toBeDisabled();
+    // Nothing has been carried out, and the four statements are on screen
+    // above the one control that would carry anything out.
     expect(ledger.starts).toEqual([]);
+    await consentAndRun(page, "Onayla ve baslat");
 
-    await tick(page, /Plani okudum/);
-    await tick(page, /Veri paylasimini/);
-    await tick(page, /Calisma alanini/);
-    await expect(start).toBeDisabled();
-    await tick(page, /Butceyi/);
-    await expect(start).toBeEnabled();
-
-    await start.click();
-
+    await openBlock(page, "Calismalar");
     await expect(page.getByText("Bitti: her adim yapildi, soz verilen her cikti var")).toBeVisible();
     expect(ledger.starts).toEqual([`/api/tasks/${TASK_ID}/runs/${RUN_ID}/start`]);
 
@@ -664,7 +777,7 @@ test.describe("Gorevler", () => {
 
 test.describe("Aktivite", () => {
   test("opens from the keyboard and keeps five kinds of moment apart", async ({ page }) => {
-    const ledger: RunLedger = { starts: [], turns: [] };
+    const ledger: RunLedger = ledgerFor();
     await mockAgentSurface(page, ledger);
     await openApp(page);
 
@@ -711,7 +824,7 @@ test.describe("Aktivite", () => {
     consoleLog,
     page,
   }) => {
-    const ledger: RunLedger = { starts: [], turns: [] };
+    const ledger: RunLedger = ledgerFor();
     await mockAgentSurface(page, ledger);
     await openApp(page);
     await navEntry(page, "Aktivite").click();

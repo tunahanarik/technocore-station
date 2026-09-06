@@ -435,6 +435,7 @@ class ModelPlannerService:
         *,
         instruction: str = "",
         acceptance_conditions: Sequence[tuple[str, dict[str, str]]] = (),
+        check_promised_files: bool = False,
     ) -> ProposalView:
         """Spend one model turn and record what it proposed, if anything.
 
@@ -520,7 +521,7 @@ class ModelPlannerService:
             return self._turn_without_calls(task_id, session, proposal, usage)
 
         return self._record_plan(
-            task, session, proposal, usage, acceptance_conditions
+            task, session, proposal, usage, acceptance_conditions, check_promised_files
         )
 
     # --- a turn that proposed nothing --------------------------------------
@@ -603,6 +604,7 @@ class ModelPlannerService:
         proposal: PlanProposal,
         usage: str,
         acceptance_conditions: Sequence[tuple[str, dict[str, str]]] = (),
+        check_promised_files: bool = False,
     ) -> ProposalView:
         """Resolve every proposed call, or refuse the turn whole."""
         if task.state is not TaskState.AWAITING_APPROVAL:
@@ -634,7 +636,9 @@ class ModelPlannerService:
                 steps=steps,
                 expected_artifacts=_promised_artifacts(steps),
                 test_condition=_condition_sentence(steps),
-                acceptance_conditions=acceptance_conditions,
+                acceptance_conditions=_conditions_for(
+                    steps, acceptance_conditions, check_promised_files
+                ),
             )
         except (ToolRegistryError, ToolArgumentError) as exc:
             # ``plan_run`` has already recorded the permission denial and has
@@ -918,6 +922,43 @@ def _promised_artifacts(steps: list[tuple[str, dict[str, str]]]) -> list[str]:
             if name and name not in names:
                 names.append(name)
     return names
+
+
+def _conditions_for(
+    steps: list[tuple[str, dict[str, str]]],
+    chosen: Sequence[tuple[str, dict[str, str]]],
+    check_promised_files: bool,
+) -> tuple[tuple[str, dict[str, str]], ...]:
+    """The conditions this plan is recorded with.
+
+    Three sources, and the order says who decides. An explicit choice wins and
+    is never added to: a person who named their own conditions has said what
+    they want judged, and quietly appending more would judge their plan by
+    something they did not ask for.
+
+    Otherwise, ``check_promised_files`` turns the plan's own promise into the
+    criterion. This is the only way a proposed plan can earn a verdict without
+    somebody hand-writing one, because the promise is read off the write calls
+    the model proposed and so does not exist until the turn has happened - the
+    person cannot name the files in advance, only ask that whatever is
+    promised be checked.
+
+    The model is still not the author. It proposes calls; the product reads
+    the promise off them and the person asks for it to be checked. And the
+    condition stays as weak as it is: a file existing is not the work being
+    right, which is what ``artifact_exists``'s own published purpose says.
+
+    A plan that promises nothing gets nothing, and reports
+    ``not_implemented`` - which is what a plan with nothing to check has
+    earned, and is why this is not a way of manufacturing a pass.
+    """
+    if chosen:
+        return tuple((kind, dict(args)) for kind, args in chosen)
+    if not check_promised_files:
+        return ()
+    return tuple(
+        ("artifact_exists", {"name": name}) for name in _promised_artifacts(steps)
+    )
 
 
 def _condition_sentence(steps: list[tuple[str, dict[str, str]]]) -> str:
