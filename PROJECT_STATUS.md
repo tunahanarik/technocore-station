@@ -12,7 +12,17 @@
 > denetle" düğmesinin arkasında hiçbir şey yoktu — `check_connection` sabit bir
 > hüküm döndürüyor, ön yüz aynı `GET /status`'u çağırıyordu; artık basışla tek
 > bir ölçülü `chat/completions` çağrısı gönderiyor, sonucu dört ayrı durumda
-> gösteriyor ve çağrı kimlik bilgisi başına sayılıp tavanlanıyor.)
+> gösteriyor ve çağrı kimlik bilgisi başına sayılıp tavanlanıyor.
+> **En son:** uygulamanın sahibi onu ilk kez kullandı ve planı nasıl
+> çalıştıracağını bulamadı — Görevler ekranı iki ölçülmüş bilgi tasarımı
+> kusuruyla düzeltildi: `awaiting_approval`/`review_needed` etiketleri artık
+> ulaşılan durumu adlandırıyor, ve görev ayrıntısı türetilmiş bir "sırada ne
+> var" satırıyla açılıp iş göremeyen blokları katlıyor.
+> **En son (ADR-0016):** aynı oturumun ikinci yarısı — model gerçek bir görev
+> buldu ve *yaptıramadık*: koşu mesajı yazdı, composer onu göremiyordu, tek yol
+> baytları elle yeniden yazmaktı. İki yarım artık birleşti; **gönderim insan
+> eylemi kaldı**, registry'ye araç eklenmedi ve hedef odayı hâlâ kullanıcı
+> yazıyor. Dosyanın sonuna bakın.)
 >
 > **Proje durumu: REVIEW_FIXES_IN_PROGRESS_CORE_AGENT_INCOMPLETE** — dosyanın sonuna
 > bakın.
@@ -3906,5 +3916,660 @@ probe'u: `opencode/probe.py`, `routes/opencode.py`, `OpenCodeConnectionPanel.tsx
 migration `0012`). Yukarıdaki sayılar iki çalışmanın **birlikte** bulunduğu
 ağacın sayılarıdır; ADR-0014'e ait dosyalara ADR-0015 dokunmadı ve tersi de
 geçerlidir.
+
+Commit, push veya deploy **yapılmadı** (INV-08).
+
+---
+
+## Tur: "bu sayfa aşşşşırı karışık" — Görevler ekranının bilgi tasarımı (6 Eylül 2026)
+
+Uygulamanın sahibi bugün onu **ilk kez** kullandı: bir görev buldu, açtı ve
+planı nasıl çalıştıracağını bulamadı. Kendi sözleriyle: *"bu sayfa aşşşşırı
+karışık"*, *"planı nasıl çalıştıracağımı bile bulamadım"*, *"çok fazla şey
+var"*.
+
+İki somut kusur çıktı, ikisi de **ölçüldü**. Hiçbiri davranış kusuru değil:
+ürün doğru şeyi yaptı ve yanlış anlattı.
+
+### Kusur 1 — durum adı başarısızlık gibi okunuyordu
+
+Kullanıcı **"Onaya al"** düğmesine bastı. Görev `awaiting_approval`'a geçti.
+Ekran **"Onay bekliyor"** dedi. Bu başarı durumudur; ama sözcük "istediğiniz
+şey hâlâ olmadı" der, kullanıcı da düğmenin çalışmadığını bildirdi.
+
+Aynı kusurun ikinci örneği aynı ekranda duruyordu: düğme "Incelemeye al",
+`review_needed`'ın etiketi "Inceleme gerekiyor".
+
+**Kural, tek cümle:** bir kontrolün *hedefi* olan durumun etiketi, o kontrolün
+**ulaştığı şeyi** adlandırır; hâlâ eksik olanı değil. Eksik olan
+`state_detail` cümlesinde yazılıdır ve o cümle birebir korundu — bir *ayrıntı
+cümlesi* bekleyeni anlatabilir, bir düğmenin ürettiği *durumun adı*
+anlatamaz, çünkü okuyucu tıklamasını o sözcükle doğrular.
+
+| Wire adı (**değişmedi**) | Önce | Sonra |
+|---|---|---|
+| `awaiting_approval` | Onay bekliyor | **Onaya alindi** |
+| `review_needed` | Inceleme gerekiyor | **Incelemeye alindi** |
+
+Diğer yedi etiket değişmedi. Durum adlarının kendisine dokunulmadı
+(`docs/security-invariants.md` ve API testleri onları pinler). Üçüncü bir yer
+de düzeltildi: plan bestecisindeki "gorev 'onay bekliyor' durumunda olmalidir"
+cümlesi artık `STATE_LABEL`'dan okunuyor, elle yazılmıyor — bir ekranın bir
+duruma iki ad vermesi kusurun küçük hâlidir.
+
+### Kusur 2 — ekran, kullanıcının sorduğu sorudan önce sekiz soru cevaplıyordu
+
+`suggested` durumunda plan kaydedilemez ve modelden plan istenemez
+(`planner/service.py`, `AWAITING_APPROVAL` şartı), ve `SUGGESTED`'ın tek
+kullanıcı geçişi ona gider. Yani ekranın tamamında iş görebilen **tek**
+kontrol vardı — ve o kontrol dört "engelli" kanıt kartının, yayın hazırlığı
+bloğunun, kullanıcı kabulü bloğunun, public paylaşım bloğunun ve "bu alan neyi
+ispatlamaz" paragraflarının **altındaydı**.
+
+**"Sırada ne var" satırı.** Görev ayrıntısının ilk satırı
+(`tasks-next-step`), görevin **kendi durumundan ve kendi çalışmalarından**
+türetilir; JSX'te duruma göre yazılmaz. Tek eylemi ve o eylemi yapan kontrolün
+adını **birebir** söyler; kontrolü olmayan iki son durum bunu açıkça yazar,
+olmayan bir düğmeyi işaret etmez. Tablo `docs/ui-action-map.md` §13.0.1'de.
+
+**"Durum degisikligi" bloğu yukarı taşındı**: dokuz durumun dördünde sonraki
+adım oradadır. Beş geçişin kendisi değişmedi.
+
+**İlerlemeli açılım.** Bu durumda iş göremeyen her blok, nedenini söyleyen tek
+satırlık bir özete katlanır ve istenince açılır — native `details`/`summary`
+ile, çünkü rol, açık/kapalı durumu, klavye işletimi ve duyuru tarayıcıdan
+gelir. **Hiçbir cümle silinmedi**: on iki dürüstlük `data-testid`'i DOM'da, bir
+tuş uzakta ve duyurulan bir açılırın içinde. Katlamak **asla bir kapı
+değildir**: dört onay dört onaydır, hiçbir kontrol kolaylaşmadı.
+
+Bloğun açık doğması `BLOCK_ACTS` tablosundan türetilir ve gerekçe backend'in
+kendi kuralıdır (§13.0.2). Bir yanlış ilk karar kayda geçiyor: kabul bloğu
+"kayıtlı çalışma yoksa katlansın" diye yazılmıştı; `proof.spec.ts`
+`review_needed` + boş çalışma listesiyle bunu kırdı ve haklıydı — rotanın
+hiçbir durum ön koşulu yok. Backend'in koymadığı bir ön koşulu ekranda varmış
+gibi göstermek, koyduğu bir ön koşulu gizlemekle aynı sınıf yalandır; kural
+gevşetildi.
+
+### Önce kırmızı
+
+Yeni testler kod yazılmadan önce koşuldu (`-t "what to do next"`):
+
+```
+→ Unable to find an element by: [data-testid="tasks-next-step"]
+→ expected [] to have a length of 1 but got +0
+→ TRANSITIONS is not iterable
+→ Cannot convert undefined or null to object
+→ Cannot convert undefined or null to object
+→ (0 , deriveNextStep) is not a function
+→ Yurutme durumu is not a disclosure: expected null not to be null
+→ Plan olustur must be open where it can act: expected undefined to be true
+Tests  8 failed | 56 skipped (64)
+```
+
+### Mutasyon kaydı
+
+| Mutasyon | Sonuç |
+|---|---|
+| Satırı JSX'te sabit metne çevir (`suggested` cümlesi her durumda) | `× opens the block that holds the next action…` → `expect(element).toHaveTextContent()` — `awaiting_approval` "Plani kaydet (calistirmaz)" beklerken sabit metni gördü |
+| `deriveNextStep` her durum için `NEXT_STEP.suggested` döndürsün | 3 kırmızı: `× gives each state its own next step…` (`expected 1 to be 9`), `× reads the same plan two ways…` (`expected 'Onaya al' to be 'Plani kaydet (calistirmaz)'`), `× opens the block…` |
+| `TaskStateName`'e onuncu üye (`archived`) + etiketi, sonraki adımı **yok** | 2 kırmızı: `× derives a next step for every state the wire can carry` ve `× gives each state its own next step…`, ikisi de `Cannot read properties of undefined (reading 'action')`. Ayrıca derleme hatası: `TS2741: Property 'archived' is missing in type … Record<TaskStateName, TaskNextStep>` |
+
+Üçüncü mutasyon için sayım iddiası (`toHaveLength(9)`) bilerek döngüden
+**sonraya** alındı: onuncu bir durum önce açtığı boşlukta kırmızı vermeli,
+ancak ondan sonra "onuncu durum" olduğu için.
+
+### Bilerek yapılmayanlar
+
+- Hiçbir cümle kısaltılmadı, hiçbir nitelik düşürülmedi: dört onay,
+  `execution_unavailable`, "model onerir, calistirmaz", "uretilmis bir dosya
+  gecmis bir test degildir", tur maliyeti ve tavan cümlesi olduğu gibi.
+- Hiçbir kontrol kolaylaşmadı. Katlanan yalnız açıklamadır; kapı katlanmadı.
+- `tests/security/` altında hiçbir şeye dokunulmadı.
+- Durum adları (wire) değişmedi; `TaskUserTransitionName` değişmedi.
+- HeroUI bileşeni tahmin edilmedi: açılır, native `details`/`summary`.
+
+### Değişen dosyalar
+
+**Frontend:** `components/tasks/TasksPanel.tsx` (durum sözlüğü,
+`deriveNextStep` + `NEXT_STEP` tablosu, `BLOCK_ACTS` / `BLOCK_CLOSED_REASON` /
+`DisclosureBlock`, on iki bloğun açılıra dönüşü, "Durum degisikligi"nin
+yukarı taşınması), `components/tasks/TasksPanel.test.tsx` (yeni describe:
+`Gorevler: what to do next`, 8 test; kabul testindeki etiket beklentisi
+güncellendi).
+
+**E2E:** `e2e/tests/a11y.spec.ts` (`Gorevler: progressive disclosure`, 2 test),
+`e2e/tests/keyboard.spec.ts` (`Gorevler disclosures from the keyboard`,
+2 test), `e2e/tests/focus.spec.ts` (`disclosure focus management`, 2 test),
+`e2e/tests/agent.spec.ts` (`Gorevler: what to do next`, 1 test; bütçe bloğu
+artık açılarak okunuyor).
+
+**Belgeler:** `docs/ui-action-map.md` §13 akışı, yeni §13.0 / §13.0.1 /
+§13.0.2, §13.2'ye açılım notu; bu dosya.
+
+**Yeni dosya yok.**
+
+### İki katmanın bilerek farklı şeyleri ölçmesi
+
+jsdom `details` katlamasını **hiç uygulamaz** — ölçüldü: kapalı bir
+`details` içindeki düğme `getByRole` ile hâlâ bulunuyor ve
+`getComputedStyle(...).display` `block` diyor. Bu yüzden Vitest tarafında bir
+*görünürlük* iddiası hangi markup olursa olsun geçerdi. Vitest bunun yerine
+`details.open === false`'u, özet satırının boş olmadığını ve on iki
+dürüstlük `data-testid`'inin belgede kaldığını ölçüyor; gerçek gizlemeyi,
+odak davranışını ve klavye işletimini Playwright ölçüyor.
+
+### Koşulan kapılar
+
+`AGENTS.md` §4'ün tamamı, paketleme yarısı dâhil:
+
+```
+uv run --directory apps/station-api ruff check .
+  -> All checks passed!
+uv run --project apps/station-api ruff check apps/station-api/src packages/technocore-conform/src tests
+  -> All checks passed!
+uv run --project apps/station-api mypy --config-file apps/station-api/pyproject.toml
+  -> Success: no issues found in 153 source files
+npm --prefix apps/station-web run lint
+  -> (cikti yok; 0 hata)
+npm --prefix apps/station-web run test
+  -> Test Files 13 passed (13) / Tests 479 passed (479)
+npm --prefix apps/station-web run build
+  -> built in 3.95s
+uv run --directory apps/station-api pytest ../../tests
+  -> 2791 passed, 2 warnings in 321.95s (0:05:21)
+npm --prefix apps/station-web run test:e2e
+  -> 89 passed, 2 failed (ikisi de es zamanli "Is Tara" turune ait; asagi bak)
+     bu turun kendi kapsami ayrica tek basina kosuldu:
+     agent + a11y + focus + proof, -g "disclosure|what to do next|Gorevler|Kabul ve dis"
+  -> 14 passed (16.2s)
+uv run --project apps/station-api python packaging/build_bundle.py
+  -> 26 282 302 bayt,
+     SHA-256 599e0cc4364748a41f32d647d0615629b21fc4a93432aeaf9de343609c42c09e
+uv run --directory apps/station-api pytest -p no:warnings ../../tests/security/test_frontend_bundle.py ../../tests/security/test_packaging_boundary.py
+  -> 82 passed in 2.67s
+```
+
+`dist` bu turda değişti, bu yüzden `build_bundle.py` e2e'den sonra yeniden
+koşuldu ve son iki bayt denetimi ondan sonra çalıştırıldı — sıralama
+`packaging.yml`'nin sırası.
+
+### Bu ağaçta eşzamanlı başka çalışmalar var
+
+Aynı çalışma ağacında en az iki başka tur sürüyor (mesaj taslağı/gönderim
+yolu: `compose/`, `routes/compose.py`, `ComposerPanel.tsx`, `api/client.ts`;
+ve İş Tara tarafı: `workscan/`, `WorkScanPanel.tsx`, `e2e/harness/workscan.ts`).
+Bu turda o dosyalara **dokunulmadı**.
+
+Python, lint, vitest ve paketleme yarısı yukarıda **tam yeşil**. E2E'de kalan
+iki kırmızı eşzamanlı İş Tara turuna aittir ve koşudan koşuya yer değiştirir
+(aday listesinin yükseklik sınırı ve keşif günlüğü); bu turun kendi kapsamı
+her koşuda yeşildir ve ayrıca tek başına ölçüldü (yukarıdaki 14 test). Koşu
+sırasında görülen ve **kendiliğinden kaybolan** diğer kırmızılar da aynı
+kaynaktandır: `composer.spec.ts`'in dört testi (compose rotasından HTTP 409),
+`client.test.ts::leaves no exported call outside the empty-body probe table`,
+ve `test_tracked_sources.py`'nin iki testi (henüz `git add` edilmemiş yeni
+dosyalar). Bu turda **yeni dosya eklenmedi**.
+
+`test_frontend_bundle.py::test_the_shipped_spa_is_byte_for_byte_the_audited_dist`
+ilk pytest koşusunda kırmızıydı — beklenen ve belgelenmiş sıralamadır:
+`dist` bu turda değişti, `build_bundle.py` ondan sonra koşuldu ve pytest
+yeniden çalıştırıldı; yukarıdaki 2791 o ikinci koşudur.
+
+Commit, push veya deploy **yapılmadı** (INV-08).
+
+---
+
+## Tur: aday listesi kendini sınırlıyor, oda listesi 200 istiyor (6 Eylül 2026)
+
+Kullanıcının bildirdiği iki şey, ikisi de ölçüldü.
+
+> "görev önerirken sayfa aşağı doğru iniyor … görevleri kaydırarak seçeyim"
+
+ve oda listesinin elli odada durması.
+
+### Kusur 1: üç listeden yalnız biri kendini sınırlamıyordu
+
+`WorkScanPanel.tsx`'te oda listesi (`max-h-96 overflow-y-auto`) ve keşif
+günlüğü (aynısı) kendi kutularında kayıyordu; **aday listesi**
+(`flex flex-col gap-3`) ne yükseklik sınırı ne taşma kuralı taşıyordu. Bir aday
+kartı sekiz numaralı bölüm, bir alıntı bloğu, izin ve risk listesi taşıyor —
+yani listenin uzunluğu doğrudan sayfanın uzunluğu oluyordu.
+
+**Ölçüm (Chromium, 1280×720):** bir aday kartı **654 px**. İki adaydan on iki
+adaya çıkmak `main` bölgesine **6660 px** ekliyordu. Oda listesi girdisi ~40 px.
+
+### Kusur 2: gönderilen `limit` ürünün seçtiği sayı değildi
+
+Üç şerit de `limit=50` gönderiyordu. 50, pinli şemanın `limit` **yokken**
+düştüğü değerdir ("falls back to 50"), yani istek "hiç seçmemiş olmak"tan
+ayırt edilemiyordu. Aynı açıklama sınırı da yayımlıyor: "clamped to 1..200",
+ve sınır dışı değer **reddedilmez, kırpılır**.
+
+### Kırmızı, düzeltmeden önce
+
+```
+# tests/security/test_work_scan_client.py
+>       assert index_query()["limit"] != str(DEFAULT_LIMIT)
+E       AssertionError: assert '50' != '50'
+
+# WorkScanPanel.test.tsx
+AssertionError: the candidate list does not bound its height:
+  expected 'flex flex-col gap-3' to match /(^|\s)max-h-\S/
+AssertionError: expected 50 to be 200 // Object.is equality
+
+# e2e/tests/keyboard.spec.ts (Chromium, gerçek yerleşim)
+Error: ten more candidates grew the page by 6660px against a 654px card
+Error: the list must actually overflow its box - Expected: > 5316, Received: 5316
+Error: the list must scroll to keep the focused candidate visible - Expected: > 0, Received: 0
+```
+
+### Karar 1: sınır viewport'tur, `max-h-96` değil
+
+Aday listesi `max-h-[80vh] overflow-y-auto` oldu. `max-h-96` = 384 px, yani
+654 px'lik bir kartın **üçte ikisini** gösterip gerisini gizlerdi — tek satırlık
+oda girdisine uyan sınır, sekiz bölümlü bir karta uymaz. Sabit bir piksel
+sayısı da doğru değil: kutunun içindekiler backend'in sekiz cümlesi ve uzunluğu
+önceden bilinmiyor. Elde kalan tek sabit referans, listenin içine sığmak
+zorunda olduğu **pencere**. 1280×720'de bu bir kartın büyük kısmı; 1080p'de
+büyütülmüş bir pencerede (~980 px) bir tam kart artı sonrakinin başı — listenin
+devam ettiğini söyleyen şey budur. Kalan beşte bir, üstteki başlığı ve alttaki
+"Secili adayi yerel gorev olarak ac" düğmesini ekranda tutar; listenin beslediği
+denetim, listenin kendisi tarafından aşağı itilmez.
+
+**Ölçülen sonuç:** on ek aday artık `main`'e **0 px** ekliyor.
+
+### Karar 2: `ROOM_INDEX_LIMIT = 200`, mesaj şeridi 50'de kalıyor
+
+Yeni sabit `workscan/targets.py::ROOM_INDEX_LIMIT = MAX_LIMIT` (200).
+`DEFAULT_LIMIT = 50` **duruyor** ve artık yalnız ne olduğu şeyi anlatıyor:
+servisin `limit` yokken düştüğü değer.
+
+| Şerit | Gönderilen | Gerekçe |
+|---|---|---|
+| `/rooms` | **200** | Yayımlanmış tavan. `snapshot.MAX_ROOMS` = 200 olduğu için daha fazlası yalnız kuyruğu atmak olurdu |
+| `/r/{oda}` | 50 | **Ölçüldü:** bir tarama 8 tur × 60 satır = **480 satır** okuyabilir, 10 oda okur. 50'de tam tarama 500 satır çeker; 200'de 2000 çeker ve dörtte üçü `reading_ceiling` reddi olur |
+| `/r/events` | 50 | Günlük dilim dilim okunur; "devamını oku" imleci zaten taşır |
+
+**Yanıttan okunan sayı değişmedi.** `total` yanıtın alanıdır, `truncated` =
+`total > kept_count` yine yanıttan türetilir; "servisin bildirdigi toplam /
+burada tutulan / kirpildi mi" satırı sabitten değil cevaptan beslenir.
+
+### Ölçülen tavanlar: daha büyük yanıt hiçbir tavanı aşmıyor
+
+Sentetik ölçüm (`parse_room_index` + rota serileştirmesi, canlı istek yok):
+
+| | yukarı akış gövde | hedefin 2 MiB tavanının | tutulan / toplam | SPA yanıtı |
+|---|---|---|---|---|
+| gerçekçi, 50 oda | 12 557 B | %0,60 | 50 / 150 | 21 248 B |
+| gerçekçi, 200 oda | 49 007 B | %2,34 | 200 / 600 | 79 599 B |
+| en kötü, 50 oda | 35 057 B | %1,67 | 50 / 150 | 43 748 B |
+| **en kötü, 200 oda** | **139 007 B** | **%6,63** | 200 / 600 | 169 599 B |
+
+"En kötü" = 48 karakterlik oda adları + servisin 120 karakterlik `topic`
+önizlemesi (4 baytlık karakterlerle) + girdi başına altı ölçülen alan.
+`MAX_MEASURED_FIELDS` = 16'ya karşı pinli referans altı alan yayımlıyor;
+`MAX_ROOMS` = 200 tam olarak isteneni tutuyor. Kanıt özeti yolu
+(`request_file.py`) aday başınadır ve oda sayısından etkilenmez. **Hiçbir tavan
+yükseltilmedi, çünkü hiçbiri aşılmadı.**
+
+### `MAX_ROOMS_PER_SCAN = 10` değişmedi — ama daha görünür olacak
+
+Bir taramanın kaç oda okuduğu ayrı bir sınırdır, ayrı gerekçesi vardır ve
+kullanıcı onu sormadı. Liste artık 200 oda sunabildiği için "Tek bir taramada
+en cok 10 oda okunur" cümlesi ekranda daha sık görünecektir. Bu bir gevşetme
+talebi değil, kayda geçen bir gözlemdir.
+
+### Erişilebilirlik
+
+Kaydırma kutusu **kendine tab durağı almadı**: içinde zaten odaklanabilir radio
+düğmeleri var, kutuya `tabindex` vermek klavye kullanıcısıyla düğme arasına
+boşuna bir basış koyardı. Gerçek tarayıcıda doğrulandı: ok tuşlarıyla sekiz
+adayın sonuncusuna gidilir, **kutu odağı takip ederek kayar** (`scrollTop > 0`),
+ve tek bir `Tab` gruptan çıkıp listenin beslediği düğmeye gider — tuzak yok.
+
+`a11y.spec.ts`'e ikinci yarısı eklendi: **taşan ama kaydırılamayan kutu yok.**
+Yükseklik sınırı + `overflow: hidden` kaydırmaz, **kırpar** ve kırpılan kısım
+fare, klavye ve ekran okuyucu için erişilemez olur. Kural her bölümde koşar ve
+İş Tara'da adaylı bir duruma sürülür, yani boş bir sayfada sağlanan bir kural
+değildir. Görsel gizli (`sr-only`) 1 px'lik kutular dışlanır: onların kırpılması
+kasıtlıdır ve erişilebilirlik ağacı içindir.
+
+### Mutasyon sonuçları — altı sabit, altısı da kırıldı
+
+| Mutasyon | Kırmızıya dönen |
+|---|---|
+| Aday listesinden `overflow-y-auto` silindi | `WorkScanPanel.test.tsx`: "the candidate list does not scroll its overflow" |
+| Aday listesinden `max-h-[80vh]` silindi | aynı dosyada iki test: "does not bound its height" + viewport sınırı testi |
+| `overflow-y-auto` → `overflow-hidden` (sınır duruyor) | `a11y.spec.ts`: `content clipped out of reach in Is Tara → ["ul.flex max-h-[80vh] flex-col gap-3 overflow-hidden"]` |
+| `ROOM_INDEX_LIMIT` → `DEFAULT_LIMIT` | `test_work_scan_client.py`: `assert 50 == 200` |
+| `WorkScanRefreshRequest.limit` default → 50 | `test_work_scan_client.py`: şema/sabit ayrışma testi, `assert 50 == 200` |
+| `WORK_SCAN_ROOM_INDEX_LIMIT` → 50 | `WorkScanPanel.test.tsx`: `expected 50 to be 200` |
+
+### Ölçüm sırasında bulunan ikinci şey
+
+Büyüme testi önce `document.documentElement.scrollHeight` okuyordu ve düzeltme
+uygulandıktan **sonra da** 6091 px büyüme bildiriyordu; aynı anda yerleşmiş
+ağaçta en uzun kutu 3174 px'ti ve listenin kendisi 576 px'e sınırlanmıştı
+(`maxHeight: 576px`, `overflowY: auto`). Kabuk `min-h-screen` taşıyan bir flex
+sütun olduğu için o okuma bölümün ne kadar uzadığının bir ölçümü değil. Test
+`main` bölgesinin `getBoundingClientRect()` yüksekliğine geçirildi; yanlış
+metrik kaydedilir, sessizce değiştirilmez.
+
+### Değişen ve eklenen dosyalar
+
+**Ürün kodu**
+- `apps/station-api/src/station_api/workscan/targets.py` — `ROOM_INDEX_LIMIT`
+  eklendi, `index_query` varsayılanı ona bağlandı, `__all__` güncellendi
+- `apps/station-api/src/station_api/workscan/client.py` — `fetch_room_index`
+  varsayılanı
+- `apps/station-api/src/station_api/workscan/service.py` — `refresh_room_index`
+  varsayılanı
+- `apps/station-api/src/station_api/schemas.py` — `WorkScanRefreshRequest.limit`
+  varsayılanı 200 (bu modül `station_api`'den bilinçli olarak import etmez;
+  ayrışma bir testle sabitlendi)
+- `apps/station-web/src/api/client.ts` — `WORK_SCAN_ROOM_INDEX_LIMIT` = 200;
+  diğer iki sabitin 50'de kalma gerekçesi yazıldı
+- `apps/station-web/src/components/workscan/WorkScanPanel.tsx` — aday listesi
+  `max-h-[80vh] overflow-y-auto`
+
+**Testler**
+- `tests/security/test_work_scan_client.py` — üç yeni test (ürünün seçtiği
+  sayı + rota şemasıyla ayrışma; istek ayrıştırıcının tuttuğundan fazlasını
+  istemez; mesaj şeridi okuma tavanının kaldırabileceği sayıda kalır)
+- `apps/station-web/src/components/workscan/WorkScanPanel.test.tsx` — dört yeni
+  test (üç listenin üçü de sınırlı; aday listesinin sınırı viewport'a bağlı;
+  oda listesi isteği; diğer iki şerit 50'de)
+- `apps/station-web/e2e/harness/workscan.ts` — **yeni.** `workscan.spec.ts`'in
+  fixture'ları buraya taşındı; `keyboard.spec.ts` ve `a11y.spec.ts` de aynı
+  yükleri kullanıyor, böylece iki spec backend'in ne döndürdüğü konusunda
+  ayrışamaz. `scanWithCandidates(n)` eklendi
+- `apps/station-web/e2e/tests/workscan.spec.ts` — fixture'lar harness'tan
+  import ediliyor; iddialar değişmedi
+- `apps/station-web/e2e/tests/keyboard.spec.ts` — üç yeni test (sayfa büyümüyor;
+  kutu gerçekten kayıyor ve viewport'a sığıyor; klavye kullanıcısı listeyi
+  gezip çıkabiliyor)
+- `apps/station-web/e2e/tests/a11y.spec.ts` — "taşan ama kaydırılamayan kutu
+  yok" kuralı
+
+**Belgeler**
+- `docs/work-scan.md` — §2 `limit` satırı güncellendi, §2.1 eklendi
+- `PROJECT_STATUS.md` — bu bölüm
+
+### Koşulan kapılar
+
+`AGENTS.md` §4'ün **tamamı**, paketleme yarısı dâhil:
+
+```
+uv run --directory apps/station-api ruff check .
+  -> All checks passed!
+uv run --project apps/station-api ruff check apps/station-api/src packages/technocore-conform/src tests
+  -> All checks passed!
+uv run --project apps/station-api mypy --config-file apps/station-api/pyproject.toml
+  -> Success: no issues found in 153 source files
+npm --prefix apps/station-web run lint
+  -> 2 hata, ikisi de ComposerPanel.test.tsx'te (eszamanli calisma; asagi bak)
+npm --prefix apps/station-web run test
+  -> Tests 476 passed | 1 failed (477); tek hata client.test.ts'te
+     'fetchComposeTaskDrafts' (eszamanli calisma)
+npm --prefix apps/station-web run build
+  -> built in 3.76s
+uv run --directory apps/station-api pytest ../../tests
+  -> 2788 passed, 3 failed in 302.17s; ucunun ikisi (test_tracked_sources)
+     bu turun yeni harness dosyasi git'e girmemis oldugu icindi ve
+     `git add -N` sonrasi 8 passed; ucuncusu (test_frontend_bundle)
+     `dist` degistigi icin ve build_bundle.py sonrasi asagida yesil
+npm --prefix apps/station-web run test:e2e
+  -> 86 passed, 4 failed (1.5m); dordu de composer.spec.ts (eszamanli calisma)
+uv run --project apps/station-api python packaging/build_bundle.py
+  -> 26 282 422 bayt,
+     SHA-256 fc77a601845b18668cc77f7711de19b1d8f5d8861aee232a805980b5123db505
+uv run --directory apps/station-api pytest -p no:warnings ../../tests/security/test_frontend_bundle.py ../../tests/security/test_packaging_boundary.py
+  -> 82 passed in 10.29s
+# ...ve tekrar, eszamanli calisma dist'i yeniden urettikten sonra:
+  -> 26 282 378 bayt,
+     SHA-256 c1af7333c2403f8ffae7e9f02a78427349bb734cc79cb6ab48566609b375bc62
+  -> 82 passed in 2.66s
+```
+
+`dist` bu turda değişti, bu yüzden `build_bundle.py` pytest'ten **sonra**
+koşuldu ve son iki bayt denetimi ondan sonra çalıştırıldı — sıralama
+`packaging.yml`'nin sırası.
+
+**Bu ağaçta eşzamanlı iki çalışma daha var.** Yukarıdaki kırmızıların
+**hiçbiri bu turun dosyalarına ait değildir**:
+
+- `ComposerPanel.test.tsx`, `client.test.ts` (`fetchComposeTaskDrafts`),
+  `composer.spec.ts` → compose/taslak çalışması (`compose/`,
+  `routes/compose.py`, `agent/tools.py`, `ComposerPanel.tsx`);
+- `TasksPanel.tsx` / `TasksPanel.test.tsx` → görev durumu çalışması.
+
+**Ölçülen yarış.** `dist/assets` bu turun e2e koşusunun ortasında (14:57:26)
+eşzamanlı bir çalışma tarafından yeniden üretildi ve o koşuda `a11y.spec.ts`'te
+biri, bir sonrakinde **başka** biri kırmızıya döndü; ağaç durulduktan sonraki
+koşu **40 passed, 0 failed**. Sunulan paket çalışma sırasında değişirse tarayıcı
+testi kararsızlaşır — bu bir test kusuru değil, tek ağaçta üç çalışmanın
+maliyetidir ve gizlenmemesi için buraya yazılmıştır. Paketleme artefaktı da
+aynı sebeple iki kez üretildi; diskteki güncel olan ikincisidir ve iki bayt
+denetimi onun üstünde yeşildir.
+
+Bu turun dosyalarında (`workscan/*`, `WorkScanPanel.*`, `keyboard.spec.ts`,
+`a11y.spec.ts`, `workscan.spec.ts`, `harness/workscan.ts`,
+`test_work_scan_client.py`) kırmızı yoktur.
+
+Commit, push veya deploy **yapılmadı** (INV-08). Yeni harness dosyası
+`git add -N` ile **izlenir** hâle getirildi — bu bir commit değildir;
+`test_tracked_sources.py` bir dosyanın depoda olup olmadığını sorar.
+
+### Sonraki adım
+
+Bu turda açılan bir iş yok. `MAX_ROOMS_PER_SCAN = 10` cümlesinin 200 odalık bir
+listede daha sık görüneceği kaydedildi; kullanıcı isterse ayrı bir turun
+konusudur.
+
+
+## ADR-0016 — Üretilen taslak composer'a geçer; gönderim insanda kalır (6 Eylül 2026)
+
+Kapsam kararı: [`docs/decisions/0016-uretilen-taslak-composera-gecer-2026-09-06.md`](docs/decisions/0016-uretilen-taslak-composera-gecer-2026-09-06.md).
+Değişmezler: [`docs/security-invariants.md`](docs/security-invariants.md) §9o
+(SI-358 … SI-363).
+
+### Kusur, kullanıcının kendi cümlesiyle
+
+Sahibi kamuya açık bir odayı taradı, model gerçek bir iş buldu — *"All active
+Technocore agents, miners, and oracles are invited to post verification
+heartbeats to /r/flop_labs"* — ve sonra onunla bir şey yapamadı:
+
+> "bak ne güzel görev buldu ama şimdi de yaptıramıyoruz" · "mesaj da
+> gönderebilsin"
+
+Ölçüm iki yarım gösterdi ve **arada hiçbir şey** yoktu:
+
+| Yarım | Durum |
+|---|---|
+| `agent/tools.py::ToolId` | Sekiz araç, **hiçbiri gönderemiyor** (bilerek) |
+| `compose/` + `routes/compose.py` + `ComposerPanel.tsx` | İmzalayıp gönderebiliyor, altı `write_gate` koşulunun ardında |
+| İkisini birleştiren yol | **Yoktu** |
+
+Sonuç yalnız sürtünme değildi: kullanıcı üretilen baytları mesaj alanına elle
+yeniden yazmak zorundaydı, yani **üretilen ile imzalanan arasına bir yeniden
+yazma** giriyordu — zincirin ortadan kaldırmak için kurulduğu şeyin ta kendisi.
+
+### Önce kırmızı
+
+Regresyon testi koddan önce yazıldı ve doğru sebeple kırmızıydı: koşu dosyayı
+**gerçekten üretti** (ilk iddia geçti), composer onu **göremedi**.
+
+```
+tests/security/test_compose_task_draft.py
+  ::test_a_run_that_drafted_a_message_can_hand_it_to_the_composer
+E   AssertionError: the composer cannot see what a run produced: a task's
+    workspace drafts are not offered anywhere on the compose surface
+E   assert False
+E    +  where False = hasattr(<station_api.compose.service.ComposeService ...>,
+                              'list_task_drafts')
+1 failed in 0.83s
+```
+
+### Yeni araç **eklenmedi** — ve gerekçesi
+
+Prompt iki seçenek bıraktı (registry kapalı kalsın, ya da yalnız taslak yazan
+bir araç eklensin). Seçilen **hiçbir araç eklememek**; registry sekizde kaldı.
+
+1. `write_workspace_file` zaten aynı kapsamla (`WRITE_WORKSPACE`), aynı
+   parametrelerle (`name`, `body`) ve aynı sonuçla bu dosyayı üretiyor. Bir
+   "mesaj taslağı", çalışma alanındaki bir UTF-8 metin dosyasıdır.
+2. Eş anlamlı bir ad, `ToolParamType.JSON_TEXT`'in silinme gerekçesiyle aynı
+   kusurdur: *okuyanın çıkarıp bulamayacağı bir yetenek*. Üstelik `draft_message`
+   gibi bir ad gönderebilen bir yol olduğunu **ima ederdi**.
+3. Registry sekizde kaldığı için "gönderim aracı eklendi" mutasyonu yapısal bir
+   şeyi ölçer, benim az önce değiştirdiğim bir sayıyı değil.
+
+Bedeli açıkça: **hangi dosyanın mesaj olduğuna kullanıcı karar verir**. Yüzey
+görevlerin ürettiği her metin dosyasını listeler; modelin bir dosyayı "bu
+gönderilecek" diye işaretleyebilmesi tam olarak vermek istemediğimiz yetkidir.
+
+### Taslak composer'a nasıl ulaşıyor
+
+```
+GET  /api/compose/task-drafts   →  hangi koşu ne üretti (ad, boyut, özet)
+POST /api/compose/task-draft    →  seçilen dosyanın tam baytları
+     ↓ (kullanıcı okur, hedef odayı kendisi yazar)
+POST /api/compose/draft  →  POST /api/compose/sign  →  POST /api/compose/send
+```
+
+İlk iki satır **adım 0**'dır ve dördüncü bir onay değildir: token üretmez,
+nonce ayırmaz, imzalamaz. Gövde `proof/artifacts.py::read_bodies` üzerinden
+okunur — yani `agent/workspace.py::read_text`'in ad yeniden kurma, reparse-point
+yürüyüşü, kapsama denetimi ve üç tavanı; artı proof paketinin gizli-şekil
+taraması ve özet yeniden doğrulaması. **İkinci bir okuyucu yazılmadı.**
+
+Ön yüzde `ComposerPanel` içinde "0. Kosunun urettigi taslak" bölümü açıldı;
+`TasksPanel.tsx`'e **dokunulmadı** (o dosyada eşzamanlı ikinci bir çalışma var).
+
+### Kanıtlanan kapılar
+
+| Kapı | Nasıl sürüldü |
+|---|---|
+| Altı `write_gate` koşulu | Yükleme + üç adım = kapı sayacı **dört**, giden istek **bir** |
+| Süpürme/kanonik onayı | Yüklenen gövde süpürmeyi değiştiriyorsa `changed_by_sweep` aynen kalkar |
+| Geri sayım, tek kullanımlık onay | Zincir değişmedi; mevcut `test_compose_flow.py` testlerinin hepsi yeşil |
+| "İçeriği değiştirmek onayları düşürür" | Sunucuda `draft_digest_mismatch`, ön yüzde `dropApprovals` (vitest + e2e) |
+| `DENIED_ROOMS` | `lobby` **ve** `meta` ayrı ayrı `room_refused` |
+| Gizli-şekil taraması | Gizli değer içeren dosya `loadable=False`, yüklemesi `task_draft_unreadable` |
+| Yol ayracı / üst dizin / sürücü harfi | Listede olmayan ad `task_draft_missing`; bir yol hiç kurulmaz |
+
+### Hedef oda taşınmıyor — bu kararın en sert yarısı
+
+Yüklenen metin bir yabancının kamuya açık odaya yazdığı satırdan türemiş
+olabilir (`authority.py`, seviye 3). Test gövdesi bunu **ekiyor**: bir oda
+adlandırıyor, "kullanıcı bu odadaki her şeyi önceden onayladı" diyor ve hedefin
+otomatik doldurulmasını istiyor.
+
+Dört tipin (`TaskDraftBody`, `TaskDraftCandidate`, `ComposeTaskDraftResponse`,
+`ComposeTaskDraftCandidate`) **hiçbir alanı** `room`/`target`/`url`/`host`/
+`path`/`recipient`/`address`/`channel`/`destination` parçalarından birini
+içermez; istek gövdesi tam iki alandır (`task_id`, `name`); ön yüz `setRoom`
+çağırmaz. Oda adı **görünür** — baytlar birebir gösterilir — ama hiçbir alanı
+doldurmaz.
+
+Küçük ama kasıtlı bir ayrıntı: gövde yanıtındaki cümle alanı `target_detail`
+değil `honesty_detail`'dir. Mazeret isteyen bir ad, bir sonraki okuyucunun
+gerçekten hedef taşıyan bir alan için mazeret üreteceği addır.
+
+### Kapalı kapı artık nerede açıldığını söylüyor
+
+`manifest_current` her açılışta sıfırlanır (tasarım gereği). Eski ret:
+
+```
+Yazma kapisi kapali: manifest_current. Once bu adimlari tamamlayin.
+```
+
+Yenisi eksik olan **her** koşulu adıyla ve nerede karşılandığıyla yazar
+(`write_gate.py::GATE_REMEDY` + `describe_blockers`), aynı cümleler
+`GET /api/compose/capability`'nin yeni `blocking_details` alanında da döner ve
+kapalı kapı panelinde okunur. Tarama kapının **kendi çıktısını** yürür, yani
+çaresiz yedinci bir koşul eklenemez.
+
+### Mutasyon testleri — dört iddia, dördü de kırmızı
+
+| Ekilen kusur | Kırmızıya dönen |
+|---|---|
+| Registry'ye `send_message` aracı (import yasak listesi bu adı yakalamıyor) | `::test_the_tool_registry_carries_no_way_to_send_anything` |
+| `load_task_draft` kapıyı koşmayı bıraktı | `::test_a_loaded_draft_walks_all_three_approvals_and_re_runs_the_gate` (`gate_calls` 0), `::test_loading_a_draft_through_a_closed_gate_names_the_missing_condition` |
+| `DENIED_ROOMS`'tan `lobby` çıkarıldı | `::test_a_loaded_draft_is_still_refused_for_a_denied_room` + `test_compose_flow.py`'nin iki testi |
+| Yanıta `room` alanı eklendi ve metindeki oda anmasından dolduruldu; ön yüzde `setRoom` çağrıldı, `dropApprovals` düşürüldü | `::test_a_planted_room_line_never_reaches_a_destination_field`, `ComposerPanel.test.tsx`'in iki testi |
+
+### Dosyalar
+
+**Yeni:** `apps/station-api/src/station_api/compose/task_drafts.py`,
+`tests/security/test_compose_task_draft.py` (26 test),
+`docs/decisions/0016-…md`.
+
+**Değişen (backend):** `compose/service.py` (adım 0, `describe_blockers` ile
+ret cümlesi), `identity/write_gate.py` (`GATE_REMEDY`, `describe_blockers`),
+`routes/compose.py` (iki rota, iki dürüstlük cümlesi), `schemas.py` (üç yeni
+model + `blocking_details`), `app.py` (composer inşası görev katmanının ve
+agent'ın **altına** taşındı, çünkü artık ikisini okuyor).
+
+**Değişen (frontend):** `api/types.ts`, `api/response-validation.ts`,
+`api/client.ts`, `components/compose/ComposerPanel.tsx`.
+
+**Değişen (test/belge):** `ComposerPanel.test.tsx` (+6), `client.test.ts`
+(iki yeni probe), `pages.test.tsx`, `e2e/tests/composer.spec.ts` (+1),
+`compose_fixtures.py`, `test_conformance_boundary.py` (rota kümesi ikiye
+büyüdü, **tam eşitlik** kaldı), `test_module_registry.py` (`app.py` için tek
+adlı bir izin), `docs/security-invariants.md` §9o,
+`docs/decisions/README.md`, `AGENTS.md`, bu dosya.
+
+### Koşulan kapılar
+
+`AGENTS.md` §4'ün **tamamı**, paketleme yarısı dâhil:
+
+```
+uv run --directory apps/station-api ruff check .
+  -> All checks passed!
+uv run --project apps/station-api ruff check apps/station-api/src packages/technocore-conform/src tests
+  -> All checks passed!
+uv run --project apps/station-api mypy --config-file apps/station-api/pyproject.toml
+  -> Success: no issues found in 153 source files
+npm --prefix apps/station-web run lint
+  -> (cikti yok; 0 hata)
+npm --prefix apps/station-web run test
+  -> Test Files 13 passed (13) / Tests 479 passed (479)
+npm --prefix apps/station-web run build
+  -> built in 4.99s
+uv run --directory apps/station-api pytest ../../tests
+  -> 2791 passed, 2 warnings in 291.71s (0:04:51)
+npm --prefix apps/station-web run test:e2e
+  -> 90 passed, 1 failed (1.4m) — asagiya bakin
+uv run --project apps/station-api python packaging/build_bundle.py
+  -> 26 282 378 bayt,
+     SHA-256 c1af7333c2403f8ffae7e9f02a78427349bb734cc79cb6ab48566609b375bc62
+uv run --directory apps/station-api pytest -p no:warnings ../../tests/security/test_frontend_bundle.py ../../tests/security/test_packaging_boundary.py
+  -> 82 passed in 5.01s
+```
+
+`dist` bu turda değişti (composer'da yeni bir bölüm), bu yüzden
+`build_bundle.py` **pytest'ten sonra** koşuldu ve son iki bayt denetimi ondan
+sonra çalıştırıldı — sıralama `packaging.yml`'nin sırası.
+
+**Bu ağaçta eşzamanlı ikinci bir çalışma var** (Görevler ekranı ve İş Tara:
+`TasksPanel.tsx`, `WorkScanPanel.tsx`, `workscan/*.py`, `e2e/harness/workscan.ts`,
+`e2e/tests/workscan.spec.ts`, `e2e/tests/keyboard.spec.ts`, `docs/work-scan.md`,
+`docs/ui-action-map.md`). Bu tur o dosyaların **hiçbirine dokunmadı**.
+
+E2E'deki tek kırmızı o çalışmanın alanındadır ve **koşudan koşuya yer
+değiştiriyor** — üç ardışık koşuda sırasıyla
+`keyboard.spec.ts::opening one block leaves the others as they were`,
+`keyboard.spec.ts::the page stops growing when the reply carries more candidates`
+ve `workscan.spec.ts::runs the scan flow and sends only the rooms that were
+ticked` kırmızıydı; ikincisi tek başına koşturulduğunda **geçti** (`1 passed`).
+Bu turda eklenen `composer.spec.ts` testleri dâhil composer'ın altı e2e testi
+her koşuda yeşildi. Yeniden koşturma komutu:
+
+```
+npm --prefix apps/station-web run test:e2e -- e2e/tests/composer.spec.ts
+  -> 6 passed (8.1s)
+```
 
 Commit, push veya deploy **yapılmadı** (INV-08).

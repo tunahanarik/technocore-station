@@ -95,6 +95,7 @@ from station_api.workscan.snapshot import (
 )
 from station_api.workscan.targets import (
     DEFAULT_LIMIT,
+    ROOM_INDEX_LIMIT,
     RoomScanTarget,
     resolve_room_target,
 )
@@ -396,7 +397,7 @@ class WorkScanService:
 
     # --- reads that a person asked for -------------------------------------
 
-    def refresh_room_index(self, *, limit: int = DEFAULT_LIMIT) -> RoomIndexSnapshot:
+    def refresh_room_index(self, *, limit: int = ROOM_INDEX_LIMIT) -> RoomIndexSnapshot:
         """Read the room overview once, because a person asked.
 
         Kept separate from :meth:`scan` so that "show me what is out there"

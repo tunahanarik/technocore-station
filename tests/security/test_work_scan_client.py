@@ -12,6 +12,8 @@ from pathlib import Path
 
 import httpx
 import pytest
+from station_api.agent.model_calls import ScanModelCallCounter
+from station_api.schemas import WorkScanRefreshRequest
 from station_api.technocore.client import ReadOnlyTechnocoreClient
 from station_api.technocore.sources import TECHNOCORE_ORIGIN
 from station_api.technocore.write_targets import DENIED_ROOMS
@@ -31,11 +33,15 @@ from station_api.workscan.errors import (
     WorkScanError,
     WrongMediaTypeError,
 )
+from station_api.workscan.reading import MAX_LINES_PER_TURN
+from station_api.workscan.service import MAX_ROOMS_PER_SCAN
+from station_api.workscan.snapshot import MAX_ROOMS
 from station_api.workscan.targets import (
     DEFAULT_LIMIT,
     MAX_LIMIT,
     MIN_LIMIT,
     NEVER_SENT_PARAMS,
+    ROOM_INDEX_LIMIT,
     ROOM_INDEX_PATH,
     SCAN_TARGETS,
     RoomScanTarget,
@@ -179,6 +185,67 @@ def test_the_limit_is_clamped_and_never_refused() -> None:
     # one rather than the asked-for one.
     assert index_query(limit=10_000)["limit"] == str(MAX_LIMIT)
     assert messages_query(limit=0)["limit"] == str(MIN_LIMIT)
+
+
+def test_the_room_overview_asks_for_the_count_this_product_chose() -> None:
+    """The overview's ``limit`` is a decision, not an inherited default.
+
+    :data:`DEFAULT_LIMIT` is the number the pinned schema publishes for a
+    **missing** ``limit``: "a value that is not a non-negative integer falls
+    back to 50". Sending it was therefore indistinguishable from never having
+    chosen a count at all, and it was the reason a person offered a room list
+    to pick from could only ever see fifty rooms.
+
+    The same description publishes the clamp - "what survives is clamped to
+    1..200" - and says a value outside it is never refused. So 200 is inside
+    the contract, and it is what a surface whose whole purpose is to offer a
+    set of rooms to choose from should ask for.
+    """
+    assert ROOM_INDEX_LIMIT == MAX_LIMIT
+    assert ROOM_INDEX_LIMIT != DEFAULT_LIMIT
+    assert index_query()["limit"] == str(ROOM_INDEX_LIMIT)
+
+    # ...and it is what actually goes on the wire, rather than a constant the
+    # client happens not to use.
+    transport, recorder = json_transport(index_document())
+    RoomScanClient(transport=transport).fetch_room_index()
+    assert recorder.last.url.params["limit"] == str(ROOM_INDEX_LIMIT)
+
+    # The route's own default is the same decision. `schemas.py` imports
+    # nothing from `station_api` on purpose, so the number is written out
+    # there and pinned here instead of being shared by import.
+    assert WorkScanRefreshRequest.model_fields["limit"].default == ROOM_INDEX_LIMIT
+
+
+def test_the_overview_never_asks_for_more_rooms_than_the_parser_will_keep() -> None:
+    """The ask and the keep bound are one decision, not two that can drift.
+
+    :data:`~station_api.workscan.snapshot.MAX_ROOMS` is how many entries one
+    parsed overview holds. An ask above it would spend a larger reply to throw
+    the tail away - honestly, because ``truncated`` is derived from the
+    reply's own ``total``, but pointlessly.
+    """
+    assert ROOM_INDEX_LIMIT <= MAX_ROOMS
+
+
+def test_the_message_lane_keeps_the_count_the_reading_ceiling_can_afford() -> None:
+    """Measured, not preferred: the message lane stays on the schema default.
+
+    A scan spends at most ``RunCeiling.max_model_calls`` turns of
+    :data:`~station_api.workscan.reading.MAX_LINES_PER_TURN` lines - 8 x 60 =
+    480 readable lines - and ``MAX_ROOMS_PER_SCAN`` is ten. At 50 a full scan
+    already fetches 500 lines against that ceiling; at 200 it would fetch
+    2000 and hand three quarters of them back as ``reading_ceiling`` refusals,
+    which is a bigger request buying a smaller reading.
+    """
+    assert messages_query()["limit"] == str(DEFAULT_LIMIT)
+
+    readable = ScanModelCallCounter().max_model_calls * MAX_LINES_PER_TURN
+    fetched = MAX_ROOMS_PER_SCAN * DEFAULT_LIMIT
+    assert fetched >= readable, (
+        "the message lane already fetches more lines than one scan can read; "
+        "raising it further buys refusals, not candidates"
+    )
 
 
 def test_the_format_parameter_is_always_json_and_never_anything_else() -> None:

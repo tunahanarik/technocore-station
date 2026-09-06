@@ -1,13 +1,20 @@
 """Composer endpoints: the only outbound write surface in Station.
 
-Four routes. Three of them are the approval chain and each one is a separate
-request on purpose (ADR-0002 2); the fourth is a read that lets the UI
-explain a closed gate.
+Six routes. Three of them are the approval chain and each one is a separate
+request on purpose (ADR-0002 2); the other three are reads - one lets the UI
+explain a closed gate, and two offer the bytes a run already produced.
 
     GET  /api/compose/capability   what is possible, and what blocks it
+    GET  /api/compose/task-drafts  what this machine's runs produced
+    POST /api/compose/task-draft   the exact bytes of one produced file
     POST /api/compose/draft        sweep and bind; signs nothing
     POST /api/compose/sign         reserve a nonce, sign, mint one approval
     POST /api/compose/send         spend the approval, POST once
+
+The two draft routes are **reads that feed step 1**, not a fourth approval
+(ADR-0016). Neither returns a token, neither reserves a nonce and neither
+names a room; what they hand back is text a person then takes through the
+same three steps typed text goes through.
 
 Every state-changing route here inherits the global session, CSRF, Host,
 Origin and Sec-Fetch-Site guards - they are middleware, so nothing in this
@@ -24,6 +31,9 @@ What is deliberately absent
   validated against the official pattern and resolved through the closed
   write registry; nothing else about the request is caller-influenced.
 * **No route that signs and sends in one call.** That is the whole design.
+* **No route that sends what a run produced.** ``task-draft`` returns text.
+  Turning that text into a published message takes three more requests and
+  two more approvals, and the room is typed by the person on the way through.
 """
 
 from __future__ import annotations
@@ -37,6 +47,7 @@ from technocore_conform import MAX_MESSAGE_CHARS
 from station_api.compose.approvals import DRAFT_TTL_SECONDS, SEND_TOKEN_TTL_SECONDS
 from station_api.compose.service import ComposeError, ComposeService
 from station_api.dependencies import require_session
+from station_api.identity.write_gate import describe_blockers
 from station_api.schemas import (
     ComposeCapabilityResponse,
     ComposeDraftRequest,
@@ -45,6 +56,10 @@ from station_api.schemas import (
     ComposeSendResponse,
     ComposeSignRequest,
     ComposeSignResponse,
+    ComposeTaskDraftCandidate,
+    ComposeTaskDraftListResponse,
+    ComposeTaskDraftRequest,
+    ComposeTaskDraftResponse,
 )
 from station_api.security.sessions import Session
 from station_api.technocore.write_targets import (
@@ -94,11 +109,34 @@ def _refused(error: ComposeError) -> HTTPException:
     )
 
 
+#: What loading a produced draft does, and what it does not do. Returned with
+#: every listing so the sentence is read where the decision is made rather
+#: than in a design document.
+TASK_DRAFT_HONESTY_DETAIL = (
+    "Bir kosunun urettigi dosyayi buradan mesaj alanina yukleyebilirsiniz. "
+    "Yuklemek gondermek degildir: baytlar oldugu gibi gosterilir, ardindan "
+    "her zamanki uc adim calisir - supurme farki, ayri imza onayi ve tek "
+    "kullanimlik gonderim onayi. Model taslak yazabilir, gonderemez."
+)
+
+#: Why the target room is empty after a draft is loaded. Shown beside the
+#: field, because this is the one place a stranger's text would otherwise get
+#: to choose something irreversible.
+TASK_DRAFT_ROOM_HONESTY_DETAIL = (
+    "Hedef odayi siz yazarsiniz. Yuklenen metin bir odada bir yabancinin "
+    "yazdigi satirlardan turemis olabilir; metnin icinde bir oda adi gecse "
+    "bile o ad bir hedef degil, alintilanmis veridir ve bu alana kendiliginden "
+    "yazilmaz."
+)
+
+
 def _json(
     model: ComposeCapabilityResponse
     | ComposeDraftResponse
     | ComposeSignResponse
-    | ComposeSendResponse,
+    | ComposeSendResponse
+    | ComposeTaskDraftListResponse
+    | ComposeTaskDraftResponse,
 ) -> Response:
     return Response(
         content=model.model_dump_json(),
@@ -142,7 +180,80 @@ async def read_capability(request: Request, session: CurrentSession) -> Response
             max_chars=MAX_MESSAGE_CHARS if limits is None else limits.maximum,
             draft_ttl_seconds=DRAFT_TTL_SECONDS,
             approval_ttl_seconds=SEND_TOKEN_TTL_SECONDS,
+            blocking_details=list(describe_blockers(gate)),
             note_lane_detail=NOTE_LANE_DETAIL,
+        )
+    )
+
+
+@router.get("/task-drafts", response_model=ComposeTaskDraftListResponse)
+def read_task_drafts(request: Request, session: CurrentSession) -> Response:
+    """What this machine's runs produced, offered for loading into step 1.
+
+    A read, and a filesystem one: it lists each task's workspace and reads
+    each body through the workspace's own defences to decide whether it can be
+    handed over. ``def`` rather than ``async def`` for the reason ``sign`` and
+    ``send`` are - blocking work belongs in a worker thread, not on the event
+    loop the rest of the page is being served from.
+
+    No entry names a room. A candidate is a task, a file name, a size and a
+    digest; the destination is chosen on the surface.
+    """
+    del session
+    try:
+        candidates = _service(request).list_task_drafts()
+    except ComposeError as exc:
+        raise _refused(exc) from exc
+
+    return _json(
+        ComposeTaskDraftListResponse(
+            candidates=[
+                ComposeTaskDraftCandidate(
+                    task_id=item.task_id,
+                    task_title=item.task_title,
+                    name=item.name,
+                    byte_count=item.byte_count,
+                    sha256=item.sha256,
+                    loadable=item.loadable,
+                    detail=item.detail,
+                )
+                for item in candidates
+            ],
+            honesty_detail=TASK_DRAFT_HONESTY_DETAIL,
+        )
+    )
+
+
+@router.post("/task-draft", response_model=ComposeTaskDraftResponse)
+def read_task_draft(
+    request: Request, session: CurrentSession, body: ComposeTaskDraftRequest
+) -> Response:
+    """The exact bytes of one produced file.
+
+    ``POST`` for a read, deliberately: the file name is a value in a JSON body
+    rather than a path segment, which is this product's rule for every
+    workspace name (``routes/agent.py``), and the state-changing verbs are
+    where the CSRF, Origin and Sec-Fetch-Site middleware applies. Nothing is
+    written, no token is minted and no nonce is touched.
+    """
+    del session
+    try:
+        result = _service(request).load_task_draft(
+            task_id=body.task_id, name=body.name
+        )
+    except ComposeError as exc:
+        raise _refused(exc) from exc
+
+    return _json(
+        ComposeTaskDraftResponse(
+            task_id=result.task_id,
+            task_title=result.task_title,
+            name=result.name,
+            byte_count=result.byte_count,
+            sha256=result.sha256,
+            text=result.text,
+            claim_phrases=list(result.claim_phrases),
+            honesty_detail=TASK_DRAFT_ROOM_HONESTY_DETAIL,
         )
     )
 
@@ -264,4 +375,9 @@ def send_message(
     )
 
 
-__all__ = ["NOTE_LANE_DETAIL", "router"]
+__all__ = [
+    "NOTE_LANE_DETAIL",
+    "TASK_DRAFT_HONESTY_DETAIL",
+    "TASK_DRAFT_ROOM_HONESTY_DETAIL",
+    "router",
+]

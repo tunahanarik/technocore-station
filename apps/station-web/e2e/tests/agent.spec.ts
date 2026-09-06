@@ -515,6 +515,37 @@ test.describe("Gorevler: modelden plan onerisi", () => {
   });
 });
 
+test.describe("Gorevler: what to do next", () => {
+  test("answers the question a person opens a task with, before every explanation", async ({
+    page,
+  }) => {
+    const ledger: RunLedger = { starts: [], turns: [] };
+    await mockAgentSurface(page, ledger);
+    await openApp(page);
+    await navEntry(page, "Gorevler").click();
+    await openTask(page);
+
+    // The line is derived from this task's state and its own runs: a plan is
+    // already recorded here, so the next thing is to approve and run it
+    // rather than to write another one.
+    const next = page.getByTestId("tasks-next-step");
+    await expect(next).toBeVisible();
+    await expect(next).toContainText("Onayli plani calistir");
+
+    // ...and the control it names really is ahead of the standing
+    // explanations, which is the whole defect: the one actionable thing used
+    // to be the last item on the screen.
+    const start = page.getByRole("button", { name: "Onayli plani calistir" });
+    await expect(start).toBeVisible();
+
+    // The state vocabulary, in a real browser: the button that produced this
+    // state says "Onaya al", so the screen may not answer with the absence of
+    // it. The wire name is untouched and still what the API speaks.
+    await expect(page.getByText("Onay bekliyor")).toHaveCount(0);
+    await expect(page.getByText("Onaya alindi").first()).toBeVisible();
+  });
+});
+
 test.describe("Gorevler", () => {
   test("appears in the navigation, opens from the keyboard and states why nothing runs", async ({
     page,
@@ -560,9 +591,18 @@ test.describe("Gorevler", () => {
     await openApp(page);
     await navEntry(page, "Gorevler").click();
 
+    // The ceiling block carries no control, so it opens folded: the numbers
+    // are in the document from the first paint and one keystroke from the
+    // screen. Both halves are asserted here - `toContainText` reads the
+    // document, `toBeVisible` reads the screen - so a change that quietly
+    // dropped either would fail.
     await expect(page.getByTestId("tasks-budget-units")).toContainText("tool_call_count");
     await expect(page.getByTestId("tasks-budget-units")).toContainText("eszamanlilik 1");
     await expect(page.getByTestId("tasks-budget-refused-units")).toContainText("token, currency");
+
+    const budget = page.getByRole("region", { name: "Butce ve tavan" });
+    await expect(budget.locator("summary")).toContainText("Reddedilen birimler");
+    await budget.locator("summary").click();
     await expect(page.getByText("Agent kendi butcesini yukseltemez")).toBeVisible();
 
     // The trust boundary is a list, not a sentence: an item folded into prose

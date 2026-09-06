@@ -445,9 +445,83 @@ class ComposeCapabilityResponse(StrictModel):
     min_chars: int
     draft_ttl_seconds: int
     approval_ttl_seconds: int
+    #: One sentence per blocked condition: what it is and **where** the user
+    #: satisfies it. Parallel to ``blocking_reasons`` rather than replacing
+    #: it - the keys stay the stable machine vocabulary the UI labels from,
+    #: and these are the actionable half. Empty when the gate is open.
+    blocking_details: list[str]
     #: The note lane is out of scope for this release, and why.
     note_lane_available: Literal[False] = False
     note_lane_detail: str
+
+
+# --- produced drafts: what a run wrote, on its way to step 1 ----------------
+#
+# ADR-0016. Three models, and what is missing from all three is the point:
+# there is no ``room``, ``target``, ``url``, ``recipient`` or ``send_token``
+# field anywhere below. A produced draft is text a person loads, reads and
+# then takes through the ordinary three-step chain; the destination is typed
+# on the surface, never carried from a file whose contents came from lines a
+# stranger wrote in a public room. A test scans these models for a
+# destination-shaped field name.
+
+
+class ComposeTaskDraftCandidate(StrictModel):
+    """One file a run produced, offered for loading. Not a destination."""
+
+    task_id: str
+    task_title: str
+    name: str
+    byte_count: int
+    sha256: str
+    #: False when the bytes cannot be handed over - not UTF-8, over a ceiling,
+    #: refused by the secret-shape scan, or changed since it was listed.
+    loadable: bool
+    #: Why not, when ``loadable`` is false. Empty otherwise.
+    detail: str
+
+
+class ComposeTaskDraftListResponse(StrictModel):
+    """Everything this machine's runs produced that a person could send."""
+
+    candidates: list[ComposeTaskDraftCandidate]
+    #: The honest sentence about what loading one does and does not mean.
+    honesty_detail: str
+
+
+class ComposeTaskDraftRequest(StrictModel):
+    """Which produced file to read. A bare name, never a path."""
+
+    task_id: str = Field(max_length=32)
+    name: str = Field(max_length=160)
+
+
+class ComposeTaskDraftResponse(StrictModel):
+    """The exact bytes of one produced file.
+
+    ``text`` is verbatim - not swept, not truncated, not summarised. Sweeping
+    belongs to step 1, which shows the person what it changed; a body swept
+    here would make that comparison a comparison against itself.
+    """
+
+    task_id: str
+    task_title: str
+    name: str
+    byte_count: int
+    sha256: str
+    text: str
+    #: Phrases the language registry found inside the file. Reported so a
+    #: reader is told the text uses wording this product would not write;
+    #: never removed, because removing them would change the bytes.
+    claim_phrases: list[str]
+    #: Why the room field is still empty after loading, and who fills it.
+    #: Shown beside the field rather than kept in a design document.
+    #:
+    #: Named ``honesty_detail`` like the listing's, and deliberately not
+    #: ``target_detail``: a scan over these models refuses any field whose
+    #: name could hold a destination, and a name that has to be excused is a
+    #: name the next reader will excuse for a field that really does hold one.
+    honesty_detail: str
 
 
 class TechnocoreStatusResponse(StrictModel):
@@ -1412,9 +1486,15 @@ class WorkScanStatusResponse(StrictModel):
 
 
 class WorkScanRefreshRequest(StrictModel):
-    """Read the room overview. Carries a count and nothing addressable."""
+    """Read the room overview. Carries a count and nothing addressable.
 
-    limit: int = Field(default=50, ge=1, le=200)
+    The default is this product's chosen count, not the service's fallback.
+    It is written out rather than imported because this module deliberately
+    imports nothing from ``station_api``; ``test_work_scan_client.py`` fails
+    if it and ``workscan.targets.ROOM_INDEX_LIMIT`` ever disagree.
+    """
+
+    limit: int = Field(default=200, ge=1, le=200)
 
 
 class WorkScanDiscoveryRequest(StrictModel):

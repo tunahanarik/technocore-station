@@ -214,6 +214,18 @@ MODULE_ALLOWANCES: dict[str, dict[str, dict[str, str]]] = {
                 "in, so the composer does not open its own database handle. "
                 "It reserves a message nonce and holds no key."
             ),
+            "station_api.compose.task_drafts": (
+                "``TaskDraftReader`` is built here and handed to "
+                "``ComposeService`` (ADR-0016), the same sentence the three "
+                "entries above carry: the composition root assembles the "
+                "composer's dependencies so no second package learns how. "
+                "The reader touches no key material at all - it lists task "
+                "workspaces and reads artifact bodies through "
+                "``agent.workspace``'s own containment, reparse-point and "
+                "ceiling checks - and it is under this rule only because it "
+                "lives in the ``compose`` package, which is where a "
+                "composer dependency belongs."
+            ),
         },
     },
     "launcher.py": {

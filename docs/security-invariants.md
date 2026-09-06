@@ -1263,6 +1263,44 @@ Değişen tek eski iddia ekrandaki cümledir ve o bir SI satırında değil,
 `DERIVATION_HONESTY_SENTENCE`'ın kendisindeydi; SI-357 hem yeni cümleyi hem
 eskisinin **yokluğunu** sabitler.
 
+## 9o. ADR-0016 değişmezleri — üretilen taslak composer'a geçer (uygulandı)
+
+Kapsam kararı: [`decisions/0016-uretilen-taslak-composera-gecer-2026-09-06.md`](decisions/0016-uretilen-taslak-composera-gecer-2026-09-06.md).
+
+Bu bölüm bir **ürün akışını** tamamlayan değişikliğin değişmezleridir. Açılan
+şey iki okumadır; kapalı kalan şey gönderimdir. Altı satırın beşi "hiçbir şey
+kolaylaşmadı"yı sürer, altıncısı kullanıcının ölçtüğü kusurdur.
+
+| # | Değişmez | Nasıl sürülüyor | Test | Aşama |
+|---|---|---|---|---|
+| SI-358 | Bir koşunun ürettiği taslak composer'a **ulaşır**; kullanıcı baytları elle yeniden yazmaz | Kullanıcının ölçtüğü kusur bir test: bir koşu `write_workspace_file` ile bir mesaj dosyası üretir, composer onu adayla listeler ve **tam baytlarını** yükler. Yüklenen metnin UTF-8 kodlaması diskteki dosyanın baytlarına eşittir ve `sha256` o baytlarındır — süpürülmüş, kırpılmış veya özetlenmiş bir gövde bu eşitliği bozar. Listeleme her dosyayı ait olduğu göreve bağlar (iki görev, iki çalışma alanı, hiçbir dosya yanlış göreve yazılmaz) | `test_compose_task_draft.py::test_a_run_that_drafted_a_message_can_hand_it_to_the_composer`, `::test_the_loaded_bytes_are_the_bytes_on_disk`, `::test_the_listing_carries_the_task_it_belongs_to`, `ComposerPanel.test.tsx::lists what a run produced and loads its exact bytes into the message field` | ADR-0016 |
+| SI-359 | Araç registry'sinde **gönderim aracı yoktur** ve taslak yolu bir tane eklemedi | Registry sekizde kaldı: hiçbir kayıtlı aracın adı veya amacı `gonder`/`send`/`post`/`publish`/`yayimla` ifadelerini taşımaz ve dört kapsamın hepsi bu makinenin içinde okur veya yazar. Yapısal yarısı: `AgentService`'te `send`/`sign` yoktur ve adında `compose` geçen genel bir üye yoktur; agent paketi `station_api.compose` importunu hâlâ yapamaz. Registry'ye ekilen bir `send_message` aracı **kırmızıdır** | `test_compose_task_draft.py::test_the_tool_registry_carries_no_way_to_send_anything`, `::test_a_run_cannot_reach_the_composer_at_all`, `test_agent_boundary.py::test_the_agent_package_reaches_no_signer_vault_or_credential` | ADR-0016 |
+| SI-360 | Yüklenen taslak **hiçbir onayı atlamaz**: üç istek, iki onay, dört kapı koşusu | Uçtan uca sürülür: yükleme + üç adım = kapı sayacı **dört**, giden istek **bir**. Yükleme hiçbir token üretmez (`send_token`/`draft_id` alanı yoktur), adım 1 koşmadan imza `draft_missing` ile reddedilir, düzenlenmiş bir taslağı eski digest'le imzalamak `draft_digest_mismatch` verir, ve süpürmenin değiştireceği bir gövde `changed_by_sweep` bayrağını aynen kaldırır. Yükleme kapıyı atlayacak biçimde değiştirildiğinde iki test kırmızıdır | `test_compose_task_draft.py::test_a_loaded_draft_walks_all_three_approvals_and_re_runs_the_gate`, `::test_a_loaded_draft_cannot_be_signed_without_being_drafted_first`, `::test_editing_a_loaded_draft_invalidates_the_content_approval`, `::test_the_sweep_acknowledgement_still_governs_a_loaded_draft`, `ComposerPanel.test.tsx::still walks all three approvals after a draft is loaded`, `ComposerPanel.test.tsx::drops a standing signature when another produced draft is loaded` | ADR-0016 |
+| SI-361 | Hedef oda **kullanıcınındır**: kaynak metinden hiçbir yola taşınmaz | Ekilen satır bir oda adlandırır, kullanıcının her şeyi önceden onayladığını iddia eder ve hedefin otomatik doldurulmasını ister. Dört tipin (`TaskDraftBody`, `TaskDraftCandidate`, `ComposeTaskDraftResponse`, `ComposeTaskDraftCandidate`) **hiçbir alanı** `room`/`target`/`url`/`host`/`path`/`recipient`/`address`/`channel`/`destination` parçalarından birini içermez — hem dataclass alanları hem Pydantic alanları taranır — ve istek gövdesi tam iki alandır. Ön yüzde oda alanı boş kalır, placeholder'a da yazılmaz, ve taslak düğmesi oda yazılana kadar kapalıdır. Sunucuya `room` alanı eklenirse veya ön yüz `setRoom` çağırırsa **kırmızıdır** | `test_compose_task_draft.py::test_a_planted_room_line_never_reaches_a_destination_field`, `::test_the_produced_draft_types_declare_no_destination_field`, `ComposerPanel.test.tsx::leaves the target room empty when the loaded text names one` | ADR-0016 |
+| SI-362 | `DENIED_ROOMS` yüklenen metne de uygulanır ve gövde çalışma alanının **kendi** savunmalarından geçer | Yüklenen bir taslak `lobby` **ve** `meta` için ayrı ayrı `room_refused` alır (küme birebir iki üyedir, yani ADR-0002 §4.1'in eklediği `meta` sessizce düşemez). Gövde `proof/artifacts.py::read_bodies` üzerinden okunur: gizli-şekilli bir dosya `loadable=False` listelenir ve yüklenmesi `task_draft_unreadable` ile reddedilir; listede olmayan bir ad — yol ayracı, üst dizin veya sürücü harfi taşıyan — `task_draft_missing` alır, yani bir yol hiç kurulmaz | `test_compose_task_draft.py::test_a_loaded_draft_is_still_refused_for_a_denied_room`, `::test_a_file_that_looks_like_a_secret_is_never_handed_to_the_composer`, `::test_a_traversing_name_is_refused_by_the_workspace_not_by_this_package`, `::test_a_file_that_is_not_there_is_a_shown_refusal` | ADR-0016 |
+| SI-363 | Kapalı kapı **hangi koşulun eksik olduğunu ve nerede karşılandığını** söyler | Altı koşulun her biri için bir çare cümlesi vardır ve tarama kapının **kendi çıktısını** yürür (`GATE_REMEDY`'yi değil), yani çaresiz yedinci bir koşul eklenemez; açık kapı boş bir demet üretir. `manifest_current` kapalıyken hem listeleme hem yükleme reddi anahtarı, koşulu ve "Resmi kaynaklari denetle" adımını yazar, ve "her acilista sifirlanir" cümlesi de oradadır. Aynı cümleler `GET /api/compose/capability`'nin `blocking_details` alanında döner ve kapalı kapı panelinde okunur | `test_compose_task_draft.py::test_loading_a_draft_through_a_closed_gate_names_the_missing_condition`, `::test_every_gate_condition_says_where_it_is_satisfied`, `::test_an_open_gate_produces_no_blocker_sentences`, `::test_the_listing_route_reports_a_closed_gate_with_its_remedy`, `::test_the_capability_route_carries_the_same_remedies`, `ComposerPanel.test.tsx::names the missing gate condition and where to satisfy it` | ADR-0016 |
+
+### Mutasyon kaydı (SI-359, SI-360, SI-361, SI-362)
+
+Dört iddia, dört ekilmiş kusur, hepsi kırmızı:
+
+| Ekilen kusur | Kırmızıya dönen |
+|---|---|
+| Registry'ye `send_message` adlı, `WRITE_WORKSPACE` kapsamlı bir araç eklendi (import-time yasak listesi bu adı **yakalamıyor**, yani mutasyon gerçekten uygulanabiliyor) | `::test_the_tool_registry_carries_no_way_to_send_anything` |
+| `load_task_draft` kapıyı koşmayı bıraktı | `::test_a_loaded_draft_walks_all_three_approvals_and_re_runs_the_gate` (`gate_calls` 1 yerine 0), `::test_loading_a_draft_through_a_closed_gate_names_the_missing_condition` |
+| `DENIED_ROOMS`'tan `lobby` çıkarıldı | `::test_a_loaded_draft_is_still_refused_for_a_denied_room` ve mevcut iki `test_compose_flow.py` testi |
+| Yanıta `room` alanı eklendi ve rota onu metindeki oda anmasından doldurdu; ön yüzde `setRoom` regex'le çağrıldı ve `dropApprovals` düşürüldü | `::test_a_planted_room_line_never_reaches_a_destination_field`, `ComposerPanel.test.tsx::leaves the target room empty when the loaded text names one`, `ComposerPanel.test.tsx::drops a standing signature when another produced draft is loaded` |
+
+### Neden hiçbir eski satır **güncellenmedi**
+
+SI-83'ün yerini ADR-0002'nin aldığı cümle ("yazma yolu yalnız kullanıcı onaylı,
+gate açık ve nonce ayrılmışken çalışır") **aynen** doğrudur: bu tur o cümlenin
+hiçbir yarısını değiştirmedi, yalnız metnin nereden geldiğini genişletti.
+Composer rota kümesini sabitleyen
+`test_conformance_boundary.py::test_the_composer_exposes_no_single_step_send`
+iki satır büyüdü ve **tam eşitlik** olarak kaldı; iddiası ("imzalamak ve
+göndermek iki ayrı rotadır") değişmedi ve eklenen iki rota gönderemez.
+
 ## 9b. Aşama 2B değişmezleri (uygulandı)
 
 | ID | Değişmez | Beklenen | Test | Durum |

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Final
 
 # Roadmap stage identifiers. These are strings, not numbers, because the
 # roadmap itself has a "2B" stage - an int cannot name it, and forcing one
@@ -154,13 +155,82 @@ def evaluate(state: WriteGateInput) -> WriteGateStatus:
     return WriteGateStatus(checks=tuple(checks))
 
 
+#: Where each closed condition is satisfied. One sentence per gate key.
+#:
+#: ``GateCheck.detail`` says *what* the condition is; this says **where the
+#: user goes to meet it**. The two are kept apart rather than merged because
+#: they answer different questions, and only the second one is actionable.
+#:
+#: This exists because of a measured failure. ``manifest_current`` starts at
+#: ``never_checked`` on **every launch** by design - a check recorded
+#: yesterday says nothing about the protocol now - so a user who prepares a
+#: message after a relaunch meets a closed gate they did nothing to close. The
+#: refusal they got named the key (``manifest_current``) and stopped there,
+#: which reads as a malfunction rather than as one button they have not
+#: pressed yet.
+#:
+#: :func:`describe_blockers` is the only consumer, and every key in
+#: :func:`evaluate` must appear here - a test walks the gate's own output
+#: rather than this dict, so a seventh condition added without a remedy fails
+#: instead of silently falling back to its bare key.
+GATE_REMEDY: Final[dict[str, str]] = {
+    "identity_present": (
+        "Kimlik bolumunden yeni bir kimlik olusturun veya bir recovery "
+        "dosyasindan kurun."
+    ),
+    "identity_not_revoked": (
+        "Bu kimlik revoke edilmis. Kimlik bolumunden yeni bir kimlik "
+        "olusturun; revoke edilmis bir anahtar geri getirilmez."
+    ),
+    "vault_present": (
+        "Secret kasasi bulunamadi. Uygulamayi kasanin kurulu oldugu Windows "
+        "kullanicisiyla calistirin; kimlik bolumu kasanin durumunu yazar."
+    ),
+    "recovery_verified": (
+        "Kimlik bolumunden recovery dosyasini olusturun ve restore-test ile "
+        "dogrulayin."
+    ),
+    "conformance_verified": (
+        "Uygunluk bolumunden self-test'i calistirin; sweep, canonical ve imza "
+        "kodlamasi pinlenmis referansla karsilastirilir."
+    ),
+    "manifest_current": (
+        "Kaynaklar bolumunden 'Resmi kaynaklari denetle' calistirin. Bu "
+        "denetim her acilista sifirlanir: dun basarili bir denetim bugunku "
+        "protokol hakkinda bir sey soylemez, bu yuzden gunun ilk gonderiminden "
+        "once bir kez daha calistirilir."
+    ),
+}
+
+
+def describe_blockers(status: WriteGateStatus) -> tuple[str, ...]:
+    """One sentence per unsatisfied condition: what it is, and where to meet it.
+
+    Walks :attr:`WriteGateStatus.checks` rather than :data:`GATE_REMEDY`, so
+    the answer is always about the gate that actually ran. A key with no
+    remedy sentence still produces a line - a condition the product cannot
+    explain is still a condition the user must see, which is the same rule the
+    UI's ``gateReasonLabel`` follows for an uncatalogued key.
+    """
+    lines: list[str] = []
+    for check in status.checks:
+        if check.satisfied:
+            continue
+        remedy = GATE_REMEDY.get(check.key, "")
+        sentence = f"{check.key}: {check.detail}"
+        lines.append(f"{sentence} {remedy}".rstrip())
+    return tuple(lines)
+
+
 __all__ = [
     "CONFORMANCE_STAGE",
+    "GATE_REMEDY",
     "IDENTITY_STAGE",
     "MANIFEST_STAGE",
     "CheckState",
     "GateCheck",
     "WriteGateInput",
     "WriteGateStatus",
+    "describe_blockers",
     "evaluate",
 ]

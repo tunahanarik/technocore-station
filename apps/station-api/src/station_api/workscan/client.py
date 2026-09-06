@@ -82,6 +82,7 @@ from station_api.workscan.errors import (
 from station_api.workscan.targets import (
     DEFAULT_LIMIT,
     NEVER_SENT_PARAMS,
+    ROOM_INDEX_LIMIT,
     ROOM_MESSAGES_TEMPLATE,
     RoomScanTarget,
     ScanTarget,
@@ -273,7 +274,7 @@ class RoomScanClient:
         self._transport = transport
         self._sleep = sleep if sleep is not None else _default_sleep
 
-    def fetch_room_index(self, *, limit: int = DEFAULT_LIMIT) -> ScanFetchResult:
+    def fetch_room_index(self, *, limit: int = ROOM_INDEX_LIMIT) -> ScanFetchResult:
         """Read the room overview once, on a caller's explicit request.
 
         Not ``fetch(self, source)``: this client's surface is its own, and the

@@ -305,12 +305,24 @@ def test_the_composer_exposes_no_single_step_send(app: FastAPI) -> None:
     A convenience route that did both would be the whole design undone: the
     user would press one button for two decisions they are meant to make
     separately (ADR-0002 2).
+
+    The set is exact rather than a "does not contain" list, and it grew by two
+    in ADR-0016. ``task-drafts`` and ``task-draft`` are **reads that feed step
+    1**: they hand back the bytes a run wrote so a person does not have to
+    retype them, and neither mints a token, reserves a nonce or names a room.
+    Publishing one still costs the three requests below and the two approvals
+    between them, which is what
+    ``test_compose_task_draft.py::
+    test_a_loaded_draft_walks_all_three_approvals_and_re_runs_the_gate``
+    drives end to end rather than inferring from this list.
     """
     paths = collect_route_paths(app)
 
     compose = {path for path in paths if path.startswith("/api/compose")}
     assert compose == {
         "/api/compose/capability",
+        "/api/compose/task-drafts",
+        "/api/compose/task-draft",
         "/api/compose/draft",
         "/api/compose/sign",
         "/api/compose/send",

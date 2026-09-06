@@ -176,6 +176,32 @@ DEFAULT_LIMIT: Final = 50
 MIN_LIMIT: Final = 1
 MAX_LIMIT: Final = 200
 
+#: How many rooms **this product** asks the overview for.
+#:
+#: Not :data:`DEFAULT_LIMIT`, and the difference is the whole point.
+#: ``DEFAULT_LIMIT`` is what the service does when ``limit`` is absent;
+#: sending it was therefore indistinguishable from never having chosen a
+#: number, and it was why a surface whose entire purpose is to offer a set of
+#: rooms to pick from could only ever offer fifty of them.
+#:
+#: The value is read off the pinned schema rather than chosen by taste. The
+#: ``/rooms`` description publishes the clamp as ``1..200`` and says a value
+#: outside it is clamped rather than refused, so 200 is the largest number
+#: inside the contract - and the largest one that is still *honest*, because
+#: :data:`station_api.workscan.snapshot.MAX_ROOMS` is 200 too: asking for more
+#: would buy a bigger reply only to drop its tail.
+#:
+#: What does **not** change is where the count comes from afterwards. The same
+#: description says ``total`` counts every listed room either way, so the
+#: "servisin bildirdigi toplam / burada tutulan / kirpildi mi" line still
+#: reads ``total`` off the reply and derives ``truncated`` from it. This
+#: constant is what goes out; it is never what comes back.
+#:
+#: Measured before it moved: a worst-case 200-room reply (48-character names,
+#: the service's 120-character topic preview, six measured fields each) is
+#: 139 KB against this target's 2 MiB ceiling - 6.6% of it.
+ROOM_INDEX_LIMIT: Final = MAX_LIMIT
+
 #: Query parameters this build will not send, and the reason travels with
 #: them.
 #:
@@ -215,8 +241,13 @@ def clamp_limit(limit: int) -> int:
     return max(MIN_LIMIT, min(MAX_LIMIT, limit))
 
 
-def index_query(*, limit: int = DEFAULT_LIMIT) -> dict[str, str]:
-    """The exact query for the room overview. Three keys at most, never more."""
+def index_query(*, limit: int = ROOM_INDEX_LIMIT) -> dict[str, str]:
+    """The exact query for the room overview. Three keys at most, never more.
+
+    The default is :data:`ROOM_INDEX_LIMIT` - this product's choice - and not
+    :data:`DEFAULT_LIMIT`, which is only the number the service falls back to
+    when nobody chose.
+    """
     return {LIMIT_PARAM: str(clamp_limit(limit)), FORMAT_PARAM: JSON_FORMAT}
 
 
@@ -352,6 +383,7 @@ __all__ = [
     "NEVER_SENT_PARAMS",
     "ROOMS_CACHE_PROVENANCE",
     "ROOMS_CACHE_SECONDS_DECLARED",
+    "ROOM_INDEX_LIMIT",
     "ROOM_INDEX_PATH",
     "ROOM_MESSAGES_TEMPLATE",
     "SCAN_METHOD",

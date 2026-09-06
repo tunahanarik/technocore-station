@@ -36,7 +36,7 @@ geçerlidir. Türetilmiş belgeler:
 | [`docs/execution-plan.md`](docs/execution-plan.md) | A→J paket planı |
 | [`docs/kullanim-kilavuzu.md`](docs/kullanim-kilavuzu.md) | Son kullanıcı kılavuzu (Paket J) |
 | [`docs/kullanici-kabul-listesi.md`](docs/kullanici-kabul-listesi.md) | Kullanıcı kabul listesi (Paket J) |
-| [`docs/decisions/README.md`](docs/decisions/README.md) | ADR indeksi (ADR-0001…ADR-0015) |
+| [`docs/decisions/README.md`](docs/decisions/README.md) | ADR indeksi (ADR-0001…ADR-0016) |
 | [`docs/verification/`](docs/verification/) | Paket başına doğrulama raporu (`paket-a.md`…`paket-i.md`) |
 
 Her turda önce bu dosyayı, `CLAUDE.md`'yi ve `PROJECT_STATUS.md`'yi oku.

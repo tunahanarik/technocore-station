@@ -12,10 +12,11 @@ import type {
   AgentSurfaceResponse,
   AgentTaskRunsResponse,
   TaskListResponse,
+  TaskStateName,
   TaskStatusResponse,
 } from "../../api/types";
 import { AppShell } from "../AppShell";
-import { TasksPanel } from "./TasksPanel";
+import { STATE_LABEL, TRANSITIONS, TasksPanel, deriveNextStep } from "./TasksPanel";
 
 /**
  * These assertions encode the product rules of the task surface, not its
@@ -1152,8 +1153,11 @@ describe("Gorevler: kabul gecisin girdisidir", () => {
     // The state before and the state after are both on screen and they are
     // the same one. Saying "kabul edildi" alone would leave a reader to
     // assume the task advanced.
-    expect(note).toHaveTextContent("kabulden once 'Onay bekliyor' idi");
-    expect(note).toHaveTextContent("simdi 'Onay bekliyor'");
+    // The label is the one the vocabulary fix gave `awaiting_approval`: the
+    // wire name is unchanged, and what a reader sees now agrees with the
+    // button that produced the state.
+    expect(note).toHaveTextContent("kabulden once 'Onaya alindi' idi");
+    expect(note).toHaveTextContent("simdi 'Onaya alindi'");
 
     // No transition request was made as a side effect of the acceptance.
     expect(
@@ -2208,5 +2212,258 @@ describe("Gorevler: publication readiness is derived, never requested", () => {
       "su alanlar dogrulanmis degil: task_outcome, test_result, user_acceptance",
     );
     expect(screen.queryByTestId("tasks-readiness-moved")).toBeNull();
+  });
+});
+
+/**
+ * The screen answers the question a person actually arrives with.
+ *
+ * Two measured failures from the first real use of this build drive every
+ * assertion below, and both were failures of *information design* rather than
+ * of behaviour - the product did the right thing and then described it wrong:
+ *
+ * 1. **the state name read as a failure.** A person pressed "Onaya al", the
+ *    task moved, and the screen answered "Onay bekliyor". That is the success
+ *    state, but the word says the thing they asked for has not happened yet,
+ *    so they reported the button as broken. A label that is the target of a
+ *    transition must name what was reached, not what is still outstanding;
+ * 2. **the one available action was last.** In `suggested` a plan cannot be
+ *    recorded and a model cannot be asked - the planner requires
+ *    `AWAITING_APPROVAL`, and the only user transition out of `suggested` is
+ *    to it - so exactly one control on the screen could do anything, and it
+ *    sat below four blocked evidence cards, three regions and several
+ *    paragraphs about what each field does not prove.
+ *
+ * The fix for the second one is *not* deletion: every claim on this screen is
+ * there for a reason and the reasons stay reachable. What changes is the
+ * order in which the screen answers questions - the next action first, the
+ * standing explanations one keystroke away.
+ */
+describe("Gorevler: what to do next", () => {
+  /** The same detail payload, for a task in any one of the nine states. */
+  function detailIn(
+    state: TaskStateName,
+    runs: readonly AgentRunStatus[] = [],
+  ): AgentTaskRunsResponse {
+    return { ...runsFor(runs), task: { ...TASK, state } };
+  }
+
+  /**
+   * A stub whose task detail can move, so a transition can be observed.
+   *
+   * The shipped `stub` answers every read from one frozen document, which is
+   * right for the rules it was written for and wrong for this one: what is
+   * under test here is precisely what the screen says *after* a state
+   * changed, and a mock that cannot change state cannot show it.
+   */
+  function movingStub(
+    initial: TaskStateName,
+    after: TaskStateName,
+  ): { readonly transitions: string[] } {
+    const transitions: string[] = [];
+    let state = initial;
+    const mock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : new URL(input as URL).pathname;
+      if (url === "/api/session/bootstrap") {
+        return Promise.resolve(
+          jsonOk({
+            csrf_token: "test-only-value-not-a-real-token",
+            csrf_header: "X-Station-CSRF",
+          }),
+        );
+      }
+      if (url === `/api/tasks/${TASK.id}/transition` && init?.method === "POST") {
+        transitions.push(typeof init.body === "string" ? init.body : "");
+        state = after;
+        return Promise.resolve(jsonOk({ ...TASK, state }));
+      }
+      if (url === "/api/tasks/surface") return Promise.resolve(jsonOk(SURFACE));
+      if (url === "/api/tasks") {
+        return Promise.resolve(jsonOk({ ...LIST, tasks: [{ ...TASK, state }] }));
+      }
+      if (url === `/api/tasks/${TASK.id}/runs`) {
+        return Promise.resolve(jsonOk(detailIn(state)));
+      }
+      return Promise.resolve(jsonOk({ detail: "not_found" }, 404));
+    });
+    vi.stubGlobal("fetch", mock);
+    return { transitions };
+  }
+
+  it("names the one thing a suggested task can do, and the control that does it", async () => {
+    stub(detailIn("suggested"));
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    // The line exists, it is at the top of the task, and it names the single
+    // control this state permits. Not "here are your options": in `suggested`
+    // there is exactly one, and the screen used to make a person find it.
+    const next = screen.getByTestId("tasks-next-step");
+    expect(next).toHaveTextContent("Onaya al");
+
+    // ...and the control it names is really there, really enabled, and really
+    // ahead of the explanation. A pointer at a control below three regions is
+    // the defect with a sentence added to it.
+    const control = screen.getByRole("button", { name: "Onaya al" });
+    expect(control).toBeEnabled();
+    const acceptance = screen.getByRole("region", { name: "Kullanici kabulu" });
+    expect(
+      control.compareDocumentPosition(acceptance) & Node.DOCUMENT_POSITION_FOLLOWING,
+      "the next action must come before the standing explanations, not after them",
+    ).toBeGreaterThan(0);
+  });
+
+  it("reports the state a transition reached, never the absence of it", async () => {
+    const { transitions } = movingStub("suggested", "awaiting_approval");
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.click(screen.getByRole("button", { name: "Onaya al" }));
+    await waitFor(() => {
+      expect(transitions).toHaveLength(1);
+    });
+
+    // The measured defect, as a test: the button promised "Onaya al" and the
+    // screen answered "Onay bekliyor", which reads as "it did not happen".
+    await waitFor(() => {
+      expect(screen.getAllByText("Onaya alindi").length).toBeGreaterThan(0);
+    });
+    expect(screen.queryAllByText("Onay bekliyor")).toEqual([]);
+  });
+
+  it("words every reachable state as something reached, not as something missing", () => {
+    // Table-driven over the transitions the product actually offers, so a
+    // tenth transition added later is measured by the same rule rather than
+    // by whoever remembers this one. The words are the ones a user reads as
+    // "nothing happened yet" - which is a lie about a state they just caused.
+    const unmet = /bekliyor|bekleniyor|gerekiyor|gerekli/i;
+    for (const entry of TRANSITIONS) {
+      expect(
+        STATE_LABEL[entry.target],
+        `"${entry.label}" moves a task to "${STATE_LABEL[entry.target]}", which reads as the absence of what it just did`,
+      ).not.toMatch(unmet);
+    }
+  });
+
+  it("derives a next step for every state the wire can carry", () => {
+    // `STATE_LABEL` is the closed set of states this screen can print. A
+    // state that gained a label and no next step would render a blank line on
+    // the most important row of the screen; this is the test that stops it,
+    // and it iterates the map at runtime rather than trusting the compiler,
+    // because a mirror that has drifted still compiles.
+    const states = Object.keys(STATE_LABEL) as TaskStateName[];
+    for (const state of states) {
+      const step = deriveNextStep(state, []);
+      expect(step.action, `${state} has no next step`).not.toBe("");
+      // A state with no control must say so out loud rather than point at a
+      // control that is not there.
+      if (step.control === "") {
+        expect(step.where, `${state} names a place for a control it has none of`).toBe("");
+      } else {
+        expect(step.where, `${state} names a control but not where it lives`).not.toBe("");
+      }
+    }
+    // Checked after the loop on purpose: a tenth state must fail on the gap
+    // it opened, and only then on the fact that it is a tenth state.
+    expect(states).toHaveLength(9);
+  });
+
+  it("gives each state its own next step rather than one sentence for all nine", () => {
+    // The line is derived. Hard-coding it - a literal in the JSX, or one
+    // fallback shared by every state - collapses this set and fails here.
+    const states = Object.keys(STATE_LABEL) as TaskStateName[];
+    const actions = new Set(states.map((state) => deriveNextStep(state, []).action));
+    expect(actions.size).toBe(states.length);
+  });
+
+  it("reads the same plan two ways: write one, or run the one already written", () => {
+    // Derived from the task *and* its runs, not from the state alone: in
+    // `awaiting_approval` the next thing to do is write a plan, unless a plan
+    // is already recorded, in which case it is to approve and run that one.
+    const empty = deriveNextStep("awaiting_approval", []);
+    const planned = deriveNextStep("awaiting_approval", [PLANNED_RUN]);
+    expect(empty.control).toBe("Plani kaydet (calistirmaz)");
+    expect(planned.control).toBe("Onayli plani calistir");
+  });
+
+  it("collapses what cannot act here without deleting a single claim", async () => {
+    stub(detailIn("suggested"));
+    render(<TasksPanel />);
+    await ready();
+
+    // Every honesty sentence is still in the document. Collapsed is not gone:
+    // these are the load-bearing claims of the whole surface and a disclosure
+    // that dropped one would be trading a defect for a lie.
+    for (const id of [
+      "tasks-execution-reason",
+      "tasks-execution-detail",
+      "tasks-execution-inventory",
+      "tasks-honesty",
+      "tasks-untested",
+      "tasks-model-lane",
+      "tasks-no-arbitrary-execution",
+      "tasks-budget-units",
+      "tasks-budget-refused-units",
+      "tasks-budget-refused-detail",
+      "tasks-trust-boundary",
+      "tasks-interrupted",
+    ]) {
+      expect(
+        screen.getByTestId(id),
+        `${id} was deleted rather than collapsed`,
+      ).toBeInTheDocument();
+    }
+
+    // ...and each of those blocks is closed, with a summary line that says
+    // why. `open` is asserted rather than visibility on purpose: jsdom does
+    // not implement the `details` collapse at all, so a visibility assertion
+    // here would pass whatever the markup said. The real hiding is measured
+    // in a real browser (e2e/tests/a11y.spec.ts).
+    for (const label of ["Yurutme durumu", "Butce ve tavan", "Guven siniri"]) {
+      const region = screen.getByRole("region", { name: label });
+      const disclosure = region.querySelector("details");
+      expect(disclosure, `${label} is not a disclosure`).not.toBeNull();
+      expect(disclosure?.open, `${label} is open although nothing here can act`).toBe(false);
+      expect(
+        region.querySelector("summary")?.textContent ?? "",
+        `${label} collapsed without saying why`,
+      ).not.toBe("");
+    }
+  });
+
+  it("opens the block that holds the next action and closes the ones that cannot act", async () => {
+    // `awaiting_approval` is the one state in which a plan may be recorded (a
+    // proposal outside it is refused whole, planner/service.py), so the
+    // composer and the model lane are open here and closed in `suggested`.
+    stub(detailIn("awaiting_approval"));
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    // The line moved with the state: in `suggested` it named "Onaya al", and
+    // here it names the composer. A literal written into the JSX would agree
+    // with one of the two and fail the other.
+    expect(screen.getByTestId("tasks-next-step")).toHaveTextContent(
+      "Plani kaydet (calistirmaz)",
+    );
+
+    for (const label of ["Plan olustur", "Modelden plan onerisi"]) {
+      const open = screen.getByRole("region", { name: label }).querySelector("details")?.open;
+      expect(open, `${label} must be open where it can act`).toBe(true);
+    }
+
+    // The publication gate can only move a task out of `review_needed`, so
+    // here it is one keystroke away rather than in the way.
+    const readiness = screen
+      .getByRole("region", { name: "Yayin hazirligi" })
+      .querySelector("details");
+    expect(readiness?.open, "the gate cannot act from awaiting_approval").toBe(false);
+    expect(screen.getByTestId("tasks-readiness-rule")).toBeInTheDocument();
   });
 });

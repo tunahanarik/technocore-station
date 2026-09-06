@@ -23,6 +23,7 @@ from station_api.agent.service import AgentService
 from station_api.compose.nonce import NonceReserver
 from station_api.compose.service import ComposeService
 from station_api.compose.signer import MessageSigner, VaultMessageSigner
+from station_api.compose.task_drafts import TaskDraftReader
 from station_api.config import LOOPBACK_HOST, Settings
 from station_api.conformance import ConformanceService, default_conformance_service
 from station_api.evidence.audit import AuditChain
@@ -291,34 +292,6 @@ def create_app(
         else None
     )
 
-    # The composer. It needs a database (for the nonce counter) and an
-    # identity service (for the gate and the vault handle); without either it
-    # is absent and its routes answer 503 rather than pretending.
-    #
-    # ``write_client`` and ``signer`` are test seams in the same sense as the
-    # read client's transport: neither can widen anything, because the URL is
-    # still built from the closed write registry and re-checked against the
-    # origin allow-list, and the signer still receives only a canonical
-    # payload. Nothing reads either from the environment.
-    app.state.compose = (
-        ComposeService(
-            identity=app.state.identity_service,
-            technocore=app.state.technocore,
-            reserver=NonceReserver(engine),
-            signer=(
-                signer
-                if signer is not None
-                else VaultMessageSigner(DpapiVault(settings.data_dir))
-            ),
-            write_client=(
-                write_client if write_client is not None else SignedWriteClient()
-            ),
-            evidence=app.state.evidence,
-        )
-        if engine is not None and app.state.identity_service is not None
-        else None
-    )
-
     # The task layer. It needs a database and nothing else: no client, no
     # signer, no vault (ADR-0004 2). It has no routes in this release - the
     # tasks section stays closed (ADR-0004 9) - so it is reachable only from
@@ -389,6 +362,56 @@ def create_app(
             evidence=app.state.evidence,
         )
         if app.state.tasks is not None and app.state.agent is not None
+        else None
+    )
+
+    # The composer. It needs a database (for the nonce counter) and an
+    # identity service (for the gate and the vault handle); without either it
+    # is absent and its routes answer 503 rather than pretending.
+    #
+    # ``write_client`` and ``signer`` are test seams in the same sense as the
+    # read client's transport: neither can widen anything, because the URL is
+    # still built from the closed write registry and re-checked against the
+    # origin allow-list, and the signer still receives only a canonical
+    # payload. Nothing reads either from the environment.
+    #
+    # Built *after* the task layer and the agent runtime, which is why this
+    # block moved down the file (ADR-0016). The composer reads produced drafts
+    # out of task workspaces, and a reader wired in after construction would
+    # be a security-relevant dependency that is absent for part of the
+    # process's life. ``TaskDraftReader`` opens no path of its own: it is
+    # handed the same root the agent writes under, and every body it returns
+    # is read through ``agent.workspace``'s containment, reparse-point and
+    # ceiling checks by way of the proof package's reader.
+    #
+    # It carries **no room**, and that is the load-bearing sentence: the text
+    # a run drafts comes from lines strangers wrote in public rooms, and the
+    # destination stays something the person types.
+    app.state.compose = (
+        ComposeService(
+            identity=app.state.identity_service,
+            technocore=app.state.technocore,
+            reserver=NonceReserver(engine),
+            signer=(
+                signer
+                if signer is not None
+                else VaultMessageSigner(DpapiVault(settings.data_dir))
+            ),
+            write_client=(
+                write_client if write_client is not None else SignedWriteClient()
+            ),
+            evidence=app.state.evidence,
+            task_drafts=(
+                TaskDraftReader(
+                    data_dir=settings.data_dir,
+                    workspace=app.state.agent,
+                    tasks=app.state.tasks,
+                )
+                if app.state.agent is not None and app.state.tasks is not None
+                else None
+            ),
+        )
+        if engine is not None and app.state.identity_service is not None
         else None
     )
 

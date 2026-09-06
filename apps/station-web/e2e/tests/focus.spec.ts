@@ -127,3 +127,55 @@ test.describe("dialog focus management", () => {
     expect(body).not.toMatch(/private[ _-]?key/i);
   });
 });
+
+/**
+ * Focus around the task screen's disclosures.
+ *
+ * The same property the dialog tests measure, in the place progressive
+ * disclosure is most likely to break it: where the browser puts focus when
+ * content appears and disappears under it. jsdom moves focus for nothing, so
+ * this is only checkable here.
+ */
+test.describe("disclosure focus management", () => {
+  test("opening and closing a block leaves focus on the control that did it", async ({
+    page,
+  }) => {
+    await openApp(page);
+    await gotoSection(page, "Gorevler");
+
+    const summary = page.getByRole("region", { name: "Guven siniri" }).locator("summary");
+    await summary.focus();
+    await expect(summary).toBeFocused();
+
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("tasks-trust-boundary")).toBeVisible();
+    await expect(summary, "opening a block must not throw focus away").toBeFocused();
+
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("tasks-trust-boundary")).toBeHidden();
+    // The one that actually strands people: content collapsing under the
+    // focused element and taking focus to `body` with it.
+    await expect(summary, "closing a block must not drop focus to the document").toBeFocused();
+  });
+
+  test("a folded block puts nothing focusable in the tab order", async ({ page }) => {
+    await openApp(page);
+    await gotoSection(page, "Gorevler");
+
+    // A collapsed disclosure removes its body from the tab order for free;
+    // this is the assertion that would catch a hand-rolled replacement that
+    // only hid the body visually and left every control inside it tabbable -
+    // which is the version of this change that reads fine and is unusable.
+    const reachable = await page.evaluate(() =>
+      [...document.querySelectorAll("details:not([open])")].reduce(
+        (total, disclosure) =>
+          total +
+          [...disclosure.querySelectorAll("button, input, textarea, select, a[href]")].filter(
+            (control) => (control as HTMLElement).offsetParent !== null,
+          ).length,
+        0,
+      ),
+    );
+    expect(reachable, "a folded block may not leave focusable controls on screen").toBe(0);
+  });
+});

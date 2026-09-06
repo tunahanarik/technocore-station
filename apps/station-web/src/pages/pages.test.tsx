@@ -309,6 +309,9 @@ function capabilityFor(status: IdentityStatus): ComposeCapability {
   return {
     can_compose: status.gate.allowed,
     blocking_reasons: [...status.gate.blocking_reasons],
+    blocking_details: status.gate.blocking_reasons.map(
+      (reason) => `${reason}: TEST-ONLY on kosul. TEST-ONLY nerede karsilanir.`,
+    ),
     write_method: "POST",
     write_path_template: "/r/{room}",
     denied_rooms: ["lobby", "meta"],
@@ -467,6 +470,13 @@ function stubIdentity(
             headers: { "Content-Type": "application/json" },
           }),
         );
+      }
+
+      // Step 0 (ADR-0016). Answered with an empty list rather than left to
+      // 404: an unrouted request would put an error region on the page and
+      // these tests assert what the page shows.
+      if (url.includes("/api/compose/task-drafts")) {
+        return jsonOk({ candidates: [], honesty_detail: "TEST-ONLY cumle." });
       }
 
       if (url.includes("/api/technocore/")) {

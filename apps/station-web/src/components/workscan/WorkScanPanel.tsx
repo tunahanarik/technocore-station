@@ -1271,7 +1271,30 @@ export function WorkScanPanel() {
             </p>
           ) : (
             <>
-              <ul className="flex flex-col gap-3">
+              {/* Bounded, like the room list and the discovery log above -
+                  but not by their number.
+
+                  Measured in Chromium at 1280x720: one candidate card is
+                  654px tall (eight numbered sections, a preformatted quote, a
+                  permissions list), against roughly forty for a room-list
+                  line. `max-h-96` is 384px, so the bound that suits a
+                  one-line entry would show three fifths of a single card and
+                  hide the rest - a box that conceals more than it shows.
+
+                  So the bound is the window rather than a pixel count. What
+                  the list has to fit inside is the viewport, and how many
+                  cards that is depends on the reader's window, not on
+                  anything this file can know: at 1280x720 it is most of one
+                  card, and on a maximised window on a 1080p display (~980px)
+                  it is a full card plus the head of the next, which is the
+                  thing that tells a reader the list continues. The remaining
+                  fifth keeps the heading above and the "open as task" button
+                  below on screen, so the control this list feeds is not
+                  pushed away by the list itself.
+
+                  The measured defect this replaces: ten more candidates used
+                  to add 6660px of page. They now add none. */}
+              <ul className="flex max-h-[80vh] flex-col gap-3 overflow-y-auto">
                 {candidates.map((candidate) => (
                   <CandidateCard
                     candidate={candidate}

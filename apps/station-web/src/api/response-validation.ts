@@ -41,6 +41,8 @@ import type {
   ComposeDraft,
   ComposeSendResult,
   ComposeSignature,
+  ComposeTaskDraft,
+  ComposeTaskDraftList,
   ConformanceStatus,
   EvidenceCaptureResult,
   EvidenceList,
@@ -297,6 +299,7 @@ export const isComposeCapability = validator<ComposeCapability>(
   shape({
     can_compose: bool,
     blocking_reasons: listOf(str),
+    blocking_details: listOf(str),
     write_method: str,
     write_path_template: str,
     denied_rooms: listOf(str),
@@ -307,6 +310,36 @@ export const isComposeCapability = validator<ComposeCapability>(
     approval_ttl_seconds: num,
     note_lane_available: bool,
     note_lane_detail: str,
+  }),
+);
+
+export const isComposeTaskDraftList = validator<ComposeTaskDraftList>(
+  shape({
+    candidates: listOf(
+      shape({
+        task_id: str,
+        task_title: str,
+        name: str,
+        byte_count: num,
+        sha256: str,
+        loadable: bool,
+        detail: str,
+      }),
+    ),
+    honesty_detail: str,
+  }),
+);
+
+export const isComposeTaskDraft = validator<ComposeTaskDraft>(
+  shape({
+    task_id: str,
+    task_title: str,
+    name: str,
+    byte_count: num,
+    sha256: str,
+    text: str,
+    claim_phrases: listOf(str),
+    honesty_detail: str,
   }),
 );
 

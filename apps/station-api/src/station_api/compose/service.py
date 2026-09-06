@@ -28,6 +28,18 @@ minutes (the TTL), a second use (single-use), and another browser session
 (the session binding). Every one of those is checked at send time against a
 value captured at signing time.
 
+Where a draft may come from, and what that changes
+---------------------------------------------------
+Since ADR-0016 the text in step 1 may be loaded out of a task workspace
+instead of typed, so a run that produced a message can hand its bytes to the
+person who will sign them. That is a **read** and it changes nothing below
+it: a loaded draft is text in the same field, it goes through the same sweep,
+the same signing approval, the same countdown and the same single-use send
+approval, and all three steps re-run the same gate. There is no method here
+that turns a produced file into a signature, and no argument on that path that
+names a room - the destination is typed by the person, every time, because the
+text was derived from lines a stranger wrote in a public room.
+
 What this module cannot do
 --------------------------
 Reach a seed. The vault lives behind :mod:`station_api.compose.signer`, which
@@ -67,9 +79,15 @@ from station_api.compose.nonce import (
     NonceStorageError,
 )
 from station_api.compose.signer import MessageSigner
+from station_api.compose.task_drafts import (
+    TaskDraftBody,
+    TaskDraftCandidate,
+    TaskDraftError,
+    TaskDraftReader,
+)
 from station_api.db.models import WriteOutcomeValue
 from station_api.identity.service import IdentityServiceError, SigningIdentity
-from station_api.identity.write_gate import WriteGateStatus
+from station_api.identity.write_gate import WriteGateStatus, describe_blockers
 from station_api.logging_setup import forget_secret, register_secret
 from station_api.security.tokens import SingleUseStore
 from station_api.technocore.projection import PLANNED_BODY_FIELDS, Lane, SentLength
@@ -263,12 +281,19 @@ class ComposeService:
         drafts: DraftStore | None = None,
         approvals: SingleUseStore[SendApproval] | None = None,
         evidence: EvidenceRecorder | None = None,
+        task_drafts: TaskDraftReader | None = None,
     ) -> None:
         self._identity = identity
         self._technocore = technocore
         self._reserver = reserver
         self._signer = signer
         self._write_client = write_client
+        # Optional for the reason the evidence archive is: a machine with no
+        # database has no task layer and no agent runtime, and the composer
+        # worked before either existed. Where it is absent the two methods
+        # below refuse by name instead of returning an empty list, so "no
+        # runtime here" never reads as "your run produced nothing".
+        self._task_drafts = task_drafts
         # Optional on purpose. The composer worked before there was an
         # evidence layer and must keep working if one cannot be built (no
         # database, no DPAPI): a send that succeeds and is not archived is
@@ -281,6 +306,57 @@ class ComposeService:
             if approvals is not None
             else SingleUseStore(ttl_seconds=SEND_TOKEN_TTL_SECONDS)
         )
+
+    # --- step 0: what a run produced ---------------------------------------
+    #
+    # Numbered zero because it is *not* a fourth approval and must never grow
+    # into one. Loading a draft is a read: it puts bytes in the message field
+    # and nothing else happens. The three steps below are untouched by it, and
+    # a loaded draft reaches a room by exactly the same route typed text does -
+    # ``draft`` sweeps it, ``sign`` reserves and signs it, ``send`` spends a
+    # single-use approval for it, and every one of the three re-runs the whole
+    # write gate. There is no method here that produces a ``send_token``, and
+    # there is no argument anywhere in this section that names a room.
+
+    def list_task_drafts(self) -> tuple[TaskDraftCandidate, ...]:
+        """Every file this machine's runs produced, offered as a candidate.
+
+        The gate runs first, like everything else on this surface. Not because
+        listing a file is a write - it is not - but because the composer is the
+        write surface, and a surface that answers half its questions with a
+        closed gate and half without is one nobody can reason about. The
+        refusal names the missing condition and where to satisfy it, which is
+        the whole reason a person meets this path at all: ``manifest_current``
+        resets on every launch, so the *first* thing a returning user hits is a
+        closed gate they did nothing to close.
+        """
+        self._require_open_gate()
+        return self._require_task_drafts().candidates()
+
+    def load_task_draft(self, *, task_id: str, name: str) -> TaskDraftBody:
+        """The exact bytes of one produced file, for the person to read.
+
+        Verbatim, and that is the point. Nothing here summarises the file,
+        rewrites it or vouches for it: the person sees the bytes a run wrote,
+        and then the ordinary chain shows them the sweep difference before
+        anything is signed. There is no path on which a model's text becomes a
+        signature without a person having read it.
+        """
+        self._require_open_gate()
+        try:
+            return self._require_task_drafts().body(task_id, name)
+        except TaskDraftError as exc:
+            raise _bad_request(str(exc), reason=exc.reason) from exc
+
+    def _require_task_drafts(self) -> TaskDraftReader:
+        if self._task_drafts is None:
+            raise ComposeError(
+                "Gorev calisma alani bu kurulumda kullanilabilir degil; "
+                "uretilmis bir taslak okunamiyor.",
+                reason="task_drafts_unavailable",
+                status_code=503,
+            )
+        return self._task_drafts
 
     # --- step 1: draft -----------------------------------------------------
 
@@ -606,10 +682,14 @@ class ComposeService:
         """Re-run every precondition. Called by all three steps."""
         gate = self._identity.write_gate_status()
         if not gate.allowed:
+            # Each missing condition, named, with the place it is satisfied.
+            # The keys alone were what this said before, and a key on its own
+            # ("manifest_current") reads as a malfunction rather than as one
+            # button the user has not pressed - which is exactly the state a
+            # relaunch puts every user in, every day, by design.
             raise _gate_closed(
-                "Yazma kapisi kapali: "
-                + ", ".join(gate.blocking_reasons)
-                + ". Once bu adimlari tamamlayin."
+                "Yazma kapisi kapali. Eksik on kosullar: "
+                + " ".join(describe_blockers(gate))
             )
         status = self._technocore.status()
         if not status.manifest_current:
@@ -871,4 +951,6 @@ __all__ = [
     "EvidenceRecorder",
     "SendResult",
     "SignResult",
+    "TaskDraftBody",
+    "TaskDraftCandidate",
 ]

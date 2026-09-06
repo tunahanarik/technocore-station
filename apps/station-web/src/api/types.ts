@@ -223,6 +223,14 @@ export interface ComposeCapability {
   readonly can_compose: boolean;
   /** Gate check keys, same vocabulary as `WriteGateStatus.blocking_reasons`. */
   readonly blocking_reasons: readonly string[];
+  /**
+   * One sentence per blocked condition: what it is and *where* it is
+   * satisfied. Parallel to `blocking_reasons`, never a replacement - the keys
+   * stay the stable vocabulary this UI labels from, and these are the
+   * actionable half. `manifest_current` resets on every launch by design, so
+   * this is the sentence a returning user reads before anything else.
+   */
+  readonly blocking_details: readonly string[];
   readonly write_method: "POST";
   readonly write_path_template: string;
   readonly denied_rooms: readonly string[];
@@ -235,6 +243,44 @@ export interface ComposeCapability {
   readonly note_lane_available: false;
   /** Why there is no note send path, in the backend's own words (ADR-0002 1). */
   readonly note_lane_detail: string;
+}
+
+/**
+ * Step 0 (ADR-0016). What a run produced, offered for loading into step 1.
+ *
+ * Two absences are the whole design and must stay absent: there is no field
+ * here that names a destination, and there is no token. Loading is a read -
+ * it puts bytes in the message field and nothing else happens.
+ */
+export interface ComposeTaskDraftCandidate {
+  readonly task_id: string;
+  readonly task_title: string;
+  readonly name: string;
+  readonly byte_count: number;
+  readonly sha256: string;
+  /** False when the bytes cannot be handed over; `detail` says why. */
+  readonly loadable: boolean;
+  readonly detail: string;
+}
+
+export interface ComposeTaskDraftList {
+  readonly candidates: readonly ComposeTaskDraftCandidate[];
+  /** The backend's own sentence about what loading does and does not mean. */
+  readonly honesty_detail: string;
+}
+
+/** The exact bytes of one produced file. Verbatim: not swept, not truncated. */
+export interface ComposeTaskDraft {
+  readonly task_id: string;
+  readonly task_title: string;
+  readonly name: string;
+  readonly byte_count: number;
+  readonly sha256: string;
+  readonly text: string;
+  /** Phrases the language registry found inside the file. Reported only. */
+  readonly claim_phrases: readonly string[];
+  /** Why the room field is still empty after loading, and who fills it. */
+  readonly honesty_detail: string;
 }
 
 /** Step 1. Nothing is signed and no nonce is reserved yet. */

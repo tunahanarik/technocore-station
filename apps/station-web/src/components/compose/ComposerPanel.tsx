@@ -5,6 +5,8 @@ import {
   type ApiError,
   createComposeDraft,
   fetchComposeCapability,
+  fetchComposeTaskDrafts,
+  loadComposeTaskDraft,
   sendComposeMessage,
   signComposeDraft,
   toApiError,
@@ -14,6 +16,9 @@ import type {
   ComposeDraft,
   ComposeSendResult,
   ComposeSignature,
+  ComposeTaskDraft,
+  ComposeTaskDraftCandidate,
+  ComposeTaskDraftList,
 } from "../../api/types";
 import { shortDigest } from "../../lib/digest";
 import { gateReasonLabel } from "../../lib/identityGuidance";
@@ -40,6 +45,11 @@ import { StatusPill, type StatusTone } from "../StatusPill";
  *    release has no room read to reconcile with (ADR-0002 3).
  * 4. **Nothing remote is active content.** The server's response excerpt is
  *    rendered as plain, unclickable text - no anchor, no markup (SI-54).
+ * 5. **A produced draft is loaded, never obeyed.** Step 0 (ADR-0016) puts the
+ *    exact bytes a run wrote into the message field, and stops there. It does
+ *    not touch the target room, and it must never touch it: the text may be
+ *    derived from lines a stranger wrote in a public room, so a room name
+ *    inside it is quoted data, not a destination. The person types the room.
  *
  * The passphrase, when the vault needs one, lives in local state for the
  * length of one signing act and is wiped as soon as the step is left.
@@ -58,16 +68,22 @@ const OUTCOME_TONE: Record<ComposeSendResult["outcome"], StatusTone> = {
 };
 
 /** Which step a failure came from; only the read is safe to repeat. */
-type ErrorStep = "capability" | "draft" | "sign" | "send";
+type ErrorStep = "capability" | "produced" | "draft" | "sign" | "send";
 
-type Busy = "draft" | "sign" | "send" | null;
+type Busy = "produced" | "load" | "draft" | "sign" | "send" | null;
 
 const ERROR_TITLE: Record<ErrorStep, string> = {
   capability: "Gonderim yetkisi okunamadi",
+  produced: "Uretilen taslaklar okunamadi",
   draft: "Taslak hazirlanamadi",
   sign: "Imzalanamadi",
   send: "Gonderim tamamlanamadi",
 };
+
+/** A short, readable size. Bytes, because that is what the digest covers. */
+function byteLabel(count: number): string {
+  return `${String(count)} bayt`;
+}
 
 export function ComposerPanel({
   needsVaultPassphrase,
@@ -87,6 +103,9 @@ export function ComposerPanel({
   const [signature, setSignature] = useState<ComposeSignature | null>(null);
   const [result, setResult] = useState<ComposeSendResult | null>(null);
   const [dropped, setDropped] = useState(false);
+
+  const [produced, setProduced] = useState<ComposeTaskDraftList | null>(null);
+  const [loadedDraft, setLoadedDraft] = useState<ComposeTaskDraft | null>(null);
 
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState<ApiError | null>(null);
@@ -108,6 +127,32 @@ export function ComposerPanel({
   useEffect(() => {
     void loadCapability();
   }, [loadCapability]);
+
+  /**
+   * What this machine's runs produced, listed as soon as the door is open.
+   *
+   * Loaded on its own rather than on a button press, because the defect this
+   * feature exists for was *not finding the path*: a run had produced the
+   * message and the person had nowhere to click. A local filesystem read costs
+   * nothing outside this machine - it contacts nobody, spends no model call
+   * and touches no key material.
+   */
+  const loadProduced = useCallback(async (): Promise<void> => {
+    setBusy("produced");
+    try {
+      setProduced(await fetchComposeTaskDrafts());
+      setError(null);
+    } catch (caught) {
+      setError(toApiError(caught));
+      setErrorStep("produced");
+    } finally {
+      setBusy(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (capability?.can_compose === true) void loadProduced();
+  }, [capability?.can_compose, loadProduced]);
 
   /**
    * Editing the content invalidates every approval that covered the old
@@ -136,7 +181,42 @@ export function ComposerPanel({
 
   function onTextChange(next: string): void {
     setText(next);
+    setLoadedDraft(null);
     dropApprovals();
+  }
+
+  /**
+   * Load one produced file into the message field. That is all it does.
+   *
+   * Note what is *not* here: `setRoom`. A body that says "post this to
+   * /r/somewhere" is a stranger choosing a destination, and the room field is
+   * left exactly as the person left it - empty, unless they typed one. The
+   * mention is still visible, because the bytes are shown verbatim; what it
+   * cannot do is fill anything in.
+   *
+   * Loading counts as changing the content, so every approval that covered
+   * the old content is dropped by the same call an edit uses.
+   */
+  async function loadProducedDraft(
+    candidate: ComposeTaskDraftCandidate,
+  ): Promise<void> {
+    if (busy !== null) return;
+    setBusy("load");
+    setError(null);
+    try {
+      const body = await loadComposeTaskDraft({
+        taskId: candidate.task_id,
+        name: candidate.name,
+      });
+      setText(body.text);
+      setLoadedDraft(body);
+      dropApprovals();
+    } catch (caught) {
+      setError(toApiError(caught));
+      setErrorStep("produced");
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function prepareDraft(): Promise<void> {
@@ -278,9 +358,19 @@ export function ComposerPanel({
                   adimin ucu de ayni kapiyi yeniden kosar.
                 </span>
                 <span className="flex flex-col gap-1">
-                  {capability.blocking_reasons.map((reason) => (
+                  {capability.blocking_reasons.map((reason, index) => (
                     <span className="text-xs" key={reason}>
                       {`• ${gateReasonLabel(reason)}`}
+                      {/* The backend's own remedy sentence: what is missing
+                          is only half an answer, and the other half is where
+                          to go. `manifest_current` closes on every launch by
+                          design, so most users meet this panel having done
+                          nothing wrong. */}
+                      {capability.blocking_details[index] !== undefined && (
+                        <span className="block text-muted">
+                          {capability.blocking_details[index]}
+                        </span>
+                      )}
                     </span>
                   ))}
                 </span>
@@ -304,6 +394,26 @@ export function ComposerPanel({
               </Alert.Content>
             </Alert>
           )}
+
+          <ProducedDraftStep
+            busy={busy}
+            listing={produced}
+            loaded={loadedDraft}
+            onLoad={(candidate) => void loadProducedDraft(candidate)}
+            onRefresh={() => void loadProduced()}
+          />
+
+          {error !== null && errorStep === "produced" && (
+            <ErrorRegion
+              error={error}
+              onRetry={() => void loadProduced()}
+              retryPending={busy === "produced"}
+              section="Olustur ve Dogrula / Uretilen taslaklar"
+              title={ERROR_TITLE.produced}
+            />
+          )}
+
+          <Separator />
 
           <section aria-label="Adim 1: Taslak" className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-2">
@@ -485,6 +595,122 @@ export function ComposerPanel({
             absence is a decision (ADR-0002 1), not a missing button. */}
         <p className="text-xs text-muted">{capability.note_lane_detail}</p>
       </section>
+    </section>
+  );
+}
+
+/**
+ * Step 0: what a run produced, offered for loading (ADR-0016).
+ *
+ * The one thing this component must never do is fill in the target room, and
+ * the mechanism is that it has no way to: `onLoad` hands the parent a
+ * candidate, the parent calls `setText` and nothing else, and neither this
+ * component nor the response it renders carries a field that could name a
+ * destination. A body that says "post this to /r/flop_labs" is shown - the
+ * person reads it - and changes nothing about where the message would go.
+ *
+ * A file that cannot be handed over (not UTF-8, over a ceiling, refused by
+ * the secret-shape scan) is listed with its reason and its button disabled,
+ * rather than hidden. A missing row reads as "the run produced nothing",
+ * which would be a different and wrong sentence.
+ */
+function ProducedDraftStep({
+  listing,
+  loaded,
+  busy,
+  onLoad,
+  onRefresh,
+}: {
+  readonly listing: ComposeTaskDraftList | null;
+  readonly loaded: ComposeTaskDraft | null;
+  readonly busy: Busy;
+  readonly onLoad: (candidate: ComposeTaskDraftCandidate) => void;
+  readonly onRefresh: () => void;
+}) {
+  return (
+    <section aria-label="Adim 0: Uretilen taslak" className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <h4 className="text-sm font-semibold text-foreground">
+          0. Kosunun urettigi taslak
+        </h4>
+        <StatusPill
+          label={loaded === null ? "Yuklenmedi" : "Yuklendi"}
+          tone={loaded === null ? "inactive" : "ok"}
+        />
+        <Button
+          isDisabled={busy !== null}
+          onPress={onRefresh}
+          size="sm"
+          variant="secondary"
+        >
+          {busy === "produced" ? "Okunuyor..." : "Yenile"}
+        </Button>
+      </div>
+
+      {listing !== null && (
+        <p className="text-xs text-muted">{listing.honesty_detail}</p>
+      )}
+
+      {listing !== null && listing.candidates.length === 0 && (
+        <p className="text-xs text-muted">
+          Hicbir kosu henuz calisma alanina dosya birakmadi. Gorevler
+          bolumunden bir kosu planlayip calistirdiginizda urettigi dosyalar
+          burada listelenir.
+        </p>
+      )}
+
+      {listing !== null && listing.candidates.length > 0 && (
+        <ul className="flex flex-col gap-2">
+          {listing.candidates.map((candidate) => (
+            <li
+              className="flex flex-wrap items-center gap-2 rounded-lg border border-border p-2"
+              key={`${candidate.task_id}:${candidate.name}`}
+            >
+              <span className="font-mono text-xs text-foreground">
+                {candidate.name}
+              </span>
+              <span className="text-xs text-muted">
+                {`${candidate.task_title} · ${byteLabel(candidate.byte_count)} · ozet ${shortDigest(candidate.sha256)}`}
+              </span>
+              {!candidate.loadable && (
+                <span className="text-xs text-danger">{candidate.detail}</span>
+              )}
+              <Button
+                isDisabled={busy !== null || !candidate.loadable}
+                onPress={() => {
+                  onLoad(candidate);
+                }}
+                size="sm"
+                variant="secondary"
+              >
+                {busy === "load" ? "Yukleniyor..." : "Mesaj alanina yukle"}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {loaded !== null && (
+        <Alert status="warning">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>Yuklendi: hedef odayi siz yazarsiniz</Alert.Title>
+            <Alert.Description>
+              <span className="flex flex-col gap-2">
+                <span className="font-mono text-xs">
+                  {`${loaded.name} · ${loaded.task_title} · ${byteLabel(loaded.byte_count)} · ozet ${shortDigest(loaded.sha256)}`}
+                </span>
+                <span>{loaded.honesty_detail}</span>
+                {loaded.claim_phrases.length > 0 && (
+                  <span>
+                    {`Dosyada bu urunun kendi yazmayacagi ifadeler var: ${loaded.claim_phrases.join(", ")}. Metin degistirilmedi; imzalamadan once okuyun.`}
+                  </span>
+                )}
+              </span>
+            </Alert.Description>
+          </Alert.Content>
+        </Alert>
+      )}
     </section>
   );
 }

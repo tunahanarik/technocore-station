@@ -6,7 +6,13 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { bootstrapSession, resetSessionState } from "../../api/client";
+import {
+  WORK_SCAN_DISCOVERY_LIMIT,
+  WORK_SCAN_MESSAGE_LIMIT,
+  WORK_SCAN_ROOM_INDEX_LIMIT,
+  bootstrapSession,
+  resetSessionState,
+} from "../../api/client";
 import type {
   WorkScanCandidate,
   WorkScanDiscovery,
@@ -1445,5 +1451,96 @@ describe("Work scan: scope and actions", () => {
     expect(alert).toHaveTextContent("Kod: http_409");
     // A refused scan offers no retry: repeating it would refuse again.
     expect(within(alert).queryByRole("button", { name: "Yeniden dene" })).toBeNull();
+  });
+});
+
+describe("Work scan: the lists bound themselves instead of growing the page", () => {
+  /**
+   * Every list on this surface whose length is decided by the reply.
+   *
+   * Three of them, and they are the whole set: the room overview, the
+   * discovery log and the candidates. Each one is filled from a document a
+   * stranger's activity decides the size of, so each one is a list this panel
+   * cannot bound by choosing what to render - it can only bound the box it
+   * renders into.
+   *
+   * The lookup is structural rather than by test id, deliberately: what is
+   * under test is the container the cards actually live in, and a test that
+   * found it by an id this file also chose could be satisfied by moving the
+   * id rather than by bounding the list.
+   */
+  const GROWABLE = [
+    { region: "Oda secimi", selector: "fieldset", what: "the room overview" },
+    { region: "Kesif gunlugu", selector: "ul", what: "the discovery log" },
+    { region: "Adaylar", selector: "ul", what: "the candidate list" },
+  ] as const;
+
+  it("gives every reply-sized list its own bounded scroll box", async () => {
+    // One status carrying all three lists at once, so the rule is checked as
+    // one rule rather than three times in three different renders.
+    stub({ ...WITH_SCAN, discovery: DISCOVERY });
+    render(<WorkScanPanel />);
+    await ready();
+
+    for (const { region, selector, what } of GROWABLE) {
+      const box = screen.getByRole("region", { name: region }).querySelector(selector);
+      expect(box, `${what} did not render`).not.toBeNull();
+      const className = box?.className ?? "";
+      // A height bound and a scrollbar are one property: a bounded box with
+      // no overflow rule clips, and an overflow rule with no bound never
+      // scrolls because the box is as tall as its content.
+      expect(className, `${what} does not bound its height`).toMatch(/(^|\s)max-h-\S/);
+      expect(className, `${what} does not scroll its overflow`).toMatch(
+        /(^|\s)overflow-y-auto(\s|$)/,
+      );
+    }
+  });
+
+  it("bounds the candidate list by the viewport rather than by the room list's line height", async () => {
+    // The room list's entries are one line each; a candidate card carries a
+    // quote block and eight numbered sections. The same 24rem bound would
+    // show less than one card, so the candidate list gets a bound expressed
+    // in the viewport it has to fit inside.
+    stub(WITH_SCAN);
+    render(<WorkScanPanel />);
+    await ready();
+
+    const list = screen.getByRole("region", { name: "Adaylar" }).querySelector("ul");
+    expect(list?.className).toMatch(/max-h-\[\d+vh\]/);
+  });
+});
+
+describe("Work scan: the room overview asks for a count this product chose", () => {
+  it("sends the published ceiling rather than the number the service defaults to", async () => {
+    const sent: Recorded[] = [];
+    stub(BASE, {
+      sent,
+      onPost: (url) => (url.endsWith("/rooms/refresh") ? jsonOk(WITH_ROOMS) : null),
+    });
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<WorkScanPanel />);
+    await ready();
+
+    await user.click(screen.getByRole("button", { name: "Oda listesini oku" }));
+    await waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+
+    // The pinned description publishes the clamp as 1..200 and says a value
+    // outside it is clamped rather than refused. 200 is inside the contract;
+    // 50 is what the schema does when `limit` is absent, so sending 50 was
+    // indistinguishable from never having chosen.
+    expect(WORK_SCAN_ROOM_INDEX_LIMIT).toBe(200);
+    expect(sent[0]?.body).toEqual({ limit: WORK_SCAN_ROOM_INDEX_LIMIT });
+  });
+
+  it("leaves the message and discovery lanes on the count the reading ceiling can afford", () => {
+    // Measured: a scan may read 8 turns of 60 lines, so 480 lines is what one
+    // scan can actually get through, and ten rooms at 50 already fetch 500.
+    // Raising these to 200 would fetch 2000 lines and hand three quarters of
+    // them back as `reading_ceiling` refusals.
+    expect(WORK_SCAN_MESSAGE_LIMIT).toBe(50);
+    expect(WORK_SCAN_DISCOVERY_LIMIT).toBe(50);
   });
 });

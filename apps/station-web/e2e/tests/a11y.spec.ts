@@ -9,6 +9,13 @@
 
 import type { Page } from "@playwright/test";
 
+import {
+  ROOM_A,
+  type ScanLedger,
+  mockScanSurface,
+  scanWithCandidates,
+  tickRoom,
+} from "../harness/workscan";
 import { SECTION_LABELS, expect, gotoSection, openApp, test } from "../fixtures";
 
 /** Form controls whose accessible name is missing. */
@@ -125,6 +132,57 @@ test.describe("accessibility smoke", () => {
     expect(consoleLog.pageErrors).toEqual([]);
   });
 
+  test("no section hides content in a box that cannot be scrolled", async ({ page }) => {
+    // The other half of bounding a list. A height bound with no overflow rule
+    // does not scroll - it *clips*, and the clipped part is unreachable by
+    // mouse, keyboard and screen reader alike. Measured in a real browser
+    // because it is a layout fact: jsdom reports every box as zero-sized and
+    // would agree with any styling at all.
+    //
+    // The scan surface is driven into a state that actually has a bounded
+    // list in it, because a section with nothing tall on it would satisfy
+    // this rule by having nothing to check. The mock answers the whole
+    // `/api/workscan/*` group locally, so no room is read (ADR-0006 2).
+    const ledger: ScanLedger = { cursors: [], rooms: [] };
+    await mockScanSurface(page, ledger, () => scanWithCandidates(6));
+    await openApp(page);
+
+    for (const label of SECTION_LABELS) {
+      await gotoSection(page, label);
+      if (label === "Is Tara") {
+        await page.getByRole("button", { name: "Oda listesini oku" }).click();
+        await tickRoom(page, ROOM_A);
+        await page.getByRole("button", { name: "Secili odalari tara" }).click();
+        await expect(
+          page.getByRole("region", { name: "Adaylar" }).locator("> ul > li"),
+        ).toHaveCount(6);
+      }
+      const clipped = await page.evaluate(() =>
+        [...document.querySelectorAll<HTMLElement>("body *")]
+          .filter((element) => {
+            // A few pixels of rounding are not a clipped paragraph.
+            const overflows =
+              element.scrollHeight - element.clientHeight > 4 ||
+              element.scrollWidth - element.clientWidth > 4;
+            // A visually hidden label is a 1px box that clips on purpose:
+            // its content is *for* the accessibility tree, which is the
+            // opposite of the defect this rule looks for.
+            if (!overflows || element.clientHeight <= 1 || element.clientWidth <= 1) {
+              return false;
+            }
+            const style = getComputedStyle(element);
+            // `visible` on either axis lets the content spill out and stay
+            // readable; anything else has to offer a scrollbar.
+            const scrollable = (value: string): boolean =>
+              value === "auto" || value === "scroll" || value === "visible";
+            return !(scrollable(style.overflowY) && scrollable(style.overflowX));
+          })
+          .map((element) => `${element.tagName.toLowerCase()}.${element.className}`),
+      );
+      expect(clipped, `content clipped out of reach in ${label}`).toEqual([]);
+    }
+  });
+
   test("no image or icon is presented without an accessible name", async ({ page }) => {
     await openApp(page);
 
@@ -141,6 +199,93 @@ test.describe("accessibility smoke", () => {
           .map((image) => image.currentSrc || image.src),
       );
       expect(undescribed, `undescribed images in ${label}`).toEqual([]);
+    }
+  });
+});
+
+/**
+ * The progressive disclosure on "Gorevler", measured where it is real.
+ *
+ * This is the half a jsdom test cannot make: jsdom does not implement the
+ * `details` collapse at all, so a Vitest assertion about visibility there
+ * would pass whatever the markup said. What Vitest asserts is that the block
+ * is closed and that no sentence was deleted; what a browser can assert - and
+ * what these tests assert - is that closed really hides, that the disclosure
+ * carries its own name and state into the accessibility tree, and that a
+ * keyboard alone can open it again.
+ *
+ * The rule this guards: **nothing on this screen became unreachable.** The
+ * screen stopped putting four blocked evidence cards and several paragraphs
+ * between a person and the one control their task's state permits; it did not
+ * stop saying any of it.
+ */
+test.describe("Gorevler: progressive disclosure", () => {
+  test("a collapsed block hides its body, keeps it in the document and reopens from the keyboard", async ({
+    page,
+  }) => {
+    await openApp(page);
+    await gotoSection(page, "Gorevler");
+
+    const region = page.getByRole("region", { name: "Yurutme durumu" });
+    await expect(region).toBeVisible();
+
+    // The summary is the always-readable half: the heading plus one line
+    // saying why the rest is folded away. A disclosure whose trigger said
+    // only "Ayrintilar" would be a worse screen, not a shorter one.
+    const summary = region.locator("summary");
+    await expect(summary).toBeVisible();
+    expect(((await summary.textContent()) ?? "").trim().length).toBeGreaterThan(40);
+
+    // Closed really means closed here, and the sentence is still in the
+    // document rather than removed from it.
+    const untested = page.getByTestId("tasks-untested");
+    await expect(untested).toHaveCount(1);
+    await expect(untested).toBeHidden();
+
+    // One key, from the keyboard, with focus visible on the trigger. Native
+    // `details`/`summary` is what makes this true without a line of our own
+    // code: the role, the expanded state, the keyboard operation and the
+    // announcement all come from the browser.
+    await summary.focus();
+    await expect(summary).toBeFocused();
+    await page.keyboard.press("Enter");
+
+    await expect(untested).toBeVisible();
+    await expect(region.locator("details")).toHaveAttribute("open", "");
+    // Focus stays where the person put it: a disclosure that moved focus into
+    // its own body would strand a keyboard user one Shift+Tab from where they
+    // thought they were.
+    await expect(summary).toBeFocused();
+
+    // ...and it closes again the same way, so the collapse is a control the
+    // person holds rather than a state the screen decides once.
+    await page.keyboard.press("Enter");
+    await expect(untested).toBeHidden();
+  });
+
+  test("every collapsed block on the section carries a name and a reason", async ({ page }) => {
+    await openApp(page);
+    await gotoSection(page, "Gorevler");
+
+    // Read from the real accessibility surface rather than from a list this
+    // test keeps: a block added later is covered by the same rule, and a
+    // block that lost its summary text fails here instead of shipping as an
+    // unlabelled toggle.
+    const blocks = await page.evaluate(() =>
+      [...document.querySelectorAll("details")].map((disclosure) => ({
+        open: disclosure.open,
+        heading: disclosure.querySelector("summary h3, summary h4")?.textContent?.trim() ?? "",
+        summary: (disclosure.querySelector("summary")?.textContent ?? "").trim(),
+      })),
+    );
+
+    expect(blocks.length, "the task surface renders its blocks as disclosures").toBeGreaterThan(3);
+    for (const block of blocks) {
+      expect(block.heading, "a disclosure without a heading is an unnamed control").not.toBe("");
+      expect(
+        block.summary.length,
+        `"${block.heading}" collapsed without saying why`,
+      ).toBeGreaterThan(block.heading.length + 20);
     }
   });
 });

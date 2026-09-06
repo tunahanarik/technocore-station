@@ -8,6 +8,7 @@ import {
   captureEvidenceLine,
   checkOpenCodeConnection,
   createComposeDraft,
+  loadComposeTaskDraft,
   createIdentity,
   deleteActivity,
   deriveTaskPublishReadiness,
@@ -16,6 +17,7 @@ import {
   fetchAppStatus,
   fetchAuditChain,
   fetchComposeCapability,
+  fetchComposeTaskDrafts,
   fetchConformance,
   fetchEvidenceRecords,
   fetchIdentity,
@@ -501,6 +503,12 @@ const JSON_PROBES: readonly Probe[] = [
   },
   { name: "revokeIdentity", call: () => revokeIdentity("did:key:test-only") },
   { name: "fetchComposeCapability", call: () => fetchComposeCapability() },
+  { name: "fetchComposeTaskDrafts", call: () => fetchComposeTaskDrafts() },
+  {
+    name: "loadComposeTaskDraft",
+    call: () =>
+      loadComposeTaskDraft({ taskId: "0".repeat(32), name: "heartbeat.txt" }),
+  },
   { name: "createComposeDraft", call: () => createComposeDraft({ room: "test-room", text: "x" }) },
   {
     name: "signComposeDraft",

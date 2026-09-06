@@ -25,6 +25,8 @@ import {
   isComposeDraft,
   isComposeSendResult,
   isComposeSignature,
+  isComposeTaskDraft,
+  isComposeTaskDraftList,
   isConformanceStatus,
   isEvidenceCaptureResult,
   isEvidenceList,
@@ -54,6 +56,8 @@ import type {
   ComposeDraft,
   ComposeSendResult,
   ComposeSignature,
+  ComposeTaskDraft,
+  ComposeTaskDraftList,
   ConformanceStatus,
   EvidenceCaptureResult,
   EvidenceExportFormat,
@@ -633,6 +637,37 @@ export async function fetchComposeCapability(): Promise<ComposeCapability> {
   return request("/api/compose/capability", isComposeCapability);
 }
 
+/**
+ * Step 0: what this machine's runs produced (ADR-0016).
+ *
+ * A read. Nothing here can publish: the response carries text, a size and a
+ * digest, and no field of it names a room. Turning one of these into a
+ * message still costs the three requests below and the two approvals in
+ * between.
+ */
+export async function fetchComposeTaskDrafts(): Promise<ComposeTaskDraftList> {
+  return request("/api/compose/task-drafts", isComposeTaskDraftList);
+}
+
+/**
+ * Step 0, second half: the exact bytes of one produced file.
+ *
+ * A `POST` for a read, deliberately - the file name travels in a body rather
+ * than a path segment, which is this product's rule for every workspace name.
+ * There is no `room` argument and there must never be one: the destination is
+ * typed by the person, because the text may have been derived from lines a
+ * stranger wrote in a public room.
+ */
+export async function loadComposeTaskDraft(input: {
+  readonly taskId: string;
+  readonly name: string;
+}): Promise<ComposeTaskDraft> {
+  return mutate("/api/compose/task-draft", isComposeTaskDraft, {
+    task_id: input.taskId,
+    name: input.name,
+  });
+}
+
 /** Step 1: sweep and bind a digest. Reserves no nonce and signs nothing. */
 export async function createComposeDraft(input: {
   readonly room: string;
@@ -922,12 +957,36 @@ export const WORK_SCAN_ROOM_TIMEOUT_MS = 40000;
  */
 export const WORK_SCAN_MAX_ROOMS = 10;
 
-/** The room count one read of the overview asks for. The published clamp is
- * 1..200 and the backend's own default is 50; this sends it explicitly so the
- * number is visible at the call site rather than inherited silently. */
-export const WORK_SCAN_ROOM_INDEX_LIMIT = 50;
+/**
+ * The room count one read of the overview asks for.
+ *
+ * This used to be 50, which is exactly the number the pinned schema falls
+ * back to when `limit` is absent - so "sent explicitly rather than inherited
+ * silently" was true of the call site and false of the value: the request was
+ * indistinguishable from one that had chosen nothing, and a person offered a
+ * list of rooms to pick from could only ever be offered fifty.
+ *
+ * The published clamp is 1..200 and the description is explicit that a value
+ * outside it is clamped rather than refused, so 200 is inside the contract.
+ * It is also where the backend stops keeping entries (`snapshot.MAX_ROOMS`),
+ * which is why it is not raised past that.
+ *
+ * The count that comes *back* is still read from the reply: `total`,
+ * `kept_count` and `truncated` are the response's own fields and the line
+ * above the list renders them.
+ */
+export const WORK_SCAN_ROOM_INDEX_LIMIT = 200;
 
-/** Messages read per room in one scan. Same published clamp, same reason. */
+/**
+ * Messages read per room in one scan. Same published clamp; a different answer.
+ *
+ * This one stays at 50, and the reason is measured rather than tidy. A scan
+ * spends at most eight model turns of sixty lines - 480 readable lines - and
+ * reads at most ten rooms, so ten rooms at 50 already fetch 500 lines against
+ * that ceiling. At 200 a full scan would fetch 2000 and hand three quarters
+ * of them back as `reading_ceiling` refusals: a larger request buying a
+ * smaller reading.
+ */
 export const WORK_SCAN_MESSAGE_LIMIT = 50;
 
 /**
@@ -936,6 +995,10 @@ export const WORK_SCAN_MESSAGE_LIMIT = 50;
  * The log is an ordinary room to the backend - `/r/{room}` with a
  * compile-time room name - so it inherits the same 1..200 clamp, and this
  * sends the number explicitly for the same reason the other two do.
+ *
+ * It stays at 50 because the log is read a slice at a time and the "continue
+ * from here" control already carries the cursor: a bigger first read would
+ * not remove a press, it would only make the first one larger.
  */
 export const WORK_SCAN_DISCOVERY_LIMIT = 50;
 

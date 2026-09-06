@@ -31,6 +31,7 @@ import httpx
 from sqlalchemy import Engine
 from station_api.compose.nonce import NonceReserver
 from station_api.compose.service import ComposeService
+from station_api.compose.task_drafts import TaskDraftReader
 from station_api.evidence.service import EvidenceService
 from station_api.identity.service import SigningIdentity
 from station_api.identity.write_gate import WriteGateInput, WriteGateStatus, evaluate
@@ -201,6 +202,10 @@ class ComposeHarness:
     #: production state too: a machine without DPAPI composes and sends and
     #: reports that nothing was archived.
     evidence: EvidenceService | None = None
+    #: The produced-draft reader, when the test wired one. ``None`` is a real
+    #: production state too: a machine with no task layer composes and sends,
+    #: and says by name that no run's output can be read here.
+    task_drafts: TaskDraftReader | None = None
     session_id: str = "TEST-ONLY-session"
 
 
@@ -212,6 +217,7 @@ def build_harness(
     technocore: TechnocoreService | None = None,
     reserver: NonceReserver | None = None,
     evidence: EvidenceService | None = None,
+    task_drafts: TaskDraftReader | None = None,
 ) -> ComposeHarness:
     stub = identity if identity is not None else StubIdentity()
     live = technocore if technocore is not None else checked_technocore(engine)
@@ -227,6 +233,7 @@ def build_harness(
             signer=signer,
             write_client=writes.client,
             evidence=evidence,
+            task_drafts=task_drafts,
         ),
         identity=stub,
         signer=signer,
@@ -234,6 +241,7 @@ def build_harness(
         technocore=live,
         reserver=counter,
         evidence=evidence,
+        task_drafts=task_drafts,
     )
 
 
@@ -247,6 +255,7 @@ __all__ = [
     "ComposeHarness",
     "CountingWriteClient",
     "StubIdentity",
+    "TaskDraftReader",
     "TestOnlySigner",
     "answering",
     "build_harness",

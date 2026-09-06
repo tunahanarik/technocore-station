@@ -246,6 +246,8 @@ Bileşenler: `pages/ComposeVerifyPage.tsx` (ön koşul listesi + kabuk) ve
 | otomatik kapı okuma | Olustur ve Dogrula → "On kosullar" | bölüm seçili | `fetchIdentity()` | "Kapi durumu okunuyor..." | ön koşul listesi (kapı kontrolleri + durum rozetleri) | `ErrorRegion` "Kapi durumu okunamadi" + "Yeniden dene" | `kind=timeout` aynı bölge | bölüm değişince unmount | `pages.test.tsx::stays locked and reflects the real write gate`, `::shows a persistent error region when the gate cannot be read` |
 | otomatik yetki okuma | → "Gonderim akisi" | kapı okuması bitti | `GET /api/compose/capability` (`fetchComposeCapability`, 15 sn) | "Gonderim yetkisi okunuyor..." | yol (`POST /r/{room}`), reddedilen odalar, etkin `min_chars`/`max_chars` | `ErrorRegion` "Gonderim yetkisi okunamadi" + "Yeniden dene" (okuma tekrarı zararsızdır) | `kind=timeout` aynı bölge | bölüm değişince unmount | `ComposerPanel.test.tsx::shows a retryable read failure with a retry, and a write failure without one` |
 | kapalı kapı açıklaması | → "Gonderim kapali" | `can_compose === false` | yok | — | `blocking_reasons` okunabilir cümlelere çevrilir; **metin alanı ve gönderim kontrolü hiç render edilmez** (göstermelik disabled form yok) | — | — | — | `ComposerPanel.test.tsx::explains a closed gate from the blocking reasons and offers no form`, `pages.test.tsx::offers no compose field and no send control while locked`, `::names the blocking preconditions instead of showing an inert form` |
+| "Yenile" (Adım 0: Üretilen taslak) | Olustur ve Dogrula → "Uretilen taslaklar" | `can_compose` | `GET /api/compose/task-drafts` (`fetchComposeTaskDrafts`) | "Okunuyor..." + disabled | görevlerin çalışma alanlarında koşuların ürettiği metin dosyaları listelenir; okunamayan her giriş **kendi gerekçesiyle** listede kalır, sessizce düşmez | `ErrorRegion` "Uretilen taslaklar okunamadi" + "Yeniden dene" (salt okuma, tekrarı zararsız) | `kind=timeout` aynı bölge | bölüm değişince unmount | `ComposerPanel.test.tsx::lists what a run produced and loads its exact bytes into the message field` |
+| "Mesaj alanina yukle" | → aynı bölüm, bir taslak seçili | taslak `loadable` | `POST /api/compose/task-draft` (`loadComposeTaskDraft`) | "Yukleniyor..." + disabled | dosyanın **birebir baytları** mesaj alanına yazılır; **hedef oda alanı boş kalır** — metin bir oda adı içerse bile doldurulmaz (yabancının satırı hedef seçemez, SI-358…363). Yüklemek varsa duran imzayı ve gönderim onayını **düşürür** | `ErrorRegion` "Uretilen taslaklar okunamadi" (retry yok) | `kind=timeout` aynı bölge | yok | `ComposerPanel.test.tsx::leaves the target room empty when the loaded text names one`, `::still walks all three approvals after a draft is loaded`, `::drops a standing signature when another produced draft is loaded` |
 | "Hedef oda" (`TextField`+`Input`) | Adım 1 | `can_compose` | React state | — | oda adı; değişimi **önceki taslağı ve onayı düşürür** | — | — | — | `ComposerPanel.test.tsx::drops the approval when the target room changes` |
 | "Mesaj metni" (`TextField`+`TextArea`, `rows=6`) | Adım 1 | `can_compose` | React state + sayaç | — | `N / max_chars karakter (en az min_chars)` — sınırlar **capability'den**, hardcode yok. Üst sınır aşımında `aria-invalid="true"` ve açıklama `aria-describedby` ile alana bağlanır | — | — | — | `ComposerPanel.test.tsx::reads the character limits from the capability instead of hardcoding them`, `::links the over-limit explanation to the field it describes` |
 | "Taslagi hazirla" | Adım 1 | oda dolu **ve** ham metin `min_chars`'tan kısa değil | `POST /api/compose/draft` (`createComposeDraft`, 15 sn) | "Hazirlaniyor..." + disabled | Adım 2 açılır: sweep farkı, hedef notları | `ErrorRegion` "Taslak hazirlanamadi" (retry **yok**; kullanıcı yeniden gönderir) | `kind=timeout` aynı bölge | yok | `ComposerPanel.test.tsx::reveals the three steps in order and offers no send control before a signature` |
@@ -963,8 +965,122 @@ tamamına** uygular: "dogrulanmis itibar", "itibar puani", "uygunluk puani",
 Bölüm `src/pages/TasksPage.tsx` → `components/tasks/TasksPanel.tsx`. Akış tek
 yönlüdür ve her adımı kullanıcı başlatır:
 
-> görevi seç → durumu ve dört alanı oku → plan yaz (çalıştırmaz) → dört onay →
-> çalıştır → durdur / devam et
+> görevi seç → **"sırada ne var" satırını oku** → o tek adımı yap → (plan yaz,
+> çalıştırmaz) → dört onay → çalıştır → durdur / devam et
+
+Ekranın geri kalanı silinmedi: iş göremeyen her blok tek satırlık bir özete
+katlanır ve istenince açılır (§13.0.2).
+
+### 13.0 "Sırada ne var" satırı ve ilerlemeli açılım
+
+> Bu iki başlık, uygulamanın **ilk gerçek kullanımından** çıkan iki ölçülmüş
+> kusurun karşılığıdır. İkisi de davranış değil **bilgi tasarımı** kusuruydu:
+> ürün doğru şeyi yaptı ve yanlış anlattı.
+
+**Kusur 1 — durum adı bir başarısızlık gibi okunuyordu.** Kullanıcı "Onaya al"
+düğmesine bastı, görev `awaiting_approval`'a geçti, ekran **"Onay bekliyor"**
+dedi. Bu başarı durumudur, ama sözcük "istediğiniz şey henüz olmadı" der;
+kullanıcı düğmenin çalışmadığını bildirdi. Aynı kusur `review_needed`'da da
+vardı: düğme "Incelemeye al", etiket "Inceleme gerekiyor".
+
+**Kural:** bir kontrolün *hedefi* olan durumun etiketi, o kontrolün **ulaştığı
+şeyi** adlandırır; hâlâ eksik olanı değil. Eksik olan `state_detail`
+cümlesinde yazılıdır ve o cümle birebir korunmuştur.
+
+| Wire adı (değişmedi) | Eski etiket | Yeni etiket | Neden |
+|---|---|---|---|
+| `awaiting_approval` | Onay bekliyor | **Onaya alindi** | Düğme "Onaya al" der; ekran onun yokluğunu söyleyemez |
+| `review_needed` | Inceleme gerekiyor | **Incelemeye alindi** | Düğme "Incelemeye al" der; aynı kusur |
+
+Diğer yedi etiket değişmedi. **Durum adlarının kendisi değişmedi** —
+`docs/security-invariants.md` ve API testleri onları pinler; değişen yalnız
+insanın okuduğu sözcüktür. Test: `TasksPanel.test.tsx::words every reachable
+state as something reached, not as something missing`, beş geçişin beşini de
+`TRANSITIONS` üzerinden tarar; yeni bir geçiş aynı kuralla ölçülür.
+`ComposerPanel` benzeri prose de artık `STATE_LABEL`'dan okur: plan
+bestecisindeki "gorev '…' durumunda olmalidir" cümlesi elle yazılmaz.
+
+**Kusur 2 — ekranın cevapladığı sekiz soru, kullanıcının sorduğu sorudan
+önce geliyordu.** `suggested` durumunda plan kaydedilemez ve modelden plan
+istenemez (`planner/service.py`, `AWAITING_APPROVAL` şartı;
+`ALLOWED_TRANSITIONS[SUGGESTED]` yalnız `awaiting_approval` ve `failed`). Yani
+ekranın tamamında iş görebilen **tek** kontrol vardı ve o kontrol dört engelli
+kanıt kartının, yayın hazırlığı bloğunun, kullanıcı kabulü bloğunun, public
+paylaşım bloğunun ve "bu alan neyi ispatlamaz" paragraflarının **altındaydı**.
+
+#### 13.0.1 "Sırada ne var" satırı
+
+Görev ayrıntısının **ilk** satırı (`tasks-next-step`, kontrol adı
+`tasks-next-step-control`). Görevin **kendi durumundan ve kendi
+çalışmalarından türetilir**; JSX'te duruma göre yazılmaz.
+
+| Durum | Sonraki adım (özet) | Kontrol | Bölüm |
+|---|---|---|---|
+| `suggested` | Görevi onaya al | "Onaya al" | Durum degisikligi |
+| `awaiting_approval` (kayıtlı plan yok) | Plan yaz ve kaydet | "Plani kaydet (calistirmaz)" | Plan olustur |
+| `awaiting_approval` (kayıtlı plan **var**) | Dört onayı ver, sonra çalıştır | "Onayli plani calistir" | Calismalar |
+| `running` | Durdur | "Durdur" | Calismalar |
+| `paused` | Onaylı kapsamda sürdür | "Devam et" | Calismalar |
+| `blocked` | Engel kalktıysa yeniden onaya al | "Onaya al" | Durum degisikligi |
+| `failed` | — (son durum) | yok | yok |
+| `review_needed` | Yayın hazırlığını değerlendir | "Yayin hazirligini degerlendir (durumu istemez)" | Yayin hazirligi |
+| `ready_to_publish` | Yayımladıysan işaretle | "Yayimlandi olarak isaretle" | Durum degisikligi |
+| `published` | — (son durum) | yok | yok |
+
+Kontrolü olmayan iki durum bunu **açıkça** söyler; olmayan bir düğmeyi işaret
+etmez. Türetimin üç testi var: her durumun bir sonraki adımı olması, dokuz
+adımın **birbirinden farklı** olması, ve kayıtlı bir planın cümleyi
+değiştirmesi. Onuncu bir durum, etiketi olup sonraki adımı olmadığında
+`deriveNextStep` üzerinde kırmızı verir (mutasyonla ölçüldü) — ayrıca
+`Record<TaskStateName, TaskNextStep>` derleme hatası verir.
+
+**"Durum degisikligi" bloğu yukarı taşındı**: dokuz durumun dördünde sonraki
+adım oradadır ve daha önce ekrandaki her açıklamanın altındaydı. Beş geçişin
+kendisi değişmedi; yalnız kullanıcının onlarla ne zaman karşılaştığı değişti.
+
+#### 13.0.2 İlerlemeli açılım (native `details`/`summary`)
+
+Bu durumda **iş göremeyen** her blok, nedenini söyleyen tek satırlık bir
+özete katlanır ve istenince açılır. **Hiçbir cümle silinmedi ve hiçbir şey
+erişilemez olmadı**: içerik DOM'da kalır, klavyeyle açılır, ekran okuyucuya
+adı ve açık/kapalı durumu ile duyurulur.
+
+Bloğun açık doğması `BLOCK_ACTS` tablosundan türetilir; gerekçe backend'in
+kendi kuralıdır:
+
+| Blok | Açık olduğu durumlar | Kural nereden |
+|---|---|---|
+| Yurutme durumu, Butce ve tavan, Guven siniri, Kesilen calismalar, Dort alan, Calisma alani | hiçbiri | bu bloklarda **kontrol yoktur** |
+| Yayin hazirligi | `review_needed` | kapı `transition(READY_TO_PUBLISH)` çağırır; bu kenar yalnız `review_needed`'dan tanımlı |
+| Modelden plan onerisi, Plan olustur | `awaiting_approval` | planlayıcı bu durum dışındaki öneriyi bütünüyle reddeder |
+| Calismalar | `awaiting_approval`, `running`, `paused` | başlat / durdur / devam, üç çalışma durumuna aittir |
+| Kullanici kabulu, Public paylasim isareti | her durumda | rotaların **hiçbir durum ön koşulu yoktur**; alanı yazıp dururlar |
+
+Son iki satır bilerek öyle: ilk denemede "kayıtlı çalışma yoksa kabul
+katlansın" kuralı yazılmıştı ve `review_needed` + boş çalışma listesi tam da
+bir insanın paketi kabul ettiği durumdur. Backend'in koymadığı bir ön koşulu
+ekranda varmış gibi göstermek, koyduğu bir ön koşulu gizlemekle aynı sınıf
+yalandır; bu yüzden bu iki blok hiç katlanmaz.
+
+**Katlamak asla bir kapı değildir.** Açılan bloktaki kontrollerin ön koşulları
+birebir aynıdır: dört onay dört onaydır, "Onayli plani calistir" hâlâ
+dördü işaretlenmeden `isDisabled`'dır, ve hiçbir kontrol bu turda
+kolaylaşmadı.
+
+Testler iki katmanda ve **bilerek farklı şeyleri** ölçer:
+
+- **jsdom (Vitest):** bloğun kapalı doğduğu (`details.open === false`), özet
+  satırının boş olmadığı ve on iki dürüstlük `data-testid`'inin hâlâ
+  belgede bulunduğu. jsdom `details` katlamasını hiç uygulamaz, bu yüzden
+  orada bir *görünürlük* iddiası hangi markup olursa olsun geçerdi;
+- **gerçek tarayıcı (Playwright):** kapalının gerçekten gizlediği
+  (`toBeHidden`), `summary`'nin odaklanabildiği, Enter **ve** Space ile
+  açıldığı, odağın açıp kapamadan sonra kontrolün üstünde **kaldığı**, ve
+  kapalı bir bloğun sekme sırasında odaklanabilir kontrol **bırakmadığı**.
+  Dosyalar: `e2e/tests/a11y.spec.ts` (`Gorevler: progressive disclosure`),
+  `e2e/tests/keyboard.spec.ts` (`Gorevler disclosures from the keyboard`),
+  `e2e/tests/focus.spec.ts` (`disclosure focus management`),
+  `e2e/tests/agent.spec.ts` (`Gorevler: what to do next`).
 
 ### 13.1 Kontrol tablosu
 
@@ -993,7 +1109,15 @@ first start is in flight`.
 
 ### 13.2 Dürüstlük yüzeyi
 
-Bu paketin asıl işi budur. Hepsi **koşulsuz** ve sonuç beklemeden ekrandadır:
+Bu paketin asıl işi budur. Hepsi **koşulsuz** ve sonuç beklemeden belgededir;
+hiçbiri bir sonucun ardından belirmez ve hiçbiri bir koşula bağlı değildir.
+
+> **§13.0.2'den sonra:** aşağıdaki satırların bir kısmı artık kapalı doğan bir
+> `details` bloğunun içindedir. Yeri değişti, varlığı değişmedi: hepsi DOM'da,
+> hepsi klavyeyle bir tuş uzakta, hepsi ekran okuyucuya duyurulan bir açılırın
+> içinde. Kapalı bir bloğun özet satırı **nedenini** yazar; hiçbir cümle
+> kısaltılmadı ve hiçbir nitelik düşürülmedi. `data-testid`'lerin hepsi aynı
+> kaldı, bu yüzden aşağıdaki tablo olduğu gibi geçerlidir.
 
 | Ne | Nerede | Test kimliği |
 |---|---|---|

@@ -1,5 +1,5 @@
 import { Alert, Button, Card, Checkbox, Input, Label, Separator, TextArea, TextField } from "@heroui/react";
-import { useCallback, useEffect, useId, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useId, useState } from "react";
 
 import {
   type ApiError,
@@ -139,15 +139,36 @@ const ERROR_TITLE: Record<Step, string> = {
   readiness: "Yayin hazirligi degerlendirilemedi",
 };
 
-/** The nine states, in the user's language. */
-const STATE_LABEL: Record<TaskStateName, string> = {
+/**
+ * The nine states, in the user's language.
+ *
+ * The **wire** names are untouched and cannot be touched: they are pinned by
+ * the API tests and by `docs/security-invariants.md`. What is written here is
+ * the word a person reads, and two of them were measured wrong the first time
+ * this build met its owner.
+ *
+ * The rule the two rewrites follow: **a label that is the target of a control
+ * must name what that control reached, never what is still outstanding.** A
+ * person pressed "Onaya al", the task moved, and the screen answered "Onay
+ * bekliyor" - which reads as "your click did nothing", and was reported as
+ * exactly that. The state really is waiting for an approval, and the backend
+ * still says so in `state_detail`, which is rendered verbatim beside this
+ * label; the difference is that a *detail sentence* may describe what is
+ * pending, while the *name of the state a button just produced* may not,
+ * because that is the word the reader checks their click against.
+ */
+export const STATE_LABEL: Record<TaskStateName, string> = {
   suggested: "Onerildi",
-  awaiting_approval: "Onay bekliyor",
+  // was: "Onay bekliyor" - the measured defect. The button says "Onaya al".
+  awaiting_approval: "Onaya alindi",
   running: "Calisiyor",
   paused: "Duraklatildi",
   blocked: "Engellendi",
   failed: "Basarisiz",
-  review_needed: "Inceleme gerekiyor",
+  // was: "Inceleme gerekiyor" - the same defect in the same shape. The button
+  // says "Incelemeye al", so a person who presses it and is told a review is
+  // "needed" has been told their action did not land.
+  review_needed: "Incelemeye alindi",
   ready_to_publish: "Yayima hazir",
   published: "Yayimlandi",
 };
@@ -325,13 +346,311 @@ const STEP_PHASE_LABEL: Record<AgentStepPhaseName, string> = {
 };
 
 /** The five transitions a person may ask for. */
-const TRANSITIONS: readonly { readonly target: TaskUserTransitionName; readonly label: string }[] = [
+export const TRANSITIONS: readonly { readonly target: TaskUserTransitionName; readonly label: string }[] = [
   { target: "awaiting_approval", label: "Onaya al" },
   { target: "review_needed", label: "Incelemeye al" },
   { target: "blocked", label: "Engellendi olarak isaretle" },
   { target: "failed", label: "Basarisiz olarak isaretle" },
   { target: "published", label: "Yayimlandi olarak isaretle" },
 ];
+
+// --- what to do next -------------------------------------------------------
+
+/**
+ * The single next action, and the control that performs it.
+ *
+ * This exists because the screen used to answer eight questions before the
+ * one a person arrives with. In `suggested` exactly one control on the whole
+ * surface could do anything - the planner refuses a plan outside
+ * `awaiting_approval`, and the only user transition out of `suggested` is to
+ * it - and that control was the last thing on the screen, under four blocked
+ * evidence cards and several paragraphs about what each field does not prove.
+ *
+ * Three properties, and each of them is a test:
+ *
+ * * **it is derived, never written into the JSX.** The line comes from this
+ *   table and from the task's own runs. A tenth state that gained a label and
+ *   no entry here renders nothing at all - so a runtime test walks
+ *   `STATE_LABEL` and fails on the gap rather than letting the most important
+ *   row of the screen go blank;
+ * * **it names one action.** Not a list of what is possible: the single next
+ *   thing, in this state, with what this task currently has;
+ * * **it names the control verbatim.** The words in `control` are the words
+ *   on the button, so a reader can search the screen for them. A state that
+ *   offers no control says so, with an empty `control` *and* an empty
+ *   `where`, rather than pointing at a button that is not there.
+ */
+export interface TaskNextStep {
+  /** What to do next. One action, in the user's language. */
+  readonly action: string;
+  /** The label of the control that performs it, verbatim; "" when none. */
+  readonly control: string;
+  /** The block that control lives in; "" when there is no control. */
+  readonly where: string;
+}
+
+const NEXT_STEP: Record<TaskStateName, TaskNextStep> = {
+  suggested: {
+    action:
+      "Bu gorev bir tarama onerisidir ve bu durumda plan kaydedilemez, modelden plan istenemez. Once onaya alin.",
+    control: "Onaya al",
+    where: "Durum degisikligi",
+  },
+  awaiting_approval: {
+    action:
+      "Gorev icin bir plan yazin ve kaydedin. Kaydetmek hicbir seyi calistirmaz; calistirmak dort onaydan sonra ayri bir islemdir.",
+    control: "Plani kaydet (calistirmaz)",
+    where: "Plan olustur",
+  },
+  running: {
+    action:
+      "Calisma sunucuda yurutuluyor. Buradaki tek islem onu durdurmaktir; ilerleme cubugu yoktur ve ekran kendiliginden yenilenmez.",
+    control: "Durdur",
+    where: "Calismalar",
+  },
+  paused: {
+    action:
+      "Durdurulmus calismayi ayni onayli kapsamda surdurun. Devam yeni bir adim eklemez.",
+    control: "Devam et",
+    where: "Calismalar",
+  },
+  blocked: {
+    action:
+      "Engelin sebebi giderildiyse gorevi yeniden onaya alin; engelli bir gorevde plan kaydedilemez.",
+    control: "Onaya al",
+    where: "Durum degisikligi",
+  },
+  failed: {
+    action:
+      "Bu gorev basarisiz olarak kapandi ve bu bir son durumdur: ileri tasinmaz. Ayni is icin yeni bir gorev acilir.",
+    control: "",
+    where: "",
+  },
+  review_needed: {
+    action:
+      "Kanit alanlari doldugunda yayin hazirligini degerlendirin. Bu islem bir durum istemez: uc kanit alaninin yeniden okunmasini ister ve karari kapi verir.",
+    control: "Yayin hazirligini degerlendir (durumu istemez)",
+    where: "Yayin hazirligi",
+  },
+  ready_to_publish: {
+    action:
+      "Uc kanit alani ayri ayri dogrulandi. Yayimi kendiniz yaptiysaniz gorevi yayimlandi olarak isaretleyin; bu isaret hicbir sey gondermez.",
+    control: "Yayimlandi olarak isaretle",
+    where: "Durum degisikligi",
+  },
+  published: {
+    action:
+      "Gorev yayimlandi olarak kapandi ve bu bir son durumdur: buradan baska bir duruma gecilmez.",
+    control: "",
+    where: "",
+  },
+};
+
+/**
+ * In `awaiting_approval`, a recorded plan changes what comes next.
+ *
+ * The one refinement the table alone cannot make, and it is derived from the
+ * task's own runs rather than from a second state: "write a plan" and "run
+ * the plan you already wrote" are different sentences, and pointing a person
+ * at the composer when a plan is already sitting there unapproved is the same
+ * class of mistake this whole line exists to fix.
+ */
+const RUN_THE_RECORDED_PLAN: TaskNextStep = {
+  action:
+    "Kaydedilmis bir plan var. Dort onayi ayri ayri verin, sonra plani calistirin. Onaylar bu plana aittir; farkli bir plan yeni bir calismadir ve yeniden onay ister.",
+  control: "Onayli plani calistir",
+  where: "Calismalar",
+};
+
+/** Derive the next step from the task's own state and its own runs. */
+export function deriveNextStep(
+  state: TaskStateName,
+  runs: readonly AgentRunStatus[],
+): TaskNextStep {
+  if (state === "awaiting_approval" && runs.some((run) => run.phase === "planned")) {
+    return RUN_THE_RECORDED_PLAN;
+  }
+  return NEXT_STEP[state];
+}
+
+// --- progressive disclosure ------------------------------------------------
+
+/**
+ * Every collapsible block on this screen.
+ *
+ * Named as a closed type so the two tables below cannot drift apart: a block
+ * added without a rule for when it opens, or without a sentence for why it is
+ * closed, is a compile error rather than a blank summary line.
+ */
+type BlockId =
+  | "execution"
+  | "budget"
+  | "trust"
+  | "interrupted"
+  | "fields"
+  | "readiness"
+  | "acceptance"
+  | "share"
+  | "model"
+  | "composer"
+  | "runs"
+  | "workspace";
+
+/**
+ * Whether a block can complete what its heading promises, right now.
+ *
+ * Written once, derived from the rules the **backend** enforces rather than
+ * from a preference about layout:
+ *
+ * * six blocks carry no control at all. They are measurement and reasoning,
+ *   and they can never act - which is not a reason to remove them, only a
+ *   reason to stop putting them between a person and a button;
+ * * the publication gate calls `transition(READY_TO_PUBLISH)`, and the state
+ *   machine allows that edge only from `review_needed`
+ *   (`tasks/states.py::ALLOWED_TRANSITIONS`);
+ * * the planner refuses a proposal outside `AWAITING_APPROVAL` whole, so the
+ *   composer and the model lane can only act there;
+ * * the runner's three controls belong to the three states a run can be in;
+ * * acceptance and the public-share mark carry **no** state precondition on
+ *   the wire - the routes write a field and stop - so they can act in every
+ *   state and this rule never folds them. That is deliberate rather than an
+ *   oversight: a first pass closed acceptance whenever the task had no
+ *   recorded run, and `review_needed` with an empty run list is exactly the
+ *   case where a person *is* about to accept a bundle. Claiming a
+ *   precondition the backend does not have would be the same class of lie as
+ *   hiding one it does.
+ *
+ * **Collapsing is never a gate.** Every one of these blocks expands on
+ * demand, and the preconditions of the controls inside them are exactly what
+ * they were: nothing here makes a control easier - or harder - to press.
+ */
+const BLOCK_ACTS: Record<
+  BlockId,
+  (task: TaskStatusResponse | null, runs: readonly AgentRunStatus[]) => boolean
+> = {
+  execution: () => false,
+  budget: () => false,
+  trust: () => false,
+  interrupted: () => false,
+  fields: () => false,
+  workspace: () => false,
+  readiness: (task) => task?.state === "review_needed",
+  acceptance: () => true,
+  share: () => true,
+  model: (task) => task?.state === "awaiting_approval",
+  composer: (task) => task?.state === "awaiting_approval",
+  runs: (task) =>
+    task?.state === "awaiting_approval" ||
+    task?.state === "running" ||
+    task?.state === "paused",
+};
+
+/** Said of every block that has nothing to press, so the absence is a claim. */
+const NO_CONTROL_HERE =
+  "Bu bolumde basilacak bir kontrol yoktur: yalnizca olculmus bilgi ve gerekce. Hicbir cumle silinmedi; basligi secerek tamamini acabilirsiniz.";
+
+/**
+ * Why a block is closed, in states rather than in adjectives.
+ *
+ * Reads `STATE_LABEL`, so the vocabulary fix above reaches these sentences
+ * too and a state cannot be called one thing in a pill and another in an
+ * explanation.
+ */
+function needsState(
+  task: TaskStatusResponse | null,
+  states: readonly TaskStateName[],
+): string {
+  if (task === null) return "Once bir gorev secin.";
+  return `Buradaki kontroller yalnizca ${states
+    .map((state) => `'${STATE_LABEL[state]}'`)
+    .join(" veya ")} durumunda sonuc verir; gorev su anda '${STATE_LABEL[task.state]}'.`;
+}
+
+const BLOCK_CLOSED_REASON: Record<BlockId, (task: TaskStatusResponse | null) => string> = {
+  execution: () => NO_CONTROL_HERE,
+  budget: () => NO_CONTROL_HERE,
+  trust: () => NO_CONTROL_HERE,
+  interrupted: () => NO_CONTROL_HERE,
+  fields: () => NO_CONTROL_HERE,
+  workspace: () => NO_CONTROL_HERE,
+  readiness: (task) => needsState(task, ["review_needed"]),
+  // Never reached: both act in every state. Kept rather than removed, because
+  // the type is what stops a thirteenth block shipping without a reason.
+  acceptance: () => "",
+  share: () => "",
+  model: (task) => needsState(task, ["awaiting_approval"]),
+  composer: (task) => needsState(task, ["awaiting_approval"]),
+  runs: (task) => needsState(task, ["awaiting_approval", "running", "paused"]),
+};
+
+/**
+ * One collapsible block: a heading and a summary that are always readable,
+ * and a body one keystroke away.
+ *
+ * Native `details`/`summary` rather than a hand-rolled toggle, and that is the
+ * accessibility decision rather than a convenience: the browser gives the
+ * disclosure its role, its expanded state, its keyboard operation and its
+ * announcement for free, and the body stays in the document either way. A
+ * `hidden` div behind an `aria-expanded` button would have had to reproduce
+ * all four, and any one of them missed is a block a screen-reader user cannot
+ * reach at all.
+ *
+ * The open state is React state seeded from `open` and re-seeded when the
+ * derivation changes - so moving a task from `suggested` to `awaiting_approval`
+ * opens the composer, while an unrelated re-render never closes a block a
+ * person opened by hand.
+ */
+function DisclosureBlock({
+  children,
+  label,
+  level,
+  open,
+  summary,
+  summaryTestId,
+}: {
+  readonly children: ReactNode;
+  readonly label: string;
+  readonly level: 3 | 4;
+  readonly open: boolean;
+  readonly summary: string;
+  readonly summaryTestId: string;
+}) {
+  const [expanded, setExpanded] = useState(open);
+  const [derived, setDerived] = useState(open);
+  if (derived !== open) {
+    setDerived(open);
+    setExpanded(open);
+  }
+  const Heading = level === 3 ? "h3" : "h4";
+  return (
+    <section aria-label={label} className="flex flex-col gap-2">
+      <details
+        className="rounded-lg border border-border p-2"
+        onToggle={(event) => {
+          setExpanded(event.currentTarget.open);
+        }}
+        open={expanded}
+      >
+        <summary className="cursor-pointer">
+          <Heading
+            className={`inline ${level === 3 ? "text-sm" : "text-xs"} font-semibold text-foreground`}
+          >
+            {label}
+          </Heading>
+          <span className="mt-1 block text-xs text-muted" data-testid={summaryTestId}>
+            {summary}
+          </span>
+        </summary>
+        <div className="mt-3 flex flex-col gap-3">{children}</div>
+      </details>
+    </section>
+  );
+}
+
+/** Join a block's standing description with the reason it is folded away. */
+function blockSummary(base: string, whyClosed: string): string {
+  return whyClosed === "" ? base : `${base} ${whyClosed}`;
+}
 
 /** The four approvals one plan needs before it may be carried out. */
 type ApprovalKey = "plan" | "data" | "workspace" | "budget";
@@ -447,12 +766,27 @@ function shortId(value: string): string {
  * would turn "we measured a sandbox and chose not to rely on it" into "there
  * was nothing", and only the first one is true.
  */
-function ExecutionBlock({ surface }: { readonly surface: AgentSurfaceResponse }) {
+function ExecutionBlock({
+  open,
+  summary,
+  surface,
+}: {
+  readonly open: boolean;
+  readonly summary: string;
+  readonly surface: AgentSurfaceResponse;
+}) {
   const { execution } = surface;
   return (
-    <section aria-label="Yurutme durumu" className="flex flex-col gap-3">
-      <h3 className="text-sm font-semibold text-foreground">Yurutme durumu</h3>
-
+    <DisclosureBlock
+      label="Yurutme durumu"
+      level={3}
+      open={open}
+      summary={blockSummary(
+        `Keyfi kod ve kabuk yurutmesi kapali (${execution.reason}). Olculen izolasyon envanteri ve bu ekranin dort durustluk cumlesi burada durur.`,
+        summary,
+      )}
+      summaryTestId="tasks-execution-summary"
+    >
       <Alert status="warning">
         <Alert.Indicator />
         <Alert.Content>
@@ -503,16 +837,36 @@ function ExecutionBlock({ surface }: { readonly surface: AgentSurfaceResponse })
           ))}
         </ul>
       </div>
-    </section>
+    </DisclosureBlock>
   );
 }
 
 /** The ceiling, its units, and the units this product refuses to use. */
-function BudgetBlock({ surface }: { readonly surface: AgentSurfaceResponse }) {
+function BudgetBlock({
+  open,
+  summary,
+  surface,
+}: {
+  readonly open: boolean;
+  readonly summary: string;
+  readonly surface: AgentSurfaceResponse;
+}) {
   const { ceiling } = surface;
   return (
-    <section aria-label="Butce ve tavan" className="flex flex-col gap-2">
-      <h3 className="text-sm font-semibold text-foreground">Butce ve tavan</h3>
+    <DisclosureBlock
+      label="Butce ve tavan"
+      level={3}
+      open={open}
+      summary={blockSummary(
+        `Tavan: en cok ${String(ceiling.max_tool_calls)} arac cagrisi, ${String(
+          ceiling.max_wall_clock_seconds,
+        )} saniye, eszamanlilik ${String(
+          ceiling.max_concurrency,
+        )}. Reddedilen birimler: ${ceiling.refused_units.join(", ")}.`,
+        summary,
+      )}
+      summaryTestId="tasks-budget-summary"
+    >
       <p className="font-mono text-xs text-muted" data-testid="tasks-budget-units">
         {`Olculen birimler: ${ceiling.units.join(", ")} · en cok ${String(
           ceiling.max_tool_calls,
@@ -539,15 +893,33 @@ function BudgetBlock({ surface }: { readonly surface: AgentSurfaceResponse }) {
           tone="inactive"
         />
       </div>
-    </section>
+    </DisclosureBlock>
   );
 }
 
 /** The registered tools, and the boundary around them. */
-function TrustBoundaryBlock({ tools }: { readonly tools: readonly AgentToolStatus[] }) {
+function TrustBoundaryBlock({
+  open,
+  summary,
+  tools,
+}: {
+  readonly open: boolean;
+  readonly summary: string;
+  readonly tools: readonly AgentToolStatus[];
+}) {
   return (
-    <section aria-label="Guven siniri" className="flex flex-col gap-3">
-      <h3 className="text-sm font-semibold text-foreground">Guven siniri</h3>
+    <DisclosureBlock
+      label="Guven siniri"
+      level={3}
+      open={open}
+      summary={blockSummary(
+        `${String(
+          tools.length,
+        )} kayitli arac; agent'in erisemedikleri ve yapamadiklari liste halinde.`,
+        summary,
+      )}
+      summaryTestId="tasks-trust-summary"
+    >
       <p className="text-xs text-muted">
         {`Kayitli arac sayisi: ${String(
           tools.length,
@@ -593,17 +965,37 @@ function TrustBoundaryBlock({ tools }: { readonly tools: readonly AgentToolStatu
           Erisebildigi tek dizin bu gorevin calisma alanidir.
         </p>
       </div>
-    </section>
+    </DisclosureBlock>
   );
 }
 
 /** The four fields, each on its own line. Never summed into a verdict. */
-function EvidenceFields({ task }: { readonly task: TaskStatusResponse }) {
+function EvidenceFields({
+  open,
+  summary,
+  task,
+}: {
+  readonly open: boolean;
+  readonly summary: string;
+  readonly task: TaskStatusResponse;
+}) {
   return (
-    <section aria-label="Dort alan" className="flex flex-col gap-2">
-      <h4 className="text-xs font-semibold text-foreground">
-        Dort ayri alan (hicbiri digerinin yerine gecmez)
-      </h4>
+    <DisclosureBlock
+      label="Dort alan"
+      level={4}
+      open={open}
+      summary={blockSummary(
+        `Dort ayri alan, hicbiri digerinin yerine gecmez. ${
+          task.ready_to_publish
+            ? "Uc alan ayri ayri dogrulandi."
+            : `Bekleyen alanlar: ${
+                task.blocking_fields.length === 0 ? "(yok)" : task.blocking_fields.join(", ")
+              }.`
+        }`,
+        summary,
+      )}
+      summaryTestId="tasks-fields-summary"
+    >
       <ul className="flex flex-col gap-2">
         {task.evidence_fields.map((field) => (
           <li
@@ -653,7 +1045,7 @@ function EvidenceFields({ task }: { readonly task: TaskStatusResponse }) {
       <p className="text-xs text-muted" data-testid="tasks-task-budget">
         {task.budget_detail}
       </p>
-    </section>
+    </DisclosureBlock>
   );
 }
 
@@ -1391,6 +1783,17 @@ export function TasksPanel() {
   const chosenCheck =
     surface.acceptance_checks.find((check) => check.kind === checkKind) ?? null;
   const task = detail?.task ?? null;
+  const runsNow = detail?.runs ?? [];
+
+  /**
+   * The two halves of this screen's information design, both derived here so
+   * a reader can see the whole rule in one place rather than hunting it
+   * through the JSX.
+   */
+  const nextStep = task === null ? null : deriveNextStep(task.state, runsNow);
+  const opened = (id: BlockId): boolean => BLOCK_ACTS[id](task, runsNow);
+  const whyClosed = (id: BlockId): string =>
+    opened(id) ? "" : BLOCK_CLOSED_REASON[id](task);
 
   return (
     <Card>
@@ -1426,21 +1829,39 @@ export function TasksPanel() {
           />
         )}
 
-        <ExecutionBlock surface={surface} />
+        <ExecutionBlock
+          open={opened("execution")}
+          summary={whyClosed("execution")}
+          surface={surface}
+        />
 
         <Separator />
 
-        <BudgetBlock surface={surface} />
+        <BudgetBlock open={opened("budget")} summary={whyClosed("budget")} surface={surface} />
 
         <Separator />
 
-        <TrustBoundaryBlock tools={surface.tools} />
+        <TrustBoundaryBlock
+          open={opened("trust")}
+          summary={whyClosed("trust")}
+          tools={surface.tools}
+        />
 
         <Separator />
 
         {/* --- runs a restart left behind ------------------------------- */}
-        <section aria-label="Kesilen calismalar" className="flex flex-col gap-2">
-          <h3 className="text-sm font-semibold text-foreground">Kesilen calismalar</h3>
+        <DisclosureBlock
+          label="Kesilen calismalar"
+          level={3}
+          open={opened("interrupted")}
+          summary={blockSummary(
+            `${String(
+              surface.interrupted_runs.length,
+            )} calisma yeniden baslatmanin ardinda kaldi; acilista otomatik devam yoktur.`,
+            whyClosed("interrupted"),
+          )}
+          summaryTestId="tasks-interrupted-summary"
+        >
           <p className="text-xs text-muted" data-testid="tasks-interrupted">
             {surface.interrupted_runs.length === 0
               ? "Yeniden baslatmanin geride biraktigi bir calisma yok. Boyle bir calisma olsaydi burada yalnizca listelenirdi: acilista otomatik devam yoktur."
@@ -1455,7 +1876,7 @@ export function TasksPanel() {
               }`}
             </p>
           ))}
-        </section>
+        </DisclosureBlock>
 
         <Separator />
 
@@ -1525,46 +1946,40 @@ export function TasksPanel() {
                   )}`}
                 </span>
               </div>
+              {/*
+                The first thing on a task, and the row this whole package was
+                opened for. It is derived from the task's own state and its
+                own runs (`deriveNextStep`), never written per state into this
+                JSX: a tenth state would render an empty line here, so the
+                derivation is walked by a test that fails instead.
+              */}
+              {nextStep !== null && (
+                <div
+                  className="flex flex-col gap-1 rounded-lg border border-border p-2"
+                  data-testid="tasks-next-step"
+                >
+                  <p className="text-sm font-medium text-foreground">
+                    {`Sirada ne var: ${nextStep.action}`}
+                  </p>
+                  <p className="text-xs text-muted" data-testid="tasks-next-step-control">
+                    {nextStep.control === ""
+                      ? "Bu durumda basilacak bir kontrol yok; asagidaki bolumler yalnizca kaydi gosterir."
+                      : `Bunu yapan kontrol: "${nextStep.control}" — "${nextStep.where}" bolumunde.`}
+                  </p>
+                </div>
+              )}
+
               <p className="text-xs text-muted" data-testid="tasks-state-detail">
                 {task.state_detail}
               </p>
 
-              <EvidenceFields task={task} />
-
-              <PublishReadinessRegion
-                busy={busy}
-                moved={gateMoved}
-                onEvaluate={() => void evaluatePublishReadiness()}
-                refusal={gateRefusal}
-                task={task}
-              />
-
-              <AcceptanceRegion
-                busy={busy}
-                note={acceptNote}
-                onAccept={() => void accept()}
-                onNote={setAcceptNote}
-                onRead={() => void readProof()}
-                onTick={setAcceptRead}
-                proof={proof}
-                stateBefore={stateBeforeAccept}
-                task={task}
-                ticked={acceptRead}
-              />
-
-              <PublicShareRegion
-                archive={archive}
-                busy={busy}
-                chosen={markEvidenceId}
-                name={`${ids}-archived-send`}
-                note={markNote}
-                onChoose={setMarkEvidenceId}
-                onList={() => void listArchive()}
-                onMark={() => void markPublicShare()}
-                onNote={setMarkNote}
-                task={task}
-              />
-
+              {/*
+                Moved above the evidence blocks in this package, because this
+                is where the next action lives for four of the nine states and
+                it used to sit under every explanation on the screen. Nothing
+                about the five transitions changed - only when a person meets
+                them.
+              */}
               <div className="flex flex-col gap-2">
                 <h4 className="text-xs font-semibold text-foreground">Durum degisikligi</h4>
                 <p className="text-xs text-muted">
@@ -1588,6 +2003,52 @@ export function TasksPanel() {
                 </div>
               </div>
 
+              <EvidenceFields
+                open={opened("fields")}
+                summary={whyClosed("fields")}
+                task={task}
+              />
+
+              <PublishReadinessRegion
+                busy={busy}
+                moved={gateMoved}
+                onEvaluate={() => void evaluatePublishReadiness()}
+                open={opened("readiness")}
+                refusal={gateRefusal}
+                summary={whyClosed("readiness")}
+                task={task}
+              />
+
+              <AcceptanceRegion
+                busy={busy}
+                note={acceptNote}
+                onAccept={() => void accept()}
+                onNote={setAcceptNote}
+                onRead={() => void readProof()}
+                onTick={setAcceptRead}
+                open={opened("acceptance")}
+                proof={proof}
+                stateBefore={stateBeforeAccept}
+                summary={whyClosed("acceptance")}
+                task={task}
+                ticked={acceptRead}
+              />
+
+              <PublicShareRegion
+                archive={archive}
+                busy={busy}
+                chosen={markEvidenceId}
+                name={`${ids}-archived-send`}
+                note={markNote}
+                onChoose={setMarkEvidenceId}
+                onList={() => void listArchive()}
+                onMark={() => void markPublicShare()}
+                onNote={setMarkNote}
+                open={opened("share")}
+                summary={whyClosed("share")}
+                task={task}
+              />
+
               <p className="text-xs text-muted" data-testid="tasks-run-honesty">
                 {detail.honesty}
               </p>
@@ -1603,19 +2064,31 @@ export function TasksPanel() {
               onInstruction={setInstruction}
               onPropose={() => void proposeFromModel()}
               onReadLane={() => void readModelLane()}
+              open={opened("model")}
               proposal={proposal}
+              summary={whyClosed("model")}
             />
 
             <Separator />
 
             {/* --- the plan composer ---------------------------------- */}
-            <section aria-label="Plan olustur" className="flex flex-col gap-3">
-              <h3 className="text-sm font-semibold text-foreground">Plan olustur</h3>
+            <DisclosureBlock
+              label="Plan olustur"
+              level={3}
+              open={opened("composer")}
+              summary={blockSummary(
+                "Plan kaydetmek hicbir seyi calistirmaz; calistirmak dort onaydan sonra ayri bir islemdir.",
+                whyClosed("composer"),
+              )}
+              summaryTestId="tasks-composer-summary"
+            >
+              {/* The state is named from `STATE_LABEL` rather than spelled
+                  out here. This sentence was the one place that still said
+                  "onay bekliyor" after the vocabulary was fixed, and a screen
+                  that calls one state two things is the defect in a smaller
+                  place. */}
               <p className="text-xs text-muted">
-                Plan kaydetmek hicbir seyi calistirmaz. Kaydedilen plan
-                dondurulur: farkli bir plan yeni bir calismadir ve eskisi
-                yargilandigi olcutu korur. Plan kaydetmek icin gorev 'onay
-                bekliyor' durumunda olmalidir.
+                {`Plan kaydetmek hicbir seyi calistirmaz. Kaydedilen plan dondurulur: farkli bir plan yeni bir calismadir ve eskisi yargilandigi olcutu korur. Plan kaydetmek icin gorev '${STATE_LABEL.awaiting_approval}' durumunda olmalidir.`}
               </p>
 
               <fieldset className="flex flex-col gap-2">
@@ -1805,15 +2278,23 @@ export function TasksPanel() {
                   bir islemdir.
                 </span>
               </div>
-            </section>
+            </DisclosureBlock>
 
             <Separator />
 
             {/* --- the runs ------------------------------------------- */}
-            <section aria-label="Calismalar" className="flex flex-col gap-3">
-              <h3 className="text-sm font-semibold text-foreground">
-                {`Calismalar (${String(detail.runs.length)})`}
-              </h3>
+            <DisclosureBlock
+              label="Calismalar"
+              level={3}
+              open={opened("runs")}
+              summary={blockSummary(
+                `${String(
+                  detail.runs.length,
+                )} kaydedilmis calisma. Dort onay, baslatma, durdurma ve devam burada.`,
+                whyClosed("runs"),
+              )}
+              summaryTestId="tasks-runs-summary"
+            >
               {detail.runs.length === 0 ? (
                 <p className="text-sm text-muted">
                   Bu gorev icin kaydedilmis plan yok. Bos bir liste, yapilacak
@@ -1839,13 +2320,23 @@ export function TasksPanel() {
                   ))}
                 </ul>
               )}
-            </section>
+            </DisclosureBlock>
 
             <Separator />
 
             {/* --- the workspace -------------------------------------- */}
-            <section aria-label="Calisma alani" className="flex flex-col gap-2">
-              <h3 className="text-sm font-semibold text-foreground">Calisma alani</h3>
+            <DisclosureBlock
+              label="Calisma alani"
+              level={3}
+              open={opened("workspace")}
+              summary={blockSummary(
+                `${String(
+                  detail.workspace_files.length,
+                )} dosya, adi ve ozetiyle listelenir; hicbir yol gosterilmez.`,
+                whyClosed("workspace"),
+              )}
+              summaryTestId="tasks-workspace-summary"
+            >
               <p className="text-xs text-muted">
                 Dosyalar adiyla ve ozetiyle listelenir; hicbir yol gosterilmez
                 ve hicbir dosya bu ekrandan calistirilamaz.
@@ -1863,7 +2354,7 @@ export function TasksPanel() {
                   ))}
                 </ul>
               )}
-            </section>
+            </DisclosureBlock>
           </>
         )}
       </Card.Content>
@@ -1903,18 +2394,32 @@ function PublishReadinessRegion({
   refusal,
   moved,
   busy,
+  open,
+  summary,
   onEvaluate,
 }: {
   readonly task: TaskStatusResponse;
   readonly refusal: string;
   readonly moved: boolean;
   readonly busy: Busy;
+  readonly open: boolean;
+  readonly summary: string;
   readonly onEvaluate: () => void;
 }) {
   return (
-    <section aria-label="Yayin hazirligi" className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <h4 className="text-xs font-semibold text-foreground">Yayin hazirligi</h4>
+    <DisclosureBlock
+      label="Yayin hazirligi"
+      level={4}
+      open={open}
+      summary={blockSummary(
+        task.ready_to_publish
+          ? "Uc alan ayri ayri dogrulandi."
+          : "Kanit tamam degil; bu islem bir durum istemez, uc alani yeniden okutur.",
+        summary,
+      )}
+      summaryTestId="tasks-readiness-summary"
+    >
+      <div>
         <StatusPill
           label={task.ready_to_publish ? "uc alan dogrulandi" : "kanit tamam degil"}
           tone={task.ready_to_publish ? "ok" : "inactive"}
@@ -1955,7 +2460,7 @@ function PublishReadinessRegion({
           }'. Bu bir yayim degildir; dis paylasim ayri bir islemdir.`}
         </p>
       )}
-    </section>
+    </DisclosureBlock>
   );
 }
 
@@ -1993,6 +2498,8 @@ function ModelPlanRegion({
   proposal,
   instruction,
   busy,
+  open,
+  summary,
   onReadLane,
   onPropose,
   onForget,
@@ -2002,15 +2509,25 @@ function ModelPlanRegion({
   readonly proposal: ModelProposalResponse | null;
   readonly instruction: string;
   readonly busy: Busy;
+  readonly open: boolean;
+  readonly summary: string;
   readonly onReadLane: () => void;
   readonly onPropose: () => void;
   readonly onForget: () => void;
   readonly onInstruction: (next: string) => void;
 }) {
   return (
-    <section aria-label="Modelden plan onerisi" className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <h3 className="text-sm font-semibold text-foreground">Modelden plan onerisi</h3>
+    <DisclosureBlock
+      label="Modelden plan onerisi"
+      level={3}
+      open={open}
+      summary={blockSummary(
+        "Model plan ONERIR, calistirmaz: bir tur en iyi ihtimalle kaydedilmis bir plan uretir ve o plan da ayni dort onaydan gecer.",
+        summary,
+      )}
+      summaryTestId="tasks-model-summary"
+    >
+      <div>
         <StatusPill label="Model onerir, calistirmaz" tone="inactive" />
       </div>
 
@@ -2195,7 +2712,7 @@ function ModelPlanRegion({
           </p>
         </div>
       )}
-    </section>
+    </DisclosureBlock>
   );
 }
 
@@ -2230,6 +2747,8 @@ function AcceptanceRegion({
   ticked,
   note,
   busy,
+  open,
+  summary,
   stateBefore,
   onRead,
   onTick,
@@ -2241,6 +2760,8 @@ function AcceptanceRegion({
   readonly ticked: boolean;
   readonly note: string;
   readonly busy: Busy;
+  readonly open: boolean;
+  readonly summary: string;
   readonly stateBefore: TaskStateName | null;
   readonly onRead: () => void;
   readonly onTick: (next: boolean) => void;
@@ -2250,9 +2771,17 @@ function AcceptanceRegion({
   const field = task.evidence_fields.find((entry) => entry.evidence_field === "user_acceptance");
 
   return (
-    <section aria-label="Kullanici kabulu" className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <h4 className="text-xs font-semibold text-foreground">Kullanici kabulu</h4>
+    <DisclosureBlock
+      label="Kullanici kabulu"
+      level={4}
+      open={open}
+      summary={blockSummary(
+        "Kabul, gecisin girdisidir; hicbir durumu tasimaz ve hicbir sey yayimlamaz.",
+        summary,
+      )}
+      summaryTestId="tasks-acceptance-summary"
+    >
+      <div>
         {field !== undefined && (
           <StatusPill label={CHECK_LABEL[field.state]} tone={CHECK_TONE[field.state]} />
         )}
@@ -2333,7 +2862,7 @@ function AcceptanceRegion({
           {`Kabul kaydedildi. Gorev durumu kabulden once '${STATE_LABEL[stateBefore]}' idi ve simdi '${STATE_LABEL[task.state]}'. Kabul bir gecis degildir; durumu tasiyan tek sey durum degisikligi islemidir.`}
         </p>
       )}
-    </section>
+    </DisclosureBlock>
   );
 }
 
@@ -2361,6 +2890,8 @@ function PublicShareRegion({
   note,
   busy,
   name,
+  open,
+  summary,
   onList,
   onChoose,
   onNote,
@@ -2372,6 +2903,8 @@ function PublicShareRegion({
   readonly note: string;
   readonly busy: Busy;
   readonly name: string;
+  readonly open: boolean;
+  readonly summary: string;
   readonly onList: () => void;
   readonly onChoose: (next: string) => void;
   readonly onNote: (next: string) => void;
@@ -2380,9 +2913,17 @@ function PublicShareRegion({
   const field = task.evidence_fields.find((entry) => entry.evidence_field === "public_share");
 
   return (
-    <section aria-label="Public paylasim isareti" className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <h4 className="text-xs font-semibold text-foreground">Public paylasim isareti</h4>
+    <DisclosureBlock
+      label="Public paylasim isareti"
+      level={4}
+      open={open}
+      summary={blockSummary(
+        "Arsivde zaten bulunan bir gonderimi bu goreve isaretler; hicbir sey gondermez ve yayim kararini vermez.",
+        summary,
+      )}
+      summaryTestId="tasks-share-summary"
+    >
+      <div>
         {field !== undefined && (
           <StatusPill label={CHECK_LABEL[field.state]} tone={CHECK_TONE[field.state]} />
         )}
@@ -2480,6 +3021,6 @@ function PublicShareRegion({
           </div>
         </>
       )}
-    </section>
+    </DisclosureBlock>
   );
 }

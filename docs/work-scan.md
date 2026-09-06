@@ -137,7 +137,7 @@ bu pakette **hiçbir istek gönderilmedi**.
 | Alan | Ne diyor | Kodda karşılığı |
 |---|---|---|
 | `since` | Yalnız daha büyük `seq`'leri döndürür. Negatif/ondalık/kelime **imleçsiz** sayılır ve en yeni mesajlar döner | İmleç yoksa parametre **gönderilmez**; negatif imleç sunucunun fallback'ine bırakılmaz, burada reddedilir |
-| `limit` | Varsayılan 50, **1..200'e clamp edilir, asla reddedilmez**. "read `count`, do not assume it" | `clamp_limit()` aynı sınırları gönderimden önce uygular; `count` yanıttan okunur |
+| `limit` | Varsayılan 50, **1..200'e clamp edilir, asla reddedilmez**. "read `count`, do not assume it" | `clamp_limit()` aynı sınırları gönderimden önce uygular; `count` yanıttan okunur. Oda listesi için gönderilen sayı `ROOM_INDEX_LIMIT` = **200**'dür (§2.1); mesaj ve keşif şeritleri 50'de kalır |
 | `format=json` | Yalnız bu değer yanıtı JSON yapar; **başka her değer sessizce yok sayılır** ve yanıt `text/plain` kalır | Başarı sinyali **Content-Type**'tır, durum kodu değil. Yanlış medya tipi kendi hata sınıfını taşır (`WrongMediaTypeError`) |
 | `count` / `last_seq` / `first_seq` | Yanıtın kendi alanları; `first_seq` boş olabilir | Üçü de okunur. `count` ile gelen dizi uzunluğu ayrışırsa **iki sayı da** gösterilir |
 | `first_seq > since + 1` | "the ring dropped messages you never read" | Ayrı bir **ring düşüşü uyarısı**. Bayatlık notuyla birleştirilmez |
@@ -147,6 +147,45 @@ bu pakette **hiçbir istek gönderilmedi**.
 | oda sınıfları | `p-`, `mb-`, `d-`, `e-` (manifest'ten okunur) | Yazma yolunun `classes_of` ve `UNDERSTOOD_ROOM_CLASSES`'ı, aynen |
 | `rooms[]` girdisi | `room` ve `topic` **çağıran tarafından yazılmıştır**; diğer alanlar servisin kendi ölçümüdür | Yalnız bu iki alan tutulur; hangilerinin çağıran-yazımı olduğu **bizim modülümüzde** sabittir |
 | `from` | `did:key` veya kendi beyan edilen takma ad; ikisi de doğrulanmamıştır | `describe_author()` üç ayrı cümle üretir ve hiçbiri "imzalandı" demez |
+
+### 2.1 `limit`: servisin varsayılanı ile ürünün seçtiği sayı
+
+Bu satır 6 Eylül 2026'da değişti ve neyin değiştiği kayda geçer.
+
+Üç şeridin üçü de `limit=50` gönderiyordu. 50, pinli şemanın **`limit` yokken**
+düştüğü değerdir ("a value that is not a non-negative integer falls back to
+50"), yani gönderilen sayı "hiç seçmemiş olmak" ile ayırt edilemiyordu. Sonuç
+kullanıcının gördüğü şeydi: seçilecek bir oda listesi sunan yüzey her okumada
+en çok elli oda sunabiliyordu.
+
+Aynı açıklama sınırı da yayımlıyor — "what survives is clamped to 1..200" — ve
+sınır dışı bir değerin **reddedilmediğini**, kırpıldığını söylüyor. Yani 200
+sözleşmenin içindedir.
+
+| Şerit | Gönderilen | Neden |
+|---|---|---|
+| `/rooms` (oda listesi) | **200** (`ROOM_INDEX_LIMIT`) | Yayımlanmış tavan. Ayrıca `snapshot.MAX_ROOMS` = 200 olduğu için daha fazlasını istemek yalnız kuyruğu atmak için daha büyük bir yanıt satın almak olurdu |
+| `/r/{oda}` (tarama) | 50 (`DEFAULT_LIMIT`) | **Ölçüldü:** bir tarama en çok 8 tur × 60 satır = **480 satır** okuyabilir ve en çok 10 oda okur. 50'de bile tam bir tarama 500 satır çeker; 200'de 2000 satır çeker ve dörtte üçü `reading_ceiling` reddi olarak geri döner — daha büyük istek, daha küçük okuma |
+| `/r/events` (keşif) | 50 | Günlük dilim dilim okunur ve "buradan devam et" düğmesi imleci zaten taşır; daha büyük bir ilk okuma bir tuşa basmayı ortadan kaldırmaz, yalnız ilk okumayı büyütür |
+
+**Yanıttan okunan sayı değişmedi.** Şema `total`'ın her hâlükârda listelenen
+bütün odaları saydığını söylüyor; ekrandaki "servisin bildirdiği toplam /
+burada tutulan / kırpıldı mı" satırı hâlâ yanıtın `total`'ını okur ve
+`truncated`'ı `total > kept_count` ile **yanıttan** türetir, sabitten değil.
+
+**Ölçülen tavanlar (6 Eylül 2026).** En kötü durumda 200 odalık bir `/rooms`
+yanıtı (48 karakterlik oda adları, servisin 120 karakterlik `topic` önizlemesi,
+girdi başına altı ölçülen alan) **139 KB**'tır — hedefin 2 MiB tavanının
+%6,6'sı. Gerçekçi bir 200 odalık yanıt 49 KB'tır (%2,3). Station'ın SPA'ya
+döndürdüğü karşılığı en kötü durumda 170 KB'tır. Hiçbir tavan aşılmıyor;
+`MAX_MEASURED_FIELDS` = 16'ya karşı pinli referans girdi başına altı ölçülen
+alan yayımlıyor.
+
+**Değişmeyen:** `MAX_ROOMS_PER_SCAN` = 10. Bir taramanın kaç oda okuduğu ayrı
+bir sınırdır ve ayrı bir gerekçesi vardır; oda listesinin uzunluğu onu
+etkilemez. Liste artık 200 oda sunabildiği için tavan ekranda daha sık
+görünecektir — bu bir gevşetme talebi değil, tavanın zaten söylediği cümlenin
+daha çok okunmasıdır.
 
 ### Doğrulanamayan / bilinçli kullanılmayan
 
