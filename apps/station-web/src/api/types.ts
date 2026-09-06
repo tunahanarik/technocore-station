@@ -1003,8 +1003,9 @@ export interface WorkScanSuggestion {
 //   this build refuses to denominate a ceiling in, so the absence is a claim
 //   on the wire rather than something a reader has to notice (ADR-0008 4);
 // * there is no field for a model's reasoning, a prompt, a completion or a
-//   raw provider payload. The model lane is closed and the table these rows
-//   come from has no column for such a thing (ADR-0008 2, 6);
+//   raw provider payload. The model lane is open since ADR-0012 and the
+//   provider does send a reasoning field; it is read, dropped, and the table
+//   these rows come from has no column for it (ADR-0008 6, ADR-0012 1);
 // * there is no filesystem path in either direction: a workspace file is
 //   named, never located.
 

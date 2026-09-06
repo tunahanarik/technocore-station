@@ -21,10 +21,13 @@ to misread as *proven*. Every phrase below is a sentence somebody would
 reasonably write in a proof workspace and that this build cannot support.
 
 ``"bagimsiz olarak dogrulandi"``, ``"ucuncu taraf onayi"``
-    There is no independent check in this release. The model lane is closed
-    (ADR-0008 2), so there is no second opinion, and a run's own output
-    presented as a third party's verdict is the specific dishonesty ADR-0009 6
-    refuses. The field says ``not_implemented`` and says why.
+    There is no independent check in this release. This used to rest on the
+    model lane being closed (ADR-0008 2); ADR-0012 opened it and the two
+    phrases stay refused for a reason opening the lane made **stronger** - the
+    model that proposed a plan is not a third party to the run that carried it
+    out, and a run's own output presented as somebody else's verdict is the
+    specific dishonesty ADR-0009 6 refuses. The field says ``not_implemented``
+    and says why.
 
 ``"ozet icerigi dogrular"``, ``"kanitlanmis cikti"``
     A SHA-256 fixes the bytes of a file. It says nothing about whether those

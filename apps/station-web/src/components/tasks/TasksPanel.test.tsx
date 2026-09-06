@@ -42,23 +42,32 @@ import { TasksPanel } from "./TasksPanel";
 
 //: TEST-ONLY sentences. Shaped like the backend's, never copied from a live
 //: response, and none of them is a real measurement of this machine.
+//:
+//: Being shaped like the backend's is what makes them rot. Three of these
+//: were still asserting the pre-ADR-0012 build - no model call, a test result
+//: that stays `not_implemented`, a three-unit ceiling - long after the
+//: product stopped saying any of it, and because they are fixtures they went
+//: on passing. A fixture that hard-codes a product sentence keeps that
+//: sentence alive in the suite whether or not the product still means it, so
+//: they are scanned for stale claims alongside the source itself
+//: (`tests/security/test_model_lane_claims.py`).
 const EXECUTION_DETAIL =
   "TEST-ONLY: Keyfi kod ve kabuk yurutmesi bu surumde kapalidir. Guvenilir bir izolasyon urunun kendi kurulumunun parcasi degildir.";
 
 const RUN_HONESTY =
-  "TEST-ONLY: Bu surumde arac zinciri deterministiktir: model cagrisi, kabuk komutu ve keyfi kod yurutmesi yoktur.";
+  "TEST-ONLY: Bu surumde kabuk komutu ve keyfi kod yurutmesi yoktur; araclar kapali bir registry'den gelir ve deterministiktir. Model plan onerir, calistirmaz.";
 
 const STOP_STATEMENT =
   "TEST-ONLY: Durdur, sonraki arac cagrisini engeller. Iptalden sonra donen sonucu kaydedilmez ve urettigi dosya calisma alanindan kaldirilir.";
 
 const REFUSED_UNITS_DETAIL =
-  "TEST-ONLY: Bu surumde token ve para birimi sayilmaz: model yolu kapalidir, dolayisiyla saglayicidan gelen bir kullanim degeri yoktur ve uydurulmaz.";
+  "TEST-ONLY: Token ve para birimi tavan olarak kullanilmaz: saglayicinin bildirdigi kullanim ve maliyet kaydedilir, sinir olarak okunmaz.";
 
 const CEILING_DETAIL =
   "TEST-ONLY: Tavan derleme zamaninda yazilir; hicbir kod yolu onu degistirmez.";
 
 const TEST_RESULT_DETAIL =
-  "TEST-ONLY: Test sonucu bu surumde uygulanmadi. Plan bir basari olcutu kaydeder, fakat onu kosacak yurutme kapalidir.";
+  "TEST-ONLY: Test sonucu uygulanmadi: bu plan makinece degerlendirilebilir bir kabul kosulu yazmadi.";
 
 const SURFACE: AgentSurfaceResponse = {
   execution: {
@@ -86,7 +95,7 @@ const SURFACE: AgentSurfaceResponse = {
     max_tool_calls: 32,
     max_wall_clock_seconds: 120,
     max_concurrency: 1,
-    units: ["tool_call_count", "wall_clock_seconds", "concurrency"],
+    units: ["tool_call_count", "model_call_count", "wall_clock_seconds", "concurrency"],
     refused_units: ["token", "currency"],
     refused_units_detail: REFUSED_UNITS_DETAIL,
     detail: CEILING_DETAIL,

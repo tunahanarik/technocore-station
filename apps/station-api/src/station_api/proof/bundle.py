@@ -139,15 +139,23 @@ BUNDLE_STEM = "technocore-station-kanit-paketi"
 #: way every other three-valued state in this product is spelled.
 NOT_IMPLEMENTED = "not_implemented"
 
-#: ADR-0009 6. The model lane is closed, so there is no second opinion to
-#: record - and a run's own output presented as somebody else's verdict is the
-#: dishonesty this field exists to refuse. A **closure**, not a policy refusal:
-#: the same distinction ``run_test_result_recorded`` is written under.
+#: ADR-0009 6. There is no second opinion to record - and a run's own output
+#: presented as somebody else's verdict is the dishonesty this field exists to
+#: refuse. A **closure**, not a policy refusal: the same distinction
+#: ``run_test_result_recorded`` is written under.
+#:
+#: The premise moved in ADR-0012 and the conclusion held. This used to rest on
+#: "the model lane is closed, so there is no second opinion"; the lane is open
+#: now, and the field does not move, because the model that proposed the plan
+#: is not a third party to the run that carried it out. Opening the lane made
+#: the field **harder** to fill honestly rather than easier: there is now a
+#: tempting thing to mislabel as an independent check where before there was
+#: nothing at all.
 INDEPENDENT_CHECK_DETAIL = (
-    "Bagimsiz kontrol bu surumde uygulanmadi. Model yolu kapalidir, bu yuzden "
-    "kaydedilecek ikinci bir gorus yoktur; ayni kosmanin kendi ciktisi disaridan "
-    "gelen bir onay gibi sunulmaz. Alan bos degil, 'uygulanmadi' olarak "
-    "raporlanir ve nedeni budur."
+    "Bagimsiz kontrol bu surumde uygulanmadi. Plani oneren model o planin "
+    "ucuncu tarafi degildir, bu yuzden kaydedilecek ikinci bir gorus yoktur; "
+    "ayni kosmanin kendi ciktisi disaridan gelen bir onay gibi sunulmaz. Alan "
+    "bos degil, 'uygulanmadi' olarak raporlanir ve nedeni budur."
 )
 
 #: ADR-0009 7. Arbitrary execution is closed, so nothing produces an exit

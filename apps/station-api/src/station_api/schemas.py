@@ -1879,9 +1879,10 @@ class TaskPublishReadinessRequest(StrictModel):
 class ActivityEventStatus(StrictModel):
     """One timeline row.
 
-    No reasoning trace, no prompt, no completion and no raw provider payload:
-    the model lane is closed, and the table this comes from has nowhere to
-    put such a thing (ADR-0008 6).
+    No reasoning trace, no prompt, no completion and no raw provider payload.
+    Since ADR-0012 there is a model lane and the provider sends a reasoning
+    field, so the absence is enforced rather than incidental: the table this
+    comes from has no column for it (ADR-0008 6, ADR-0012 1).
     """
 
     id: str
@@ -1969,10 +1970,11 @@ class ProofArtifactStatus(StrictModel):
 class ProofClaimStatus(StrictModel):
     """A record this build does not produce, and the reason it does not.
 
-    ``state`` is fixed at ``not_implemented``: the model lane is closed and
-    arbitrary execution is closed, so there is no second opinion and no exit
-    code (ADR-0009 6, 7). Reporting the absence at full volume is the whole
-    point - an omitted key would read as an oversight.
+    ``state`` is fixed at ``not_implemented``: the model that proposed a plan
+    is not a third party to the run that carried it out, and arbitrary
+    execution is closed - so there is no second opinion and no exit code
+    (ADR-0009 6, 7). Reporting the absence at full volume is the whole point -
+    an omitted key would read as an oversight.
     """
 
     key: str

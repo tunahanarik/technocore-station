@@ -279,10 +279,13 @@ _WORK_SCAN_REQUIREMENTS: tuple[ModuleRequirement, ...] = (
 #: :mod:`station_api.agent.acceptance` (H4, ADR-0012) added the other half: a
 #: closed set of conditions decided by reading bytes already on disk. A run
 #: **can** now write a ``test_result`` reference, and a task **can** reach
-#: ``ready_to_publish``. So the ``detail`` sentence below, which says no code
-#: path can produce this evidence, is no longer accurate for a plan that
-#: carries machine-checkable conditions; it is still exactly right for a plan
-#: that recorded only a sentence.
+#: ``ready_to_publish``. The ``detail`` sentence below used to say that no
+#: code path can produce this evidence, which stopped being true on that
+#: commit - and this note said so while the sentence itself went on saying the
+#: old thing, which is the drift in its purest form: the comment corrected,
+#: the string shipped. The sentence now states the condition it always meant.
+#: It is ``not_implemented`` for a plan that recorded only a criterion, and
+#: derived from the workspace for a plan that wrote conditions.
 #:
 #: Flipping the flag is not a documentation edit: ``complete`` is derived, an
 #: unbuilt requirement is never a pass, so this one flag is what keeps the
@@ -360,9 +363,11 @@ _AGENT_WORKSPACE_REQUIREMENTS: tuple[ModuleRequirement, ...] = (
         key="run_test_result_recorded",
         detail=(
             "Calismanin urettigi ciktinin uzerinde bir denetim kosar ve "
-            "sonucu kaydedilir. Bu surumde yurutme kapali oldugu icin hicbir "
-            "kod yolu bu kaniti uretemez: plan basari olcutunu kaydeder, "
-            "kosmaz, ve sonuc 'uygulanmadi' olarak raporlanir."
+            "sonucu kaydedilir. Keyfi yurutme kapalidir (ADR-0008 1): plan "
+            "basari olcutunu metin olarak kaydeder ve o cumle kosulmaz. "
+            "Makinece degerlendirilebilir kabul kosulu yazan bir plan icin "
+            "sonuc calisma alanindaki baytlardan turetilir; kosul yazmayan "
+            "plan icin 'uygulanmadi' olarak raporlanir."
         ),
         evidence=EvidenceField.TEST_RESULT,
         stage="-",
@@ -403,6 +408,9 @@ _AGENT_WORKSPACE_REQUIREMENTS: tuple[ModuleRequirement, ...] = (
 #: executed it, and presenting one run's own suggestion as an independent
 #: check is the exact lie ADR-0009 6 refuses. There is still no second
 #: opinion here; there is now merely a more tempting thing to mislabel as one.
+#: The ``detail`` sentence had kept the dead premise anyway - this note said
+#: the premise was gone while the string a user reads still carried it - and
+#: it now says the operative reason instead.
 #:
 #: ``real_exit_code_recorded``: unchanged and unchallenged. Arbitrary
 #: execution is closed (ADR-0008 1) and ADR-0012 7 explicitly does not open
@@ -492,9 +500,9 @@ _PROOF_WORKSPACE_REQUIREMENTS: tuple[ModuleRequirement, ...] = (
         key="independent_check_recorded",
         detail=(
             "Bagimsiz kontrolun kim tarafindan ve hangi araci ile yapildigi "
-            "kaydedilir. Bu surumde model yolu kapalidir (ADR-0008 2): "
-            "ikinci bir model gorusu diye bir sey yoktur, ve ayni kosmanin "
-            "kendi ciktisi ucuncu taraf onayi gibi sunulmaz. Alan "
+            "kaydedilir. Plani oneren model o planin ucuncu tarafi degildir: "
+            "ayni kosmanin kendi ciktisi disaridan gelen bir onay gibi "
+            "sunulmaz ve kaydedilecek ikinci bir gorus yoktur. Alan "
             "'uygulanmadi' kalir ve nedenini soyler."
         ),
         evidence=EvidenceField.TEST_RESULT,

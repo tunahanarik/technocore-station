@@ -771,8 +771,9 @@ class AgentRun(Base):
     :func:`station_api.agent.budget.check` against the compile-time constant.
 
     No column holds a model reasoning trace, a provider payload, a credential,
-    a filesystem path or a seed. The model lane is closed (ADR-0008 2), so
-    there is nothing of the kind to store.
+    a filesystem path or a seed. The model lane is open since ADR-0012 and the
+    provider does send a reasoning field, so this is no longer an absence by
+    accident: the field is read, dropped and never given a column (ADR-0012 1).
     """
 
     __tablename__ = "agent_run"
@@ -894,8 +895,8 @@ class ActivityEvent(Base):
 
     What is **not** here, and could not be added without a migration a
     reviewer would see: a reasoning trace, a prompt, a completion, a raw
-    provider payload. The model lane is closed, and this table has nowhere to
-    put such a thing (ADR-0008 6).
+    provider payload. There is a model lane since ADR-0012 and it does return
+    such material; this table has nowhere to put it (ADR-0008 6, ADR-0012 1).
     """
 
     __tablename__ = "activity_event"

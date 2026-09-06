@@ -1399,9 +1399,19 @@ export function TasksPanel() {
           <Card.Title>Gorevler</Card.Title>
           <StatusPill label="Yurutme kapali (execution_unavailable)" tone="inactive" />
         </div>
+        {/*
+          The first sentence on this screen, so it is the one most likely to
+          outlive what it describes - and it did. It said there was no model
+          call, three paragraphs above the block that correctly explains what
+          the model may propose. ADR-0012 opened that lane; what stayed shut
+          is arbitrary code and shell execution, which is what the pill beside
+          this text reports and what this sentence now says instead.
+        */}
         <Card.Description>
-          Plan once yazilir, sonra ayri bir istekle calistirilir. Araclar
-          deterministiktir; hicbir kabuk komutu ve hicbir model cagrisi yoktur.
+          Plan once yazilir, sonra ayri bir istekle calistirilir. Plani bir
+          model onerebilir; onayi ve baslatmayi kullanici yapar. Araclar kapali
+          bir registry&apos;den gelir ve deterministiktir; kabuk komutu ve
+          keyfi kod yurutmesi yoktur.
         </Card.Description>
       </Card.Header>
 

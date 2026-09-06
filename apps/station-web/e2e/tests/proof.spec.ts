@@ -52,13 +52,13 @@ const BUNDLE_SCOPE =
   "TEST-ONLY: Paket bu makinede toplanan malzemenin bir kopyasidir ve hicbir yola yazilmaz; tarayiciya teslim edilir.";
 
 const INDEPENDENT_DETAIL =
-  "TEST-ONLY: Bagimsiz kontrol bu surumde uygulanmadi. Model yolu kapalidir, bu yuzden kaydedilecek ikinci bir gorus yoktur.";
+  "TEST-ONLY: Bagimsiz kontrol bu surumde uygulanmadi. Plani oneren model o planin ucuncu tarafi degildir, bu yuzden kaydedilecek ikinci bir gorus yoktur.";
 
 const EXIT_CODE_DETAIL =
   "TEST-ONLY: Gercek bir cikis kodu uretilmedi. Keyfi kod ve kabuk yurutmesi kapalidir.";
 
 const TEST_RESULT_DETAIL =
-  "TEST-ONLY: Test sonucu bu surumde uygulanmadi; onu kosacak yurutme kapalidir.";
+  "TEST-ONLY: Test sonucu uygulanmadi: bu plan makinece degerlendirilebilir bir kabul kosulu yazmadi.";
 
 const TASK = {
   id: TASK_ID,
@@ -298,7 +298,7 @@ async function mockProof(page: Page, ledger: ProofLedger): Promise<void> {
 }
 
 const RUN_HONESTY =
-  "TEST-ONLY: Bu surumde arac zinciri deterministiktir: model cagrisi, kabuk komutu ve keyfi kod yurutmesi yoktur.";
+  "TEST-ONLY: Bu surumde kabuk komutu ve keyfi kod yurutmesi yoktur; araclar kapali bir registry'den gelir ve deterministiktir. Model plan onerir, calistirmaz.";
 
 const SURFACE = {
   execution: {

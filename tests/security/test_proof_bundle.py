@@ -10,9 +10,12 @@ Seven decisions, each with the failure it exists to prevent:
   the task, the content version and the session. ``ExportConsent`` is not that
   shape, so the ``SendApproval`` pattern is reused.
 * **6, 7.** "Independent check" and "real exit code" stay ``not_implemented``
-  and say why. The model lane is closed, so there is no second opinion; and
-  arbitrary execution is closed, so there is no exit code. Neither is
-  invented.
+  and say why. The model that proposed a plan is not a third party to the run
+  that carried it out, so there is no second opinion; and arbitrary execution
+  is closed, so there is no exit code. Neither is invented. (The first reason
+  used to be "the model lane is closed". ADR-0012 opened it and the field did
+  not move, because the closed lane was never the operative reason - opening
+  it only added something tempting to mislabel.)
 * **8.** ``user_acceptance`` comes only from a person's act, is bound to the
   exact bundle they read, and **moves no state**.
 * **11.** What a digest establishes is written into the document.
@@ -625,11 +628,19 @@ def test_the_independent_check_and_the_exit_code_stay_not_implemented(
 ) -> None:
     """Both fields report ``not_implemented`` and both say the reason.
 
-    Neither is a policy refusal. The model lane is closed by ADR-0008 2 and
-    execution by ADR-0008 1; a later package with real isolation could revisit
-    either, and reporting them like the lobby greeting would lose that
-    difference. What must never happen is a number or a verdict appearing
-    where the build has none.
+    Neither is a policy refusal. Execution is closed by ADR-0008 1; a later
+    package with real isolation could revisit it, and reporting it like the
+    lobby greeting would lose that difference. What must never happen is a
+    number or a verdict appearing where the build has none.
+
+    ``independent_check`` used to be pinned to the sentence "the model lane is
+    closed", and ADR-0012 opened that lane while this assertion went on
+    requiring the closed-lane wording - so the test was actively holding a
+    false sentence in place. The field itself does not move: the model that
+    **proposed** a plan is not a third party to the run that carried it out,
+    and that is the reason pinned now. The absence of the dead premise is
+    pinned too, because an assertion that only requires the new wording would
+    let the old one come back beside it.
     """
     _finished_run(agent, task)
     claims = proof.build(task.id).document["claims"]
@@ -640,7 +651,9 @@ def test_the_independent_check_and_the_exit_code_stay_not_implemented(
 
     assert claims["independent_check"]["detail"] == INDEPENDENT_CHECK_DETAIL
     assert claims["exit_code"]["detail"] == EXIT_CODE_DETAIL
-    assert "Model yolu kapalidir" in INDEPENDENT_CHECK_DETAIL
+    assert "ucuncu tarafi degildir" in INDEPENDENT_CHECK_DETAIL
+    assert "ikinci bir gorus yoktur" in INDEPENDENT_CHECK_DETAIL
+    assert "Model yolu kapalidir" not in INDEPENDENT_CHECK_DETAIL
     assert "kabuk yurutmesi kapalidir" in EXIT_CODE_DETAIL
 
 

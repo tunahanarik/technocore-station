@@ -1165,8 +1165,10 @@ dosyaları taranıp zamanlayıcı ve depolama API'lerinin hiç geçmediği doğr
 ### 14.5 Modelin muhakemesi yazılmaz
 
 `activity-no-model` satırı bunu bir temizleme olarak değil, bir **yokluk**
-olarak yazar: bu satırların geldiği tabloda öyle bir sütun yoktur ve üretecek
-bir model yolu da yoktur. Şemada `prompt`, `completion`, `reasoning` veya ham
+olarak yazar: bu satırların geldiği tabloda öyle bir sütun yoktur. ADR-0012
+model yolunu açtığı ve sağlayıcının yanıtı bir muhakeme alanı taşıdığı için
+bu artık kazara bir yokluk değil, korunan bir yokluktur: alan okunur,
+düşürülür, saklanmaz. Şemada `prompt`, `completion`, `reasoning` veya ham
 sağlayıcı yanıtı için alan bulunmaz.
 
 ### 14.6 İki katman ve silme
@@ -1239,9 +1241,12 @@ Hiçbir özet **tam** basılmaz: 64 hex'lik bir dizi seed ile aynı şekildedir 
 `independent_check`, `exit_code` ve `test_result` `not_implemented` olarak,
 **kendi gerekçeleriyle** basılır (`proof-claim-<key>`). Rozet tonu `inactive`;
 o bölgede ✓ glifi ve "doğrulandı / kanıtlandı / onaylandı" kelimeleri **hiç
-geçmez** ve bu gerçek DOM üzerinde ölçülür. Model yolu ADR-0008 §2 ile, keyfi
-yürütme ADR-0008 §1 ile kapalıdır; ikisi de politika reddi değil mimari
-kapanıştır ve `proof-claims-rule` bunu söyler.
+geçmez** ve bu gerçek DOM üzerinde ölçülür. Keyfi yürütme ADR-0008 §1 ile
+kapalıdır, yani bir çıkış kodu üretilmez; bağımsız kontrol ise **planı öneren
+modelin o planın üçüncü tarafı olmamasından** ötürü boştur — ADR-0012 model
+yolunu açtı ve bu alanı doldurmadı, yalnızca yanlış etiketlenmeye müsait bir
+şey ekledi. İkisi de politika reddi değil mimari kapanıştır ve
+`proof-claims-rule` bunu söyler.
 
 ### 15.4 Eksikler adıyla listelenir
 

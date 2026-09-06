@@ -20,9 +20,10 @@ The subject of H3 is a word - *proof* - that a reader is entitled to misread
 as *proven*, and ADR-0009 11 requires the difference to be written down rather
 than left to inference. Every phrase H3 adds is a sentence somebody would
 reasonably write on a proof screen and that this build cannot support: there
-is no independent check (the model lane is closed), a digest does not verify
-content, no check ran and there is no exit code, and handing a file to a
-browser is neither a publication nor a verification.
+is no independent check (the model that proposed the plan is not a third party
+to the run that carried it out), a digest does not verify content, no check
+ran and there is no exit code, and handing a file to a browser is neither a
+publication nor a verification.
 """
 
 from __future__ import annotations

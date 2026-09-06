@@ -652,7 +652,9 @@ Ayrıca:
   (ADR-0001 §5) ve bu paket onu kapatmaz — görünür kılar.
 - **Yürütme kapalıdır.** Bu sürüm kod çalıştıramaz; çalıştırma gerektiren iş
   `blocked`/`review_needed`'da durur.
-- **Model çağrısı yoktur.** OpenCode paneli bir bağlantı kaydıdır.
+- **Model plan önerir, çalıştırmaz.** Model yolu ADR-0012 ile ölçülerek
+  açıldı; modelin önerdiği plan bir kişinin yazdığı planla aynı dört onaydan
+  geçer, model kendi planını onaylayamaz ve bir çalışmayı başlatamaz.
 - **Yayımlanmış bir artefakt yoktur** ve kaldırma akışı hiç denenmedi.
 - **HTTP isteği iptali yoktur.** Uçuştaki bir istek iptal edilemez;
   uygulama genelinde bir boşluktur ve en görünür hâli iş taramasıdır. Bir

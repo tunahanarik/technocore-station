@@ -2343,14 +2343,17 @@ ile **eşit** olmalı.
 ### Bilerek **yapılmayan** bir düzeltme — adıyla
 
 `modules/registry.py`'deki `run_test_result_recorded` hâlâ
-`implemented=False` ve `detail`'i "hiçbir kod yolu bu kanıtı üretemez" diyor.
-Bu artık makinece denetlenebilir koşul taşıyan planlar için **doğru değil**.
-Bayrak bu turda **çevrilmedi**, çünkü `complete` bayraktan türer: onu
-çevirmek `agent_workspace` modülünün "tamamlandı" diyebilmesi demektir ve bu
-bir belge düzeltmesi değil, **ürün durumu iddiası**dır — H3'ün
-`user_accepted_the_run_output`'u kendi yüzeyini kuran commit'te çevirmesi
-gibi, onu ölçen pakete aittir. Sessizce bırakılmadı: sebebi sabitin kendi
-yorumuna yazıldı.
+`implemented=False`. Bayrak bu turda **çevrilmedi**, çünkü `complete`
+bayraktan türer: onu çevirmek `agent_workspace` modülünün "tamamlandı"
+diyebilmesi demektir ve bu bir belge düzeltmesi değil, **ürün durumu
+iddiası**dır — H3'ün `user_accepted_the_run_output`'u kendi yüzeyini kuran
+commit'te çevirmesi gibi, onu ölçen pakete aittir. Sessizce bırakılmadı:
+sebebi sabitin kendi yorumuna yazıldı.
+
+Aynı satırın `detail`'i ise **düzeltildi** (aşağıdaki tur). "Hiçbir kod yolu
+bu kanıtı üretemez" cümlesi ekranda duruyordu ve üstündeki yorum onun artık
+yanlış olduğunu **söylüyordu**; bayrağın bilerek bırakılması, yanlış cümlenin
+de bırakılması için bir gerekçe değildi.
 
 ### Bu turda ölçülmeyenler ve dokunulmayanlar — adıyla
 
@@ -2371,3 +2374,83 @@ yorumuna yazıldı.
   geldi. **Değiştirilmedi**: ADR-0012 §6 güncellemeyi açıkça
   `tool_calls_supported` ve düzyazısıyla sınırladı, ve değişiklik iki
   `tests/security` iddiasına ve SI-235'e dokunurdu. Karar kullanıcıya bırakıldı.
+
+---
+
+## Tur: model yolu açıldıktan sonra kalan yanlış cümleler (6 Eylül 2026)
+
+Tarayıcıda çalışan sürümde **Gorevler** ekranı okundu ve birkaç paragraf
+arayla birbiriyle çelişen iki cümle bulundu: kart açıklaması "hiçbir model
+çağrısı yoktur" diyordu, koşu cümlesi "test sonucu 'uygulanmadi' kalır"
+diyordu, ve **hemen altlarındaki** blok modelin plan **önerdiğini** ve test
+sonucunun planın kendi kabul koşullarından türetildiğini doğru anlatıyordu.
+İki cümle de yazıldıklarında doğruydu; ADR-0012 model yolunu açtı,
+`agent/acceptance.py` kabul koşullarını getirdi ve ikisi de yanlış oldu.
+
+### Önce regresyon testi, sonra düzeltme
+
+`tests/security/test_model_lane_claims.py` (yeni, 19 test). Kırmızıyken
+**dokuz dosyada 19 bayat iddia** listeledi; düzeltmeden sonra yeşil.
+
+Kusurun *sınıfını* yakalar, iki dizeyi değil:
+
+- Denetlenecek metin kümesi **ağaç yürüyerek** bulunur
+  (`apps/station-api/src/station_api`, `apps/station-web/src`,
+  `apps/station-web/e2e`); hiçbir dosya yolu listesi yoktur. Python `ast` ile
+  okunur (cümleler örtük birleştirilmiş literal'lerdir), TS/TSX metin olarak
+  (en kötü ihlal bir **JSX metni**ydi, dize bile değildi).
+- **Mutasyon kontrolü** gerçek ağaçlara, bu modülün adını hiç anmadığı iki
+  dizine birer sonda dosya yazar ve yürüyüşün onları gördüğünü ölçer; dosyalar
+  `finally` içinde silinir. `product_files` elle yazılmış bir yol listesiyle
+  değiştirildiğinde bu test **kırmızı** oldu — ölçüldü, varsayılmadı.
+- Her desenin **en az bir örneği eşlediği** ayrıca sabitlenir: hiçbir şeyi
+  eşlemeyen bir desen sonsuza kadar temiz rapor verir.
+- Hâlâ **hak edilmiş** sekiz cümle (yürütme kapalı, anahtar yokken çağrı
+  yapılmaz, tavana ulaşıldı, koşulsuz plan `uygulanmadi` alır) desenlere
+  takılmadıkları için sabitlenir; takılsalardı kural için muafiyet listesi
+  açılırdı.
+- `RUN_HONESTY_SENTENCE`'in anlamı, `acceptance.evaluate`'in gerçekten
+  `PASSED` üretebildiği **ölçülerek** sabitlenir.
+
+### Düzeltilen bayat iddialar
+
+| Yer | Neydi | Ne oldu |
+|---|---|---|
+| `TasksPanel.tsx` kart açıklaması | "hiçbir kabuk komutu ve hiçbir model çağrısı yoktur" | Model **önerebilir**; onay ve başlatma kullanıcınındır; kapalı kalan **kabuk ve keyfi kod** yürütmesidir |
+| `agent/language.py::RUN_HONESTY_SENTENCE` | "model çağrısı … yoktur … test sonucu 'uygulanmadi' **kalır**" | Model **önerir, çalıştırmaz**; test sonucu planın **kabul koşullarından** türetilir, koşul yazmayan plan `uygulanmadi` alır |
+| `agent/language.py` docstring (`test gecti`) | Yasak gerekçesi "hiçbir test sonucu üretilemez" | İfade **yasak kalır**, gerekçesi taşındı: karar baytları okuyarak verilir, bir denetim **koşulmaz** |
+| `modules/registry.py::run_test_result_recorded` | "hiçbir kod yolu bu kanıtı üretemez" | Keyfi yürütme kapalı; koşul yazan plan için sonuç **baytlardan türetilir**, yazmayan için `uygulanmadi` |
+| `modules/registry.py::independent_check_recorded` | "Bu sürümde **model yolu kapalıdır** (ADR-0008 §2)" | Öncül düştü, sonuç sertleşti: **planı öneren model o planın üçüncü tarafı değildir** |
+| `proof/bundle.py::INDEPENDENT_CHECK_DETAIL` | "**Model yolu kapalıdır**, bu yüzden ikinci bir görüş yoktur" | Aynı düzeltme; `not_implemented` durumu **değişmedi** |
+| `tasks/views.py::BUDGET_DETAIL` | Üç birim + "model yolu kapalı olduğu için kullanım değeri yoktur" | **Dört** birim (model çağrısı sayısı dâhil); `usage`/`cost` **kaydedilir**, tavan olarak **okunmaz** (ADR-0012 §3) |
+| `TasksPanel.test.tsx`, `ProofWorkspacePanel.test.tsx`, `e2e/agent.spec.ts`, `e2e/proof.spec.ts` | Ürün cümlelerinin `TEST-ONLY:` kopyaları + üç birimlik tavan | Hepsi güncellendi. Bir fixture'ın sabitlediği bayat cümle, ürün ilerledikten sonra da **yeşil kalır** — bu yüzden fixture'lar da taranıyor |
+| `db/models.py`, `schemas.py`, `proof/language.py`, `api/types.ts` yorumları | "The model lane is closed" | Yokluk artık **kazara değil korunuyor**: sağlayıcı bir muhakeme alanı gönderiyor, alan okunuyor ve düşürülüyor (ADR-0012 §1) |
+| `docs/agent-runtime.md` §3 | Üç birimlik tavan tablosu + kapalı yol gerekçesi | `model_call_count` eklendi; gerekçe ADR-0012 §3'ünkiyle değiştirildi |
+| `docs/kullanim-kilavuzu.md` §7 | "**Model çağrısı yoktur.**" | "Model plan **önerir**, çalıştırmaz" |
+| `docs/ui-action-map.md` §14.5, §15.3 | "üretecek bir model yolu da yoktur", "Model yolu ADR-0008 §2 ile … kapalıdır" | Yol açık; muhakeme alanı **korunan** bir yokluk, bağımsız kontrol ise üçüncü taraf olmadığı için boş |
+
+Güncellenen `tests/security` iddiaları — üçü de **güçlendirildi**, hiçbiri
+gevşetilmedi:
+
+- `test_agent_language.py::test_the_honesty_sentences_say_what_is_actually_true`
+  yalnızca kelimelerin **varlığını** istiyordu, bu yüzden yanındaki yanlış
+  cümleyi göremiyordu; artık iki bayat iddianın **yokluğunu** da istiyor.
+- `test_proof_bundle.py::test_the_independent_check_and_the_exit_code_stay_not_implemented`
+  `"Model yolu kapalidir"` cümlesini **zorunlu tutuyordu** — yani yanlış
+  cümleyi yerinde tutan şeyin kendisiydi. Artık işleyen gerekçeyi ve eski
+  öncülün **yokluğunu** sabitliyor.
+- `test_task_evidence.py::test_the_task_layer_states_where_the_ceiling_lives_rather_than_implying_none`
+  dördüncü birimi ve "tavan olarak" niteliğini istiyor.
+
+**Belgelerdeki tarihsel alıntılara dokunulmadı** ve tarama kapsamına
+alınmadı: `docs/model-planning.md`, `docs/proof-workspace.md`,
+`README.md` ve bu dosya eski ifadeyi *"eskiden şöyle diyordu"* diye anıyor,
+ki bu doğru bir cümledir. `docs/work-scan.md`'deki "model çağrısı yoktur" da
+**paket kapsamlıdır** ve hâlâ doğrudur (SI-279).
+
+### Koşulan kapılar
+
+`ruff check .` · `mypy src` · `pytest ../../tests` (**2426 geçti**) ·
+`npm run lint` · `npm run test` (**434 geçti**) · `npm run build`, ardından
+SPA bundle değiştiği için `pytest` tekrar koşuldu.
+

@@ -132,11 +132,30 @@ def test_our_own_over_claim_fails_closed() -> None:
 
 
 def test_the_honesty_sentences_say_what_is_actually_true() -> None:
-    """The permitted wording, pinned so a later edit cannot soften it."""
+    """The permitted wording, pinned so a later edit cannot soften it.
+
+    This test carried its own lesson. Every assertion below passed for the
+    whole of H4 while the sentence said "there is no model call" and "the test
+    result stays 'not implemented'" - both false by then - because each
+    assertion only required a word to be **present**. A pin made of present
+    words cannot see a false clause beside them, so the two claims ADR-0012
+    took away are pinned as absences here, and the general form is checked by
+    ``test_model_lane_claims.py`` over the whole product tree.
+    """
     assert "deterministik" in RUN_HONESTY_SENTENCE
     assert "uygulanmadi" in RUN_HONESTY_SENTENCE
     assert "yayima hazir sayilamaz" in RUN_HONESTY_SENTENCE
     assert "sonraki arac cagrisini engeller" in STOP_HONESTY_SENTENCE
+
+    # The model lane is open (ADR-0012) and the sentence has to say what the
+    # model may do rather than deny that it exists.
+    assert "onerir" in RUN_HONESTY_SENTENCE
+    assert "model cagrisi" not in RUN_HONESTY_SENTENCE
+    # ``not_implemented`` is the verdict for a plan with no acceptance
+    # condition, not the verdict for every run
+    # (``station_api.agent.acceptance``).
+    assert "kabul kosul" in RUN_HONESTY_SENTENCE
+    assert "'uygulanmadi' kalir" not in RUN_HONESTY_SENTENCE
     for sentence in (RUN_HONESTY_SENTENCE, STOP_HONESTY_SENTENCE):
         assert not set(sentence) & set("çğıöşüÇĞİÖŞÜ")
 

@@ -1191,8 +1191,16 @@ def test_the_task_layer_states_where_the_ceiling_lives_rather_than_implying_none
     assert payload.budget_detail == BUDGET_DETAIL
     assert "Gorev katmaninda butce alani yoktur" in payload.budget_detail
     assert "arac cagrisi sayisi" in payload.budget_detail
-    # The units this product refuses to count are named, not merely absent.
-    assert "Token ve para birimi sayilmaz" in payload.budget_detail
+    # H4 made the model call a fourth counted unit (ADR-0012 3). The sentence
+    # listed three, which read as a ceiling that does not cover the lane the
+    # same release opened, so the unit is pinned here rather than left to the
+    # next person who compares this text with ``budget.BUDGET_UNITS``.
+    assert "model cagrisi sayisi" in payload.budget_detail
+    # The units this product refuses are named, not merely absent - and the
+    # refusal is now "not as a ceiling" rather than "not at all". The provider
+    # reports usage and cost, both are recorded, and neither bounds a run.
+    assert "Token ve para birimi tavan olarak sayilmaz" in payload.budget_detail
+    assert "tavan yapilmaz" in payload.budget_detail
     # ``public_share_available`` moved from ``Literal[False]`` to a derived
     # boolean when Package H3 made the field fillable (ADR-0009 1). The
     # assertion moved with the fact rather than being deleted.

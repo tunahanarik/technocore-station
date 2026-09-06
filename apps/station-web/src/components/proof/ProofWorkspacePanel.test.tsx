@@ -45,13 +45,13 @@ const REPRODUCTION =
   "TEST-ONLY: Yeniden uretmek icin her dosyanin ozetini kendi kopyanizla karsilastirin.";
 
 const INDEPENDENT_DETAIL =
-  "TEST-ONLY: Bagimsiz kontrol bu surumde uygulanmadi. Model yolu kapalidir, bu yuzden kaydedilecek ikinci bir gorus yoktur.";
+  "TEST-ONLY: Bagimsiz kontrol bu surumde uygulanmadi. Plani oneren model o planin ucuncu tarafi degildir, bu yuzden kaydedilecek ikinci bir gorus yoktur.";
 
 const EXIT_CODE_DETAIL =
   "TEST-ONLY: Gercek bir cikis kodu uretilmedi. Keyfi kod ve kabuk yurutmesi kapalidir, bu yuzden kosacak bir denetim yoktur.";
 
 const TEST_RESULT_DETAIL =
-  "TEST-ONLY: Test sonucu bu surumde uygulanmadi; onu kosacak yurutme kapalidir.";
+  "TEST-ONLY: Test sonucu uygulanmadi: bu plan makinece degerlendirilebilir bir kabul kosulu yazmadi.";
 
 const TASK_ID = "3c1f9a7b5e2d84660a1b2c3d4e5f6071";
 

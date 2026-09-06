@@ -174,14 +174,20 @@ parametre tipi **yoktur**: bir araca adres verilemez.
 | Birim | Değer |
 |---|---|
 | `tool_call_count` | en çok 32 |
+| `model_call_count` | en çok 8 |
 | `wall_clock_seconds` | en çok 120 |
 | `concurrency` | **1** (`Literal[1]`) |
 
-**Token ve para birimi yoktur** — ve bu bir eksiklik değil, gerekçeli bir
-rettir: model yolu kapalı olduğu için sağlayıcıdan gelen bir kullanım değeri
-yoktur, SI-250 de gelmiyorsa sıfır uydurmayı zaten yasaklar. Ölçülemeyen bir
-birimle ifade edilen tavan, birine sayı lazım olduğu ilk anda "sınırsız"a
-yuvarlanır. Reddedilen birimler `refused_units` alanında **adıyla** yayımlanır.
+Birim listesi H4'te **üç değil dört** oldu: model çağrısı sayılabilir hâle
+geldiği anda tavanın bir birimi oldu (ADR-0012 §3).
+
+**Token ve para birimi tavan değildir** — ve bu bir eksiklik değil, gerekçeli
+bir rettir. Gerekçesi de değişti: eskiden "model yolu kapalı, ölçülecek bir
+şey yok" idi; sağlayıcı artık `usage` ve `cost` gönderiyor, ikisi de
+**kaydediliyor**, ve hiçbiri tavan olarak **okunmuyor** — çünkü karşı tarafın
+bildirdiği bir sayıyla ifade edilen tavan, karşı tarafın koyduğu tavandır.
+SI-250 gelmeyen bir değer için sıfır uydurmayı zaten yasaklar. Reddedilen
+birimler `refused_units` alanında **adıyla** yayımlanır.
 
 ### 3.1 Neden `agent/`, `tasks/` değil
 
