@@ -2653,3 +2653,202 @@ birimindedir; bu turun kapsamı dört kuraldı (`dynamic-loading`, `outbound`,
 `secret-boundary`, bütçe) ve beşinci kurala dokunulmadı. Gevşek modüllerin
 hiçbiri bugün durum yazmıyor, ama bunu söyleyen bir muhafız yok — aynı
 kalıbın **on birinci** örneği olarak kayda geçirildi.
+
+---
+
+## Aynı kusurun **on birinci** örneği: durum yazma kuralı (6 Eylül 2026)
+
+Bir önceki tur dördüncü/beşinci kuralı gevşek modüllere genişletti ve
+kapatmadığı şeyi **adıyla** kaydetti: `test_task_states.py`'nin
+`STATE_WRITER_DIRS`'ü hâlâ paket kapsamlıydı. `PROJECT_STATUS.md`'de "açık
+risk", commit mesajında "on birincisi olurdu" yazıyordu. İkisi de muhafız
+değildir; bu tur onu kapattı.
+
+### Kusur, ölçülerek (önce kırmızı istenen regresyon)
+
+İki ayrı ekim yapıldı, çünkü ikisi farklı şey ölçer ve onuncu turun ölçümünde
+karışan tam olarak bu ikisiydi:
+
+1. **Yeni** gevşek modül — `apps/station-api/src/station_api/task_shortcut.py`,
+   içinde `row.state = "published"` ve `setattr(row, "state", "running")`.
+2. **Var olan, git'te izlenen** gevşek modüle **yerinde** eklenen yazı —
+   `single_instance.py`'ye `row.state = "review_needed"`.
+
+Eski taramayla:
+
+| Koşu | Sonuç |
+|---|---|
+| `test_task_states.py`, iki ekim de yerinde | **32 geçti** — temiz temel çizgiyle (32 geçti) bayt bayt aynı |
+| Bütün `tests/security`, iki ekim de yerinde | **4 kırmızı, 2246 geçti** |
+| Bütün `tests/security`, **yalnız yerinde ekim** (yeni dosya yok) | **2250 geçti** — temiz temel çizgiyle birebir aynı |
+
+Dört kırmızının **hiçbiri** durum yazma kuralı değildir ve hiçbiri kapsam
+sayılmadı: ikisi (`test_tracked_sources.py`'nin iki testi) yalnız ekilen
+dosyanın **izlenmemesine** tepki verdi — onuncu turda da olan, gerçek bir
+değişiklik hakkında hiçbir şey söylemeyen sinyal; ötekiler
+(`test_module_registry.py` ve `test_task_evidence.py`'nin gevşek modül yürüyüş
+muhafızları) *yeni bir gevşek modül belirdiğini* söyledi, *o modülün görev
+durumu yazdığını* değil. Üçüncü satır bunu kanıtlar: izlenen dosyaya yerinde
+yazılan gerçek ihlal, dosya listelerini hiç değiştirmediği için **bütün
+güvenlik paketini yeşil bıraktı**. Kural hakkında sıfır kapsam.
+
+### Yeni muhafız: kırmızı
+
+Aynı iki ekimle, genişletilmiş taramaya karşı: **3 kırmızı, 48 geçti**.
+
+- `::test_only_the_transition_method_writes_a_task_state` — kuralın kendisi;
+  artık gevşek modülleri de okuduğu için ikisini birden gördü.
+- `::test_every_loose_module_is_scanned_and_every_scanned_module_exists` —
+  büyüme hâli: `['task_shortcut.py']`.
+- `::test_no_loose_module_writes_a_task_state_at_all` — **izlenen** dosyaya
+  yerinde yazılan ihlali adıyla verdi
+  (`single_instance.py:_test_only_force_review`).
+
+### Muhafız mutasyonla sürüldü
+
+| Mutasyon | Ekili modül | Sonuç |
+|---|---|---|
+| `_loose_modules` dizini `glob("*.py")` ile yürüyor (asıl hâli) | `task_shortcut.py`, yerinde | **1 kırmızı** |
+| `_loose_modules` `STATE_WRITER_MODULES` okuyor (mutasyon) | aynı modül, yerinde | **yeşil, 51 test** — muhafız kör |
+
+Hüküm dönüyor, yani muhafız sahte değil.
+
+### Düzeltme — yeni kalıp uydurulmadı
+
+`test_module_registry.py` ve `test_task_evidence.py`'nin bir tur önce
+yerleştiği şekil birebir izlendi: elle yazılmış `STATE_WRITER_MODULES`
+tuple'ı, ağacı `glob` ile yürüyen ayrı bir muhafız, `is_file()` ile korunan
+tarama, ve `<dosya>:<fonksiyon>` biçiminde **adlandırılmış izinler**.
+
+**Modül muafiyet tablosu yok ve olmayacak.** Bir modül tek dosyadır; onu muaf
+etmek düz atama, annotate, artırmalı ve `setattr` yazımlarının hepsini birden
+o dosyaya vermek olurdu — kapatılan deliğin bir kat aşağıya taşınmış hâli.
+
+Genişletilen taramanın gerçek ağaçta bulduğu şey ve verilen karar:
+
+| Bulgu | Karar |
+|---|---|
+| On dört gevşek modülün hiçbirinde `.state` yazısı **yok** | **İzin verilmedi.** `MODULE_STATE_WRITE_ALLOWANCES` boştur; kural genişletilirken hiçbir ürün kodu değişmedi ve hiçbir muafiyet açılmadı. |
+
+Yani üründe düzeltilmesi gereken gerçek ihlal **çıkmadı** — ve bu, taramanın
+sessiz kalması olarak değil, kendi adlandırılmış iddiası olarak yazıldı
+(`::test_no_loose_module_writes_a_task_state_at_all`, on dört dosyanın
+açıldığını **ve** temiz olduğunu ayrı ayrı ölçer).
+
+Boş tablo denetlenmemiş tablo demek olmasın diye izin mekanizması boş küme
+üzerinde döngülenmiyor, **sürülüyor**: atılabilir bir ağaçta bir yazıcıya izin
+verilir, aynı dosyadaki öteki iki yazıcının kırmızı kaldığı ölçülür, aynı izin
+başka bir modüle yazıldığında hiçbir şeyi geçirmediği ölçülür, ve izin
+denetleyicisi önce **geçerli** bir izni kabul ettiği gösterilerek beş bozuk
+şekle karşı sürülür (yoksa "her şeyi reddeden" bir denetleyici de geçerdi).
+
+Bir de eskiden hiç denetlenmeyen bir gerekçe **sayıyla sabitlendi**:
+`PACKAGES_OUTSIDE_THE_STATE_WRITE_SCAN`'in `compose` girdisi paketin dışarıda
+kalmasını tek bir fonksiyona dayandırıyor (`nonce.py:_settle_once`, farklı
+tablo, farklı yaşam döngüsü). O pakette ikinci bir `.state` yazısı belirse
+cümle hâlâ paketi tarif ediyormuş gibi okunurdu; artık
+`::test_the_compose_exemption_still_describes_exactly_one_write` sayıyor — bu,
+`test_task_evidence.py`'nin tavanı **tam üç** import'çıya sabitlemesinin
+aynısı.
+
+### Değişen dosyalar
+
+- `tests/security/test_task_states.py` — `STATE_WRITER_MODULES`,
+  `MODULE_STATE_WRITE_ALLOWANCES`, `THE_ONLY_EXEMPT_STATE_WRITE`,
+  `_loose_modules`, `_state_write_scan_files`, `_scope_of`, `_writes_in`,
+  `_module_allowance_problems`; `_state_writers` gevşek modülleri de açıyor ve
+  adlandırılmış izinleri uyguluyor; beş yeni test
+  (`::test_every_loose_module_is_scanned_and_every_scanned_module_exists`,
+  `::test_a_planted_state_writer_is_reported_from_every_scanned_loose_module`,
+  `::test_no_loose_module_writes_a_task_state_at_all`,
+  `::test_the_module_allowance_permits_one_named_writer_and_no_other`,
+  `::test_every_module_state_write_allowance_is_used_and_is_scoped`,
+  `::test_the_compose_exemption_still_describes_exactly_one_write`).
+- `docs/security-invariants.md` — SI-226 kapsam hücresi ve test atıfları;
+  "Aynı kusurun **on birinci** örneği" ölçüm kaydı.
+- `PROJECT_STATUS.md` — bu bölüm.
+
+Ürün kodunda **hiçbir dosya değişmedi**. `git diff` içinde **silinmiş tek bir
+`assert` yok**; silinen satırlar eski `_state_writers` gövdesi (yerine kesin
+olarak daha geniş olanı geçti) ve iki düzyazı paragrafıdır.
+`OUTBOUND_CLIENT_MODULES` **beşte** kaldı.
+
+### Koşulan kapılar
+
+`ruff check .` (**All checks passed**) ·
+`ruff check apps/station-api/src packages/technocore-conform/src tests`
+(**All checks passed**) · `mypy --config-file apps/station-api/pyproject.toml`
+(**Success: no issues found in 142 source files**) · `pytest ../../tests`
+(**2603 geçti**, 179.27 sn; önceki tur 2584 — fark, bu turun 19 yeni testi) ·
+`npm run lint` (temiz) · `npm run test` (**434 geçti**, 13 dosya) ·
+`npm run build` (**built in 3.57s**). Web kaynağı değişmediği için **SPA
+bundle değişmedi**; paketleme artefaktı yeniden üretilmedi.
+
+Ekimlerin hiçbiri hayatta kalmadı: temizlik `trap` içinde yapıldı ve
+`git status --untracked-files=all` yalnız değişen üç dosyayı `M` olarak
+gösteriyor, untracked girdi yok.
+
+### Nasıl bakıldı, ve bulunan **on ikinci** örnek
+
+Kusur sınıfı şudur: *bir kuralın kapsamı elle yazılmış bir listeden geliyor ve
+o listeyi ağaca karşı denetleyen bir muhafız yok.* Yöntem üç adımdı:
+
+1. `tests/security` altındaki **her** modül düzeyi sabiti sözdizim ağacından
+   çıkarıldı; dosya/dizin adı biçiminde dize taşıyan **69** aday bulundu.
+2. Bunlar ikiye ayrıldı: kuralın **nereye baktığını** belirleyen *kapsam*
+   sabitleri, ve **neyi aradığını** belirleyen *yüklem* sabitleri
+   (`EXECUTION_IMPORTS`, `FORBIDDEN_COLUMN_FRAGMENTS`, `EXPECTED_PATHS` … —
+   bunlar ağaç hakkında bir iddia taşımaz, kusur sınıfının dışındadır).
+3. Her kapsam sabiti için tek soru soruldu: *o sabiti **okumayan**, ağacı
+   `iterdir`/`glob`/`rglob` ile yürüyen ve sonucu sabitle karşılaştıran bir
+   test var mı?* Ayrıca `rglob`/`glob`/`iterdir` çağrılarının **kökleri**
+   ayrı ayrı listelendi, çünkü kapsam bir tuple yerine gömülü bir yolla da
+   yazılabilir.
+
+Kapsam sabiti taşıyan üç dosya (`test_module_registry.py`,
+`test_task_evidence.py`, `test_task_states.py`) artık üçü de hem paket hem
+gevşek modül için böyle bir muhafız taşıyor. Tek paket tarayan sınır
+dosyaları (`test_agent_boundary.py`, `test_planner_boundary.py`,
+`test_proof_boundary.py`) kusur sınıfının dışında: konuları adlandırdıkları
+paketin **kendisi**, ve üçü de taramanın boş olmadığını (`assert paths`,
+`assert len(paths) >= N`) ve ekili ihlali gördüğünü ayrıca sürüyor, yani
+yanlış yazılmış bir dizin adı "hiçbir şeyi tarayıp yeşil vermek" olamıyor.
+`test_packaging_boundary.py` zaten iki yarımı da taşıyor: listeyi süren döngü
+**ve** depoyu yürüyen çapa.
+
+**Fakat bir tane bulundu, ve düzeltilmedi — adı konuldu.**
+
+#### On ikinci örnek: yasak ifade denetiminin kapsamı
+
+Yasak ifade kuralını (`FORBIDDEN_PHRASES`: `degismez kayit`, `sunucu kaniti`,
+`kurcalanamaz kayit` …) uygulayan testler **paket paket** yazılmıştır ve
+kapsam, beş test dosyasına dağılmış elle tutulan **altı paket adıdır**:
+`evidence`, `workscan`, `agent`, `proof`, `routes` (dört `*_language.py`) ve
+`planner` (`test_planner_boundary.py`). Bu altılığın **tamlığını denetleyen
+hiçbir muhafız yok** — kural kapsamını ağaca karşı yürüyen bir test
+bulunmuyor.
+
+Dosyaların kendisi bunu düzyazıda zaten söylüyor: *"Each scan is scoped to its
+own directory, so a new package's wording is covered by nothing at all until it
+brings its own."* Bu, onuncu örneğin birebir şeklidir — kusur bir yoruma
+yazılmış, muhafıza değil.
+
+**Ölçüldü, iddia edilmedi.** `station_api` altındaki on sekiz paketin
+**on dördü** kullanıcıya görünen Türkçe cümle üretiyor; yalnız altısı
+kapsanıyor. Kapsanmayanların en büyükleri: `opencode` (53 cümle, ADR-0012'nin
+`planner` ile birlikte gelen öteki paketi), `modules` (43), `compose` (33),
+`tasks` (26), `cli` (16).
+
+| Ekim | Sonuç |
+|---|---|
+| `planner/service.py`'ye iki yasak ifade | **1 kırmızı** — `test_planner_boundary.py::test_no_string_literal_in_the_planner_carries_a_forbidden_phrase` (yani `planner` kapsanıyor) |
+| `opencode/service.py`'ye **aynı** iki yasak ifade | **2269 geçti, sıfır kırmızı** — bütün güvenlik paketi yeşil |
+
+Aynı iki cümle, bir pakette kırmızı, komşusunda görünmez. Kapsamı belirleyen
+şey kuralın konusu değil, birinin o paket için ayrı bir test dosyası yazmış
+olmasıdır.
+
+Bu turda **düzeltilmedi**: turun kapsamı SI-226'ydı ve yasak ifade kuralını
+altı paketten on dörde genişletmek ürün metinlerinde gerçek bulgular
+çıkarabilecek ayrı bir iştir. Sessizce geçilmedi; **on ikinci örnek** olarak
+buraya ve `docs/security-invariants.md`'ye ölçümüyle birlikte yazıldı.

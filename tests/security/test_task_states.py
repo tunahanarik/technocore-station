@@ -215,6 +215,75 @@ STATE_WRITER_DIRS = (
     "workscan",
 )
 
+#: Every loose module directly under ``station_api``, written out.
+#:
+#: The tuple above closed the sixth instance of this repository's signature
+#: defect and left the eleventh open, which the commit that closed the tenth
+#: named rather than absorbed: *``test_task_states.py``'s ``STATE_WRITER_DIRS``
+#: is still package-scoped, and would be the eleventh*. A sentence in a commit
+#: message is not a guard, and **the hole was measured**: a loose module
+#: carrying ``row.state = "published"`` and ``setattr(row, "state",
+#: "running")``, plus a third write appended to the already-tracked
+#: ``single_instance.py``, left all 32 tests in this file green and the whole
+#: 2250-test security suite green.
+#:
+#: The scan unit was the *package*, so a ``.py`` file sitting directly in
+#: ``station_api`` was outside SI-226 entirely - the exact shape ``workscan``
+#: sat in while it was the package creating suggested tasks, moved down one
+#: level. So the loose modules are scan units too.
+#:
+#: There is deliberately no whole-module equivalent of
+#: :data:`PACKAGES_OUTSIDE_THE_STATE_WRITE_SCAN`. A module is one file, and
+#: exempting a file would grant it every spelling of the state write at once -
+#: plain assignment, annotated, augmented and ``setattr`` - which is the hole
+#: being closed, moved down a further level. What a module gets instead is
+#: :data:`MODULE_STATE_WRITE_ALLOWANCES`: named offenders, and nothing else.
+#:
+#: Written out rather than globbed, for the same reason the tuple above is:
+#: :func:`test_every_loose_module_is_scanned_and_every_scanned_module_exists`
+#: walks the tree and compares it against this, and a tuple derived from
+#: ``glob`` would agree with whatever it found. That is not a hypothesis - it
+#: is the mutation this guard was tested with, and it goes green with the
+#: violation still planted.
+STATE_WRITER_MODULES = (
+    "__init__.py",
+    "__main__.py",
+    "app.py",
+    "config.py",
+    "dependencies.py",
+    "digests.py",
+    "downloads.py",
+    "launcher.py",
+    "logging_setup.py",
+    "resources.py",
+    "schemas.py",
+    "seed_import.py",
+    "single_instance.py",
+    "strict_json.py",
+)
+
+#: Which loose module may write which *named* state, as ``<file>:<function>``,
+#: and why. A **counted list, not a pattern**, one level narrower than
+#: :data:`PACKAGES_OUTSIDE_THE_STATE_WRITE_SCAN`: a package exemption switches
+#: the rule off for a directory, an entry here would permit one exact function
+#: in one exact file and leave every other spelling of the same write red in
+#: the same file.
+#:
+#: **Empty, and the emptiness is measured rather than assumed.** No loose
+#: module writes a ``.state`` attribute at all today, which makes the strongest
+#: form of SI-226 - *the only writer in the whole widened scan is
+#: ``TaskService.transition``* - what the scan asserts rather than something it
+#: is scoped around. An entry appearing here later is somebody arguing in
+#: writing that a file beside ``app.py`` should move a task.
+#:
+#: An empty table is also an untested table, which is the failure mode this
+#: file's own docstring refuses ("an empty iteration is a test that passes
+#: while asserting nothing"). So the mechanism is **driven** rather than
+#: iterated, on a throwaway tree, by
+#: :func:`test_the_module_allowance_permits_one_named_writer_and_no_other` and
+#: :func:`test_every_module_state_write_allowance_is_used_and_is_scoped`.
+MODULE_STATE_WRITE_ALLOWANCES: dict[str, dict[str, str]] = {}
+
 #: Every other package under ``station_api``, one by one, with the reason it is
 #: outside the scan. A **counted list, not a pattern** - the
 #: ``_ROWS_WITHOUT_A_PYTHON_TEST`` shape from ``test_security_invariants_doc``,
@@ -295,6 +364,20 @@ PACKAGES_OUTSIDE_THE_STATE_WRITE_SCAN: dict[str, str] = {
 #: The one function permitted to write a task's state, as
 #: ``<file>:<function>``. Anything else in the two packages is an offender.
 THE_ONLY_STATE_WRITER = "service.py:transition"
+
+#: The one ``.state`` write the exception table above claims exists outside the
+#: scan, pinned against a measured count.
+#:
+#: ``compose``'s entry is the only reason in that dict that makes a *specific*
+#: factual claim about a *specific* function - "``nonce.py:_settle_once`` sets
+#: ``MessageNonceReservation.state``, a different table with a different
+#: lifecycle" - and until now nothing checked it. A second writer appearing in
+#: that package would leave the sentence reading as though one still described
+#: it, which is how a list of reasons decays into a list of names. This is the
+#: ``agent.budget``-at-exactly-three-importers pin from ``test_task_evidence``
+#: and the ``TaskRecord``-in-exactly-two-modules pin below, applied to the one
+#: exemption whose prose can go stale quietly.
+THE_ONLY_EXEMPT_STATE_WRITE = "nonce.py:_settle_once"
 
 
 @pytest.fixture
@@ -567,15 +650,107 @@ def _packages(api_source_root: Path) -> set[str]:
     }
 
 
-def _state_writers(api_source_root: Path) -> list[str]:
-    """``<file>:<function>`` for every state write in the scanned trees."""
-    writers: list[str] = []
+def _loose_modules(api_source_root: Path) -> set[str]:
+    """Every ``.py`` file directly under ``station_api``.
+
+    Read off the tree rather than listed, for the reason :func:`_packages`
+    gives: a guard built out of the list cannot see what the list omits. Same
+    helper, same reason, as ``test_module_registry.py``'s and
+    ``test_task_evidence.py``'s.
+    """
+    root = api_source_root / "station_api"
+    return {entry.name for entry in root.glob("*.py") if entry.is_file()}
+
+
+def _state_write_scan_files(api_source_root: Path) -> list[Path]:
+    """Every file the state-write scan opens, so "it scanned nothing" is visible.
+
+    Two kinds of scan unit, because the tree has two: a package, which the rule
+    can be switched off for with a written reason, and a loose module, which it
+    cannot - a loose module is always opened and gets named allowances instead.
+
+    ``is_file`` rather than a bare append so a throwaway tree containing only
+    packages still scans cleanly; the tuple is checked against the real tree by
+    :func:`test_every_loose_module_is_scanned_and_every_scanned_module_exists`,
+    because ``is_file`` swallows a misspelling exactly as ``rglob`` swallows a
+    missing directory - widening the scan by zero files and saying nothing.
+    """
+    root = api_source_root / "station_api"
+    paths: list[Path] = []
     for name in STATE_WRITER_DIRS:
-        for path in (api_source_root / "station_api" / name).rglob("*.py"):
-            finder = _StateWriteFinder(path.name)
-            finder.visit(ast.parse(path.read_text(encoding="utf-8")))
-            writers.extend(finder.offenders)
+        paths.extend((root / name).rglob("*.py"))
+    paths.extend(root / name for name in STATE_WRITER_MODULES if (root / name).is_file())
+    return sorted(paths)
+
+
+def _scope_of(api_source_root: Path, path: Path) -> str:
+    """The scan unit a file belongs to: a package name, or a module file name.
+
+    ``station_api/tasks/service.py`` is ``tasks``; ``station_api/schemas.py``
+    is ``schemas.py``. One helper for both, because an allowance is looked up
+    the same way whichever kind of unit granted it.
+    """
+    return path.relative_to(api_source_root / "station_api").parts[0]
+
+
+def _writes_in(path: Path) -> list[str]:
+    """``<file>:<function>`` for every state write in one file."""
+    finder = _StateWriteFinder(path.name)
+    finder.visit(ast.parse(path.read_text(encoding="utf-8")))
+    return finder.offenders
+
+
+def _state_writers(
+    api_source_root: Path,
+    allowances: dict[str, dict[str, str]] | None = None,
+) -> list[str]:
+    """``<file>:<function>`` for every state write in the scanned trees.
+
+    ``allowances`` defaults to :data:`MODULE_STATE_WRITE_ALLOWANCES` rather
+    than to an empty mapping, so a call site that does not ask for a permission
+    gets whatever the table really grants - which today is nothing. It is a
+    parameter at all so the allowance mechanism can be *driven* on a throwaway
+    tree instead of iterated over an empty dict.
+    """
+    granted = MODULE_STATE_WRITE_ALLOWANCES if allowances is None else allowances
+    writers: list[str] = []
+    for path in _state_write_scan_files(api_source_root):
+        allowed = granted.get(_scope_of(api_source_root, path), {})
+        writers.extend(
+            offender for offender in _writes_in(path) if offender not in allowed
+        )
     return sorted(writers)
+
+
+def _module_allowance_problems(
+    api_source_root: Path, table: dict[str, dict[str, str]]
+) -> list[str]:
+    """Every way one allowance table fails to be a permission somebody can find.
+
+    Four of them, and each is the same failure the package-level exemptions get
+    caught by one level up: a permission granted to a module the scan does not
+    open, to a file that is not there, for a write the file does not make, or
+    without a reason. An allowance nobody uses is a permission sitting open for
+    whoever needs one next, and it reads as a rule while being a hole.
+    """
+    problems: list[str] = []
+    for module, names in sorted(table.items()):
+        if module not in STATE_WRITER_MODULES:
+            problems.append(f"{module}: has allowances but is not a scanned module")
+            continue
+        path = api_source_root / "station_api" / module
+        if not path.is_file():
+            problems.append(f"{module}: has allowances but no such file")
+            continue
+        produced = set(_writes_in(path))
+        if not names:
+            problems.append(f"{module}: an empty allowance permits nothing")
+        for name, reason in sorted(names.items()):
+            if name not in produced:
+                problems.append(f"{module}: {name} is permitted but never written")
+            if not reason.strip():
+                problems.append(f"{module}: {name} is permitted with no reason")
+    return problems
 
 
 # ---------------------------------------------------------------------------
@@ -810,14 +985,23 @@ def test_only_the_transition_method_writes_a_task_state(
     """The structural half, beside the behavioural one.
 
     The reachability walk can only find a producer it knows how to call. This
-    one does not call anything: it reads the syntax tree of both Package F
-    packages and requires that the single write to a ``.state`` attribute -
-    plain assignment, annotated, augmented or through ``setattr`` with a
-    literal name - is the one inside ``TaskService.transition``, the function
-    that runs ``validate_transition`` first.
+    one does not call anything: it reads the syntax tree of every file the scan
+    opens and requires that the single write to a ``.state`` attribute - plain
+    assignment, annotated, augmented or through ``setattr`` with a literal
+    name - is the one inside ``TaskService.transition``, the function that runs
+    ``validate_transition`` first.
 
     A method that opened ``running`` by writing the row itself fails here even
     if nothing ever calls it.
+
+    "Every file the scan opens" is a wider claim than it was. It used to mean
+    the six packages in :data:`STATE_WRITER_DIRS`, which is why a ``.py`` file
+    sitting directly in ``station_api`` could write the column and leave this
+    assertion green - measured, not supposed. It now means those packages
+    **and** the fourteen loose modules beside them, so the sentence "one
+    writer" is about the whole of ``station_api`` minus twelve packages with
+    written-down reasons, rather than about six directories somebody thought
+    of.
     """
     assert _state_writers(api_source_root) == [THE_ONLY_STATE_WRITER]
 
@@ -942,6 +1126,267 @@ def test_every_package_is_scanned_or_is_a_written_down_exception(
     assert not gone, (
         "these packages are written down as exceptions but no longer exist; "
         f"drop them from PACKAGES_OUTSIDE_THE_STATE_WRITE_SCAN: {gone}"
+    )
+
+
+def test_every_loose_module_is_scanned_and_every_scanned_module_exists(
+    api_source_root: Path,
+) -> None:
+    """The eleventh instance, closed: the guard one level up from the last one.
+
+    :func:`test_every_package_is_scanned_or_is_a_written_down_exception` walks
+    the tree for *directories* and was written because a list cannot see what
+    it omits. It left the same defect one level up, and the commit that closed
+    the tenth instance elsewhere named this file as where the eleventh was
+    living. The fourteen loose ``.py`` files beside the packages -
+    ``app.py``, ``schemas.py``, ``launcher.py`` and the rest - were outside
+    SI-226 altogether, and **it was measured**: ``row.state = "published"``
+    and ``setattr(row, "state", "running")`` in a new loose module, plus a
+    third write appended to the tracked ``single_instance.py``, left all 32
+    tests in this file green.
+
+    Both directions, for the reasons the package guard gives:
+
+    * a loose module the tuple does not name is the growth case - the next
+      helper dropped beside ``app.py``, with nobody remembering to widen
+      anything;
+    * a name in the tuple with no file behind it is the staleness case, and it
+      is quieter here than for packages: :func:`_state_write_scan_files` uses
+      ``is_file`` exactly as ``rglob`` swallows a missing directory, so a
+      misspelling widens the scan by zero files and reports nothing.
+
+    The last assertion is what makes the other two mean something: the scan's
+    own file list has to contain every module the tuple names, so a tuple that
+    is right and a scan that opens nothing cannot both pass.
+
+    There is deliberately no whole-module exemption table to check here. A
+    module is one file, so switching the rule off for it would grant that file
+    every spelling of the write at once; what a module can have is a named
+    allowance in :data:`MODULE_STATE_WRITE_ALLOWANCES`, driven separately
+    below.
+    """
+    modules = _loose_modules(api_source_root)
+    scanned = set(STATE_WRITER_MODULES)
+
+    unexplained = sorted(modules - scanned)
+    assert not unexplained, (
+        "these loose modules sit directly under station_api and are outside "
+        f"the task-state write scan: {unexplained}. Add them to "
+        "STATE_WRITER_MODULES, and if one of them legitimately moves a task, "
+        "permit that exact <file>:<function> in MODULE_STATE_WRITE_ALLOWANCES "
+        "with the reason - never the module."
+    )
+
+    gone = sorted(scanned - modules)
+    assert not gone, (
+        "STATE_WRITER_MODULES names modules that no longer exist; the scan "
+        f"opens nothing for them: {gone}"
+    )
+
+    opened = {
+        path.name
+        for path in _state_write_scan_files(api_source_root)
+        if path.parent == api_source_root / "station_api"
+    }
+    assert opened == scanned, sorted(scanned - opened)
+
+
+@pytest.mark.parametrize("module", STATE_WRITER_MODULES)
+def test_a_planted_state_writer_is_reported_from_every_scanned_loose_module(
+    module: str, tmp_path: Path
+) -> None:
+    """The scan, driven once per loose module it claims to cover.
+
+    The package version of this test is what proved :data:`STATE_WRITER_DIRS`
+    was real rather than decorative. This is the same measurement for the
+    fourteen files that version cannot see, and it is the test that would have
+    failed on the day the eleventh instance of this defect was written into a
+    commit message instead of fixed.
+
+    Both spellings are planted, because a module-shaped exemption is exactly
+    what would let one through while the other is caught: a permission that had
+    quietly widened from a named function to a file fails here. No loose module
+    is exempt from anything, so every case has to report both.
+    """
+    root = tmp_path / "station_api"
+    root.mkdir(parents=True)
+    # Every scanned package has to exist too, or an empty result could mean the
+    # scan walked a tree with nothing in it rather than that it opened the
+    # planted module.
+    for name in STATE_WRITER_DIRS:
+        (root / name).mkdir(exist_ok=True)
+    for name in STATE_WRITER_MODULES:
+        (root / name).write_text("value = 1\n", encoding="utf-8")
+    (root / module).write_text(
+        "def _planted_state_writer(row):\n"
+        "    row.state = 'published'\n"
+        "def _planted_setattr_writer(row):\n"
+        "    setattr(row, 'state', 'running')\n",
+        encoding="utf-8",
+    )
+
+    assert _state_writers(tmp_path) == [
+        f"{module}:_planted_setattr_writer",
+        f"{module}:_planted_state_writer",
+    ]
+
+
+def test_no_loose_module_writes_a_task_state_at_all(api_source_root: Path) -> None:
+    """The widened scan's verdict on the real tree, said out loud.
+
+    :func:`test_only_the_transition_method_writes_a_task_state` now covers the
+    loose modules too, and a reader of it has no way to tell "the fourteen
+    files were opened and are clean" from "the fourteen files were opened".
+    Those are different sentences and only one of them is a measurement, so
+    this is the second one: the scan opens every loose module, and not one of
+    them writes the column.
+
+    That is also what makes :data:`MODULE_STATE_WRITE_ALLOWANCES` empty as a
+    fact rather than as an omission - widening the rule required granting
+    nothing, so no product code changed.
+    """
+    root = api_source_root / "station_api"
+    loose = [path for path in _state_write_scan_files(api_source_root) if path.parent == root]
+
+    assert len(loose) == len(STATE_WRITER_MODULES) == 14, loose
+    assert [offender for path in loose for offender in _writes_in(path)] == []
+
+
+def test_the_module_allowance_permits_one_named_writer_and_no_other(
+    tmp_path: Path,
+) -> None:
+    """The allowance mechanism, driven rather than iterated.
+
+    :data:`MODULE_STATE_WRITE_ALLOWANCES` is empty, so a test that looped over
+    it would assert nothing while looking exactly like a test that asserts
+    something - the failure this file's own docstring refuses. So the mechanism
+    is driven on a throwaway tree, the way
+    :func:`test_the_refusal_mechanism_still_closes_a_state_when_one_is_closed`
+    drives the refusal by closing a state for the duration of one test.
+
+    The reading with nothing permitted comes **first**. Without it this would
+    also pass against a scan that reported nothing at all, which is the way a
+    driven mutation test goes quietly wrong.
+
+    The narrowness is the whole design, and it is the half that is asserted
+    hardest: granting ``downloads.py:_permitted`` filters that one offender and
+    leaves the *other function in the same file* red. A module-shaped
+    exemption - the thing this file refuses to have - would have taken both.
+    """
+    root = tmp_path / "station_api"
+    root.mkdir(parents=True)
+    for name in STATE_WRITER_DIRS:
+        (root / name).mkdir(exist_ok=True)
+    for name in STATE_WRITER_MODULES:
+        (root / name).write_text("value = 1\n", encoding="utf-8")
+    (root / "downloads.py").write_text(
+        "def _permitted(row):\n"
+        "    row.state = 'paused'\n"
+        "def _not_permitted(row):\n"
+        "    row.state = 'published'\n"
+        "def _also_not_permitted(row):\n"
+        "    setattr(row, 'state', 'failed')\n",
+        encoding="utf-8",
+    )
+
+    assert _state_writers(tmp_path, {}) == [
+        "downloads.py:_also_not_permitted",
+        "downloads.py:_not_permitted",
+        "downloads.py:_permitted",
+    ]
+
+    granted = {"downloads.py": {"downloads.py:_permitted": "TEST-ONLY reason."}}
+    assert _state_writers(tmp_path, granted) == [
+        "downloads.py:_also_not_permitted",
+        "downloads.py:_not_permitted",
+    ]
+
+    # The allowance is keyed to the file that holds it and to nothing else: the
+    # same string granted to a different module permits nothing.
+    elsewhere = {"config.py": {"downloads.py:_permitted": "TEST-ONLY reason."}}
+    assert _state_writers(tmp_path, elsewhere) == _state_writers(tmp_path, {})
+
+
+def test_every_module_state_write_allowance_is_used_and_is_scoped(
+    api_source_root: Path, tmp_path: Path
+) -> None:
+    """The allowance table, checked against the tree - and the checker, driven.
+
+    The first assertion is the declared absence: no loose module holds a
+    permission to move a task today, stated explicitly rather than left as the
+    incidental result of an empty loop. A package that grants one edits this
+    line, and editing it is the moment somebody re-reads what an allowance is.
+
+    The rest is the checker being driven, because a checker that only ever runs
+    against an empty table is a checker nobody has verified. The permitted case
+    is checked first, on a throwaway tree, so a checker that rejected
+    everything would fail here rather than pass the four refusals below.
+    """
+    assert MODULE_STATE_WRITE_ALLOWANCES == {}, (
+        "a loose module has been granted permission to write a task state. "
+        "That is a deliberate edit: check it names one <file>:<function> and "
+        "not a module, and that the reason says what the file does."
+    )
+    assert _module_allowance_problems(api_source_root, MODULE_STATE_WRITE_ALLOWANCES) == []
+
+    root = tmp_path / "station_api"
+    root.mkdir(parents=True)
+    for name in STATE_WRITER_MODULES:
+        (root / name).write_text("value = 1\n", encoding="utf-8")
+    (root / "downloads.py").write_text(
+        "def _permitted(row):\n    row.state = 'paused'\n", encoding="utf-8"
+    )
+
+    valid = {"downloads.py": {"downloads.py:_permitted": "TEST-ONLY reason."}}
+    assert _module_allowance_problems(tmp_path, valid) == []
+
+    broken = {
+        "granted to a package rather than a module": {
+            "tasks": {"service.py:transition": "TEST-ONLY reason."}
+        },
+        "granted to a module that is not there": {
+            "nowhere.py": {"nowhere.py:_writer": "TEST-ONLY reason."}
+        },
+        "permitting a write the file does not make": {
+            "config.py": {"config.py:_writer": "TEST-ONLY reason."}
+        },
+        "permitting without a reason": {"downloads.py": {"downloads.py:_permitted": "  "}},
+        "permitting nothing at all": {"downloads.py": {}},
+    }
+    for label, table in broken.items():
+        assert _module_allowance_problems(tmp_path, table) != [], label
+
+
+def test_the_compose_exemption_still_describes_exactly_one_write(
+    api_source_root: Path,
+) -> None:
+    """The one exemption reason that can go stale quietly, pinned by count.
+
+    :data:`PACKAGES_OUTSIDE_THE_STATE_WRITE_SCAN`'s ``compose`` entry does not
+    say "this package is not on the task lifecycle" the way the other eleven
+    do. It makes a specific claim about a specific function - that
+    ``nonce.py:_settle_once`` sets ``MessageNonceReservation.state``, a
+    different table with a different lifecycle - and that claim is the reason
+    the package is outside the scan at all. A second ``.state`` write appearing
+    in ``compose`` would leave the sentence reading as though one still
+    described the package.
+
+    So it is counted, the way ``test_task_evidence.py`` counts the ceiling's
+    importers at exactly three. The table half is held from the other side by
+    :func:`test_the_exempt_packages_cannot_reach_the_task_table`: ``compose``
+    is not one of the two modules permitted to name ``TaskRecord``, so the one
+    write this test finds cannot be a task's.
+    """
+    writers = [
+        offender
+        for path in sorted((api_source_root / "station_api" / "compose").rglob("*.py"))
+        for offender in _writes_in(path)
+    ]
+
+    assert sorted(writers) == [THE_ONLY_EXEMPT_STATE_WRITE], (
+        "the compose exemption is written for exactly one state write and the "
+        f"package now makes these: {sorted(writers)}. Re-read the reason in "
+        "PACKAGES_OUTSIDE_THE_STATE_WRITE_SCAN before widening anything."
     )
 
 

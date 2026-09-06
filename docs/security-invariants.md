@@ -360,7 +360,7 @@ uygulama ayrıntısı [`task-modules.md`](task-modules.md).
 | SI-223 | Kaynak kimliği **registry enum'undan** gelir; içerik değişince kimlik değişir ve **eski kanıt eşleşmez** — bu karşılaştırmayı yapan **iki** yol (`tasks/gate.py` ve `modules/completion.py`) ayrı ayrı testlidir | serbest string `TaskSourceError`; bozuk digest reddedilir; aynı kaynak + farklı içerik → farklı kimlik; eski kanıt yeni sürüme karşı kapıda `blocked`; **doğrulanmış ama başka sürüme bağlı** referans modül tamamlanmasında da `blocked`; kayıt görevin kendi sürümüne bağlanır; alan ayrımı ve uzunluk öneki korunur | `test_task_evidence.py::test_a_source_identifier_must_come_from_the_registry`, `::test_a_malformed_content_digest_is_refused`, `::test_changed_content_produces_a_different_identity`, `::test_evidence_for_the_old_content_does_not_match_the_new_content`, `::test_a_module_check_refuses_evidence_bound_to_another_content_version`, `::test_the_same_reference_passes_once_its_version_matches`, `::test_recorded_evidence_is_bound_to_the_tasks_own_content_version`, `::test_the_identity_is_domain_separated_and_length_prefixed`, `::test_the_same_content_from_a_different_source_is_a_different_identity` | F |
 | SI-224 | Başlangıç uzlaştırması **okur**: sıfır giden istek, sıfır satır değişikliği, sıfır otomatik devam | tarama sırasında ve `create_app` sırasında giden deneme sayısı **0**; defter bayt bayt aynı ve satır hâlâ `in_flight`; `resumed_any` `False`; modül hiçbir yazma yolunu çağıramaz; veritabanı yoksa boş rapor | `test_task_evidence.py::test_the_startup_scan_makes_zero_outbound_requests`, `::test_building_the_application_makes_zero_outbound_requests`, `::test_the_startup_scan_changes_no_row`, `::test_the_scan_resumes_nothing_and_says_so`, `::test_the_reconciliation_module_can_reach_no_write_path`, `::test_the_startup_scan_lists_unfinished_sends`, `::test_a_settled_send_is_not_reported_as_unfinished`, `::test_a_scan_with_no_database_is_an_empty_report_rather_than_a_crash` | F |
 | SI-225 | **Görev katmanında bütçe alanı yoktur** — ve H2 bir tavan yazdıktan sonra da yoktur; erteleme yerine **tavanın nerede olduğu** belgede ve telde görünür | **`agent`, `evidence`, `routes` ve `workscan` dışındaki her pakette ve on dört gevşek üst-seviye modülün tamamında** bütçe biçimli sütun veya tanımlayıcı yok — bu dördü tavanın evi, denetim olayı ve tel katmanıdır ve her biri gerekçesiyle yazılıdır; `planner` ve `opencode` tarama **içindedir** ve yalnız adlandırılmış birer muafiyet taşır; kapsam ağacı **dizinler ve gevşek dosyalar için ayrı ayrı** yürüyen muhafızlarla doğrulanır; `routes` muafiyetinin hep hakkında olduğu dosya — `schemas.py` — artık taramanın **içindedir** ve yalnız üç adı (`budget_available`, `budget_detail`, `budget_state`) adlandırılmış izinle taşır, dördüncü bir bütçe biçimli üye aynı dosyada kırmızıdır; `budget_available` `Literal[False]`; `budget_detail` artık tavanın **çalışmaya** ait olduğunu ve token/para biriminin sayılmadığını söyler | `test_task_evidence.py::test_the_task_layer_opens_no_budget_field`, `::test_the_task_layer_states_where_the_ceiling_lives_rather_than_implying_none`, `::test_the_budget_scan_reaches_the_proof_package_and_would_fire_there`, `::test_every_package_is_scanned_or_is_a_written_down_budget_exception`, `::test_every_loose_module_is_scanned_and_every_scanned_module_exists`, `::test_a_planted_budget_field_is_reported_from_every_scanned_loose_module`, `::test_every_loose_module_budget_allowance_is_used_and_is_scoped`, `::test_the_ceiling_is_named_by_exactly_the_modules_written_down_here`, `::test_the_declared_absences_are_still_absences` | F, H2, H3 |
-| SI-226 | Bir görevin durumunu yazan **tek** kod yolu `TaskService.transition`'dır — ve tarama H2'nin `agent/` ve H3'ün `proof/` ağaçlarını da kapsar | `modules/`+`tasks/`**+`agent/`** sözdizim ağacında `.state`'e atama (düz, annotate, artırmalı ve sabit adlı `setattr`) yalnız `service.py:transition` içinde; sentetik ikinci yazıcı taramada görünür. **Üçüncü ad taşıyıcıdır:** `running`/`paused`'ı üreten kod o ağaçtadır ve tarama genişletilmeseydi bu değişmez tam da onu delen commit'te sessizce delinirdi. Agent paketi kendi defter sütununu bilerek `state` değil `phase` diye adlandırır. **H3 dördüncü adı ekledi:** kabulden sonra görevi `ready_to_publish`'e taşıyan bir metot tam olarak birinin `proof/` içine yazacağı metottur ve ADR-0009 §8 onu yasaklar; tarama `proof/` içine ekilen böyle bir yazıcıyla sürülmüştür | `test_task_states.py::test_only_the_transition_method_writes_a_task_state`, `::test_the_state_write_scan_would_see_a_second_writer`, `::test_the_state_write_scan_reaches_the_proof_package` | F, H2, H3 |
+| SI-226 | Bir görevin durumunu yazan **tek** kod yolu `TaskService.transition`'dır — ve tarama artık **altı paketi ve on dört gevşek üst-seviye modülün tamamını** kapsar | Taramanın açtığı **her** dosyada `.state`'e atama (düz, annotate, artırmalı ve sabit adlı `setattr`) yalnız `service.py:transition` içinde; sentetik ikinci yazıcı taramada görünür. **Üçüncü ad taşıyıcıdır:** `running`/`paused`'ı üreten kod o ağaçtadır ve tarama genişletilmeseydi bu değişmez tam da onu delen commit'te sessizce delinirdi. Agent paketi kendi defter sütununu bilerek `state` değil `phase` diye adlandırır. **H3 dördüncü adı ekledi:** kabulden sonra görevi `ready_to_publish`'e taşıyan bir metot tam olarak birinin `proof/` içine yazacağı metottur ve ADR-0009 §8 onu yasaklar; tarama `proof/` içine ekilen böyle bir yazıcıyla sürülmüştür. **Kapsam birimi artık yalnız paket değildir:** `station_api` altında doğrudan duran on dört `.py` dosyası da taranır ve **hiçbiri muaf edilemez** — bir modül tek dosyadır, onu muaf etmek yazmanın bütün biçimlerini o dosyaya vermek olurdu; onun yerine `<dosya>:<fonksiyon>` biçiminde **adlandırılmış izin** verilir ve bugün **sıfır** izin vardır, çünkü hiçbir gevşek modül sütunu yazmıyor. `compose` muafiyetinin adlandırdığı tek yazı (`nonce.py:_settle_once`) **sayıyla sabitlenmiştir** | `test_task_states.py::test_only_the_transition_method_writes_a_task_state`, `::test_the_state_write_scan_would_see_a_second_writer`, `::test_the_state_write_scan_reaches_the_proof_package`, `::test_every_loose_module_is_scanned_and_every_scanned_module_exists`, `::test_a_planted_state_writer_is_reported_from_every_scanned_loose_module`, `::test_no_loose_module_writes_a_task_state_at_all`, `::test_the_module_allowance_permits_one_named_writer_and_no_other`, `::test_every_module_state_write_allowance_is_used_and_is_scoped`, `::test_the_compose_exemption_still_describes_exactly_one_write` | F, H2, H3 |
 | SI-227 | Kanıt işaretçisi de **süpürülür ve sınırlanır**; hiçbir şeye inen işaretçi reddedilir | bidi override + NUL + 406 karakter → saklanan değerde yok, uzunluk ≤ 64 ve yanıt modeli aynı değeri taşır; yalnız görünmez karakterden oluşan işaretçi `evidence_field_refused` | `test_task_evidence.py::test_an_evidence_pointer_is_swept_and_bounded_like_every_other_string`, `::test_a_pointer_that_sweeps_down_to_nothing_is_refused` | F |
 | SI-228 | **Boş kontrol kümesi yayıma hazır değildir**; kapı üç yayım alanının *varlığını* ister | `TaskGateStatus(checks=())` → `ready_to_publish=False` ve üç alan da `blocking_fields`'ta; bir alanı düşürülmüş küme de `False` | `test_task_evidence.py::test_an_empty_gate_status_is_not_ready_to_publish`, `::test_a_gate_status_missing_one_field_entirely_still_blocks` | F |
 | SI-229 | `resumed_any` **kurucu argümanı olmayan** bir property'dir ve projeksiyon değeri rapordan okur | `ReconciliationReport(..., resumed_any=True)` → `TypeError`; dataclass alanları arasında yok; `to_reconciliation` `resumed_any=report.resumed_any` yazar | `test_task_evidence.py::test_resumed_any_cannot_be_constructed_as_true`, `::test_the_projection_reads_resumed_any_rather_than_defaulting_it`, `::test_the_scan_resumes_nothing_and_says_so` | F |
@@ -829,6 +829,85 @@ incelemenin bulgularıdır: üçü (`tasks/views.py`'nin türetmesi, `safe_text`
 sırası, `SHARE_TOKEN_TTL_SECONDS`) o inceleme sırasında **sıfır** kırmızı
 veriyordu, ve o üç satır bu tablonun neden mutasyonla yazıldığının kendi
 kanıtıdır: bir guard'ın var olması, onun ölçülmüş olması demek değildir.
+
+### Aynı kusurun **on birinci** örneği: durum yazma kuralı (SI-226)
+
+Onuncu örneği kapatan commit on birincisini düzeltmedi, fakat **adını koydu**:
+*`test_task_states.py`'nin `STATE_WRITER_DIRS`'ü hâlâ paket kapsamlıdır ve on
+birincisi olurdu.* Commit mesajındaki bir cümle muhafız değildir, ve kusur
+burada da iddia edilmedi, **ölçüldü**.
+
+İki ayrı ekim yapıldı, çünkü ikisi farklı şey ölçer:
+
+| Ekim | Eski tarama | Yeni tarama |
+|---|---|---|
+| **Yeni** gevşek modül (`task_shortcut.py`): `row.state = "published"` + `setattr(row, "state", "running")` | **yeşil** (32 test, sıfır kırmızı) | **kırmızı**: `::test_every_loose_module_is_scanned_and_every_scanned_module_exists` ve `::test_only_the_transition_method_writes_a_task_state` |
+| **Var olan, git'te izlenen** gevşek modüle (`single_instance.py`) eklenen `row.state = "review_needed"` | **yeşil** (32 test; **bütün `tests/security` paketi 2250 yeşil**) | **kırmızı**: `::test_only_the_transition_method_writes_a_task_state`, `::test_no_loose_module_writes_a_task_state_at_all` |
+
+İkinci satır belirleyicidir. Onuncu örnekte ekilen dosyalar **izlenmiyordu**,
+bu yüzden `test_tracked_sources.py`'nin iki testi ateşlemişti ve o gerçek bir
+değişiklik hakkında hiçbir şey söylemez. Burada ikinci ekim izlenen bir dosyaya
+**yerinde** yapıldı: `git status` yalnız `M` gösterdi, dosya listeleri
+değişmedi, ve **bütün güvenlik paketi baştan sona yeşil kaldı** — 2250 geçti,
+temiz temel çizgiyle bayt bayt aynı. Kuralın kendisi hakkında sıfır kapsam.
+
+Yeni muhafız da mutasyonla sürüldü, onuncu örnektekiyle aynı biçimde: keşif
+**glob** yerine elle yazılmış dosya adı listesini okuyacak biçimde çevrildi.
+
+| Mutasyon | Ekili modül | Sonuç |
+|---|---|---|
+| `_loose_modules` dizini `glob("*.py")` ile yürüyor (asıl hâli) | `task_shortcut.py`, yerinde | **1 kırmızı** — yürüyüş muhafızı |
+| `_loose_modules` `STATE_WRITER_MODULES` okuyor (mutasyon) | aynı modül, yerinde | **yeşil** (51 test) — muhafız kör |
+
+`STATE_WRITER_DIRS`'ün paket muafiyetleri gibi bir **modül muafiyet tablosu
+yoktur ve olmayacaktır**: bir modül tek dosyadır, onu muaf etmek düz atama,
+annotate, artırmalı ve `setattr` yazımlarının hepsini birden o dosyaya vermek
+olurdu — kapatılan deliğin bir kat aşağıya taşınmış hâli.
+`MODULE_STATE_WRITE_ALLOWANCES` yalnız `<dosya>:<fonksiyon>` verir ve **bugün
+boştur**: on dört gevşek modülün hiçbiri `.state` yazmıyor, yani kural
+genişletilirken **hiçbir izin verilmedi ve hiçbir ürün kodu değişmedi**.
+Boş tablo denetlenmemiş tablo demek olmasın diye mekanizma boş küme üzerinde
+döngülenmez, **sürülür**: atılabilir bir ağaçta bir yazıcıya izin verilir, aynı
+dosyadaki öteki iki yazıcının kırmızı kaldığı ölçülür, ve aynı izin başka bir
+modüle yazıldığında hiçbir şeyi geçirmediği ayrıca ölçülür.
+
+Bir de eskiden hiç denetlenmeyen bir gerekçe sayıyla sabitlendi:
+`PACKAGES_OUTSIDE_THE_STATE_WRITE_SCAN`'in `compose` girdisi paketin dışarıda
+kalmasını **tek bir fonksiyona** dayandırıyor (`nonce.py:_settle_once`, farklı
+tablo, farklı yaşam döngüsü). O pakette ikinci bir `.state` yazısı belirse
+cümle hâlâ paketi tarif ediyormuş gibi okunurdu; artık sayılıyor — bu,
+`test_task_evidence.py`'nin tavanı **tam üç** import'çıya sabitlemesinin aynısı.
+
+### Aynı kusurun **on ikinci** örneği: yasak ifade denetiminin kapsamı (açık)
+
+On birincisi kapatılırken bütün `tests/security` ağacı bu kalıp için tarandı
+(yöntem `PROJECT_STATUS.md`'de) ve bir örnek daha bulundu. Sessizce
+düzeltilmedi ve sessizce geçilmedi: **adı konuldu ve ölçüldü**.
+
+Yasak ifade kuralını (`FORBIDDEN_PHRASES`) uygulayan testler paket paket
+yazılmıştır; kapsam, beş test dosyasına dağılmış elle tutulan **altı paket
+adıdır** — `evidence`, `workscan`, `agent`, `proof`, `routes` (dört
+`*_language.py`) ve `planner` (`test_planner_boundary.py`). Bu altılığın
+tamlığını ağaca karşı denetleyen **hiçbir muhafız yoktur**.
+
+Dosyaların kendisi bunu düzyazıda söylüyor — *"Each scan is scoped to its own
+directory, so a new package's wording is covered by nothing at all until it
+brings its own"* — ki bu onuncu örneğin birebir şeklidir: kusur bir yoruma
+yazılmış, muhafıza değil.
+
+`station_api` altındaki on sekiz paketin **on dördü** kullanıcıya görünen
+Türkçe cümle üretiyor, yalnız altısı kapsanıyor. Kapsanmayanların en
+büyükleri `opencode` (53 cümle), `modules` (43), `compose` (33), `tasks` (26).
+
+| Ekim | Sonuç |
+|---|---|
+| `planner/service.py`'ye iki yasak ifade | **1 kırmızı** (`test_planner_boundary.py::test_no_string_literal_in_the_planner_carries_a_forbidden_phrase`) |
+| `opencode/service.py`'ye **aynı** iki yasak ifade | **2269 geçti, sıfır kırmızı** |
+
+Aynı iki cümle, bir pakette kırmızı, komşusunda görünmez. Kapsamı belirleyen
+kuralın konusu değil, birinin o paket için ayrı bir test dosyası yazmış
+olmasıdır. Genişletmek ayrı bir iştir (ürün metinlerinde gerçek bulgu
+çıkarabilir) ve bu turun kapsamı SI-226'ydı; **açık** olarak kayda geçti.
 
 
 ---
