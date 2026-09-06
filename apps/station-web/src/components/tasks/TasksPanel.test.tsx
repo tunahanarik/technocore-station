@@ -1780,6 +1780,180 @@ describe("Gorevler: the model proposes and cannot approve or start", () => {
     expect(screen.getByTestId("tasks-model-outcome")).toHaveTextContent("oturum bitti");
     expect(screen.queryByTestId("tasks-model-outcome-note")).toBeNull();
   });
+
+  /**
+   * The pill is the sentence, and until now nothing read it.
+   *
+   * A mutation gave `refused` the label of `planned` - "Model bir plan onerdi
+   * ve plan kaydedildi" - and the `ok` tone, so a proposal naming an
+   * unregistered tool rendered as a green tick beside the words for a
+   * recorded plan. **All 434 component tests and the whole browser suite
+   * stayed green.** Every assertion in this file reads either the raw
+   * `Sonuc: <outcome>` word or the backend's `detail`, and a reader who skims
+   * reads neither: they read the pill.
+   *
+   * So the rule is asserted over the pill itself, for every member of the
+   * closed map, and `planned` is checked in the same breath as the six -
+   * a test that only forbade things would pass over a screen that had
+   * stopped rendering the pill at all.
+   */
+  const NOT_A_RECORDED_PLAN = [
+    "finished",
+    "truncated",
+    "inconclusive",
+    "refused",
+    "budget_exhausted",
+    "provider_failed",
+  ] as const;
+
+  /** The pill beside the machine word, and nothing else on the screen. */
+  function outcomePill(outcome: string): HTMLElement {
+    const region = screen.getByTestId("tasks-model-outcome");
+    const machine = within(region).getByText(`Sonuc: ${outcome}`);
+    const pill = machine.parentElement;
+    if (pill === null) throw new Error("the outcome pill is not beside the machine word");
+    return pill;
+  }
+
+  /** Spend one turn whose ending is `outcome`, and hand back its pill. */
+  async function pillFor(outcome: string): Promise<HTMLElement> {
+    modelStub(
+      proposal({
+        outcome,
+        run_id: outcome === "planned" ? MODEL_RUN.id : "",
+        detail: `TEST-ONLY: bu tur '${outcome}' ile bitti.`,
+        runs: outcome === "planned" ? [MODEL_RUN] : [],
+      }),
+    );
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+    await user.click(screen.getByRole("button", { name: /Modelden plan oner/ }));
+    await screen.findByTestId("tasks-model-outcome");
+    return outcomePill(outcome);
+  }
+
+  it("words and tones the one ending that recorded a plan as the recorded plan", async () => {
+    const pill = await pillFor("planned");
+
+    // The positive control. `planned` is the only ending that may say a plan
+    // was recorded, and the map's own wording is what says it.
+    expect(pill).toHaveTextContent("Model bir plan onerdi ve plan kaydedildi");
+    // `pending`, not `ok`: even a recorded plan is a plan waiting for four
+    // approvals, so this pill never carries the success glyph either.
+    expect(pill).toHaveTextContent("durum: bekliyor");
+    expect(pill.textContent ?? "").not.toContain("✓");
+  });
+
+  it.each(NOT_A_RECORDED_PLAN)(
+    "does not let the %s ending wear the recorded plan's words or its tone",
+    async (outcome) => {
+      const pill = await pillFor(outcome);
+
+      // Not the recorded plan's sentence. A refusal that borrowed it is the
+      // mutation this test exists for.
+      expect(pill.textContent ?? "").not.toContain("plan kaydedildi");
+      expect(pill.textContent ?? "").not.toContain("plan onerdi");
+      // And not the success tone, in either of the two ways it shows: the
+      // glyph a sighted reader sees and the state a screen reader hears.
+      expect(pill.textContent ?? "").not.toContain("durum: iyi");
+      expect(pill.textContent ?? "").not.toContain("✓");
+      // Not vacuous: the pill really is on screen and really carries a
+      // sentence of its own.
+      expect((pill.textContent ?? "").length).toBeGreaterThan(
+        `Sonuc: ${outcome}`.length + 8,
+      );
+    },
+  );
+
+  /**
+   * `reasoning_content` is read from the provider's answer and dropped
+   * (ADR-0012 1). Nothing at any layer noticed a screen that rendered it.
+   *
+   * The mutation that found this added one paragraph to the model region
+   * printing the field - and it was invisible, because **no fixture in this
+   * repository puts a reasoning field on the wire at all**. A guarantee about
+   * a field nobody sends cannot be violated by a fixture nobody wrote, so the
+   * canary is the test: three plausible spellings travel in the response, and
+   * none of them may reach the document.
+   */
+  it("renders nothing from a reasoning field the provider sent", async () => {
+    const CANARY = "TEST-ONLY-REASONING-CANARY-NOT-FOR-DISPLAY";
+    modelStub({
+      ...proposal(),
+      // Unknown keys are allowed through validation on purpose, so all three
+      // of these reach the component exactly as a real provider field would.
+      reasoning_content: `${CANARY}-content`,
+      reasoning: `${CANARY}-plain`,
+      thinking: `${CANARY}-thinking`,
+    });
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.click(screen.getByRole("button", { name: /Modelden plan oner/ }));
+    await screen.findByTestId("tasks-model-outcome");
+
+    // The turn really happened and its own fields really rendered, so the
+    // absence below is an absence rather than an empty screen.
+    expect(screen.getByTestId("tasks-model-detail")).toHaveTextContent("Hicbir adim kosulmadi");
+    expect(document.body.textContent ?? "").not.toContain(CANARY);
+    expect(screen.getByTestId("tasks-model-no-reasoning")).toHaveTextContent(
+      "saklanmaz, loglanmaz ve gosterilmez",
+    );
+  });
+
+  /**
+   * An unmeasured contract is not invented, and the wording has to follow the
+   * wire in **both** directions.
+   *
+   * The lane fixture in this file carries `tool_calls_supported: true`, so a
+   * screen that said "olculmustur" unconditionally passed every test here.
+   * That is the unsourced claim ADR-0005 1.2 refuses, said about the one
+   * thing ADR-0012 had to measure before the lane could open.
+   */
+  it("says the tool-call format was measured only when the wire says it was", async () => {
+    const unmeasured = {
+      ...LANE,
+      protocol_context: { ...LANE.protocol_context, tool_calls_supported: false },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : new URL(input as URL).pathname;
+        if (url === "/api/session/bootstrap") {
+          return Promise.resolve(
+            jsonOk({
+              csrf_token: "test-only-value-not-a-real-token",
+              csrf_header: "X-Station-CSRF",
+            }),
+          );
+        }
+        if (url === "/api/tasks/surface") return Promise.resolve(jsonOk(SURFACE));
+        if (url === "/api/tasks") return Promise.resolve(jsonOk(LIST));
+        if (url === `/api/tasks/${TASK.id}/runs`) return Promise.resolve(jsonOk(runsFor([])));
+        if (url === "/api/opencode/status") return Promise.resolve(jsonOk(unmeasured));
+        return Promise.resolve(jsonOk({ detail: "not_found" }, 404));
+      }),
+    );
+
+    await bootstrapSession();
+    const user = userEvent.setup();
+    render(<TasksPanel />);
+    await ready();
+    await openTask(user);
+
+    await user.click(screen.getByRole("button", { name: /Hangi model secili/ }));
+    await screen.findByTestId("tasks-model-selection");
+
+    const line = screen.getByTestId("tasks-model-tool-calls");
+    expect(line).toHaveTextContent("olculmus degildir");
+    expect(line.textContent ?? "").not.toContain("icin olculmustur");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1909,6 +2083,56 @@ describe("Gorevler: the verdict comes from the plan's own conditions", () => {
       acceptance: [{ kind: "artifact_exists", arguments: { name: "rapor.md" } }],
     });
   });
+
+  /**
+   * The verdict a person reads, as opposed to the one a test reads.
+   *
+   * Every assertion above this one reads `tasks-test-result-state`, which is
+   * the **machine** word - `Test sonucu: not_implemented` - and the four
+   * fields region, which is toned from a different map. A mutation relabelled
+   * `not_implemented` as "Gecti: planin yazdigi kabul kosullarinin hepsi su
+   * anda saglaniyor" and toned it `ok`, so a conditionless plan announced a
+   * passed test with a green tick, three words away from the machine value
+   * that still said `not_implemented`. **Nothing at any layer went red.**
+   *
+   * The sentence and the tone are therefore pinned here, for all three
+   * verdicts at once. Pinning all three is what makes it a rule rather than
+   * an anecdote: `passed` has to keep the success tone, so a test that just
+   * banned it everywhere would be wrong rather than strict.
+   */
+  it.each([
+    ["passed", PASSED_RUN, "Gecti", "durum: iyi"],
+    ["failed", FAILED_RUN, "Kaldi", "durum: sorunlu"],
+    ["not_implemented", PLANNED_RUN, "Uygulanmadi", "durum: etkin degil"],
+  ] as const)(
+    "renders the %s verdict as its own sentence and its own tone",
+    async (state, run, opening, tone) => {
+      stub(runsFor([run]));
+      await bootstrapSession();
+      const user = userEvent.setup();
+      render(<TasksPanel />);
+      await ready();
+      await openTask(user);
+
+      const machine = screen.getByTestId("tasks-test-result-state");
+      expect(machine).toHaveTextContent(`Test sonucu: ${state}`);
+
+      // The pill sits beside the machine word in one row; that row is what a
+      // reader actually reads.
+      const row = machine.parentElement;
+      expect(row).not.toBeNull();
+      const read = row?.textContent ?? "";
+      expect(read).toContain(opening);
+      expect(read).toContain(tone);
+
+      // And the two verdicts that are not a pass may not carry the pass's
+      // opening word or its glyph, in either direction.
+      if (state !== "passed") {
+        expect(read).not.toContain("Gecti");
+        expect(read).not.toContain("✓");
+      }
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------

@@ -997,6 +997,53 @@ describe("Work scan: the discovery log", () => {
     expect(refusal).toHaveTextContent("Station denemez");
   });
 
+  /**
+   * "Read back" has to be measured by changing what there is to read.
+   *
+   * The three substrings above are exactly the ones a hardcoded constant
+   * would carry: a mutation replaced `{discovery.write_refusal}` with a
+   * paragraph of literal JSX saying the same thing in slightly different
+   * words, and every layer stayed green. A claim the client wrote itself is
+   * not a claim the client read back, and only a second, different payload
+   * can tell the two apart - a constant can match one sentence, never two.
+   */
+  it.each([
+    "TEST-ONLY-A: Bu gunlugu yalnizca servis yazar; istemcinin denemesi 403 alir.",
+    "TEST-ONLY-B: Gunluge yazma yolu bu pakette hic yoktur ve denenmez.",
+  ])("shows the payload's own write refusal rather than one of its own (%#)", async (sentence) => {
+    stub({ ...WITH_DISCOVERY, discovery: { ...DISCOVERY, write_refusal: sentence } });
+    render(<WorkScanPanel />);
+    await ready();
+
+    expect(screen.getByTestId("workscan-discovery-write-refusal")).toHaveTextContent(sentence);
+  });
+
+  /**
+   * An announced room name is a stranger's writing, and the log has to say so
+   * where it is read.
+   *
+   * `RoomEntry` labels its two caller-written fields and a test asserts that
+   * heading; the discovery log has the same heading over the same class of
+   * value and **nothing asserted it**. A mutation deleted the heading and the
+   * sentence under it - leaving a bare checkbox carrying a name a stranger
+   * chose - and all 434 component tests and the whole browser suite passed.
+   */
+  it("labels an announced room name as something a stranger wrote", async () => {
+    stub(WITH_DISCOVERY);
+    render(<WorkScanPanel />);
+    await ready();
+
+    const log = screen.getByRole("region", { name: "Kesif gunlugu" });
+    const box = within(log).getByRole("checkbox", { name: /signal-lab/ });
+    const entry = box.closest("li");
+    expect(entry, "the selectable line is a list item of its own").not.toBeNull();
+
+    // The label sits in the same entry as the control it qualifies, not in a
+    // caveat further up the page.
+    expect(entry).toHaveTextContent("Duyurulan oda adini bir yabanci yazdi");
+    expect(entry).toHaveTextContent("guvenilir oldugunu soylemez");
+  });
+
   it("shows a ring drop on the log as its own signal, not as staleness", async () => {
     stub({
       ...WITH_DISCOVERY,

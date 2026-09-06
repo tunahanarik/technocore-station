@@ -3301,3 +3301,165 @@ harcamanın *hikâyesi* (ne zaman, hangi turda ne kadar) budanabilir.
 `model_call_ledger` toplamı ve iki zaman damgasını tutar, tur tur dökümü
 tutmaz; böyle bir döküm istenirse ayrı bir turdur. Bugün bir kusur değil,
 **bilinçli bir kapsam sınırıdır** ve kayda geçirilmiştir.
+
+---
+
+## Ekran yalan söylerse fark eden olur mu? (6 Eylül 2026) — SI-346
+
+Bu tur **yeni yetenek eklemedi**. Sorusu şuydu: üç test katmanı da yeşilken,
+yeni yüzeylerin *güvenlikle ilgili* bir özelliği hakkında **yanlış** bir şey
+söylemeye başlaması hâlinde herhangi bir katman bunu görür mü?
+
+### Yöntem
+
+Yeni yüzeylerde (`TasksPanel` model plan yolu, kabul koşulları ve türetilmiş
+test hükmü, `ProofWorkspacePanel` dosya gövdesi teslimi, `WorkScanPanel` oda
+tarayıcısı ve keşif günlüğü, `ErrorRegion` tanı yükü) **26 mutasyon**
+sürüldü. Her mutasyon için: uygula → `npm run build` → **tam** Vitest → ilgili
+Playwright dosyası → `git restore` ile geri al.
+
+Yöntem notu, bir kez yanlış ölçüm pahasına öğrenildi: `test:e2e` **derlenmiş
+`dist`'i** servis eder. Yeniden derlemeden koşulan bir e2e, mutasyonu hiç
+görmez ve "süite kör" diye okunur. Bu turda her mutasyon derlemeden sonra
+koşuldu (`build=0` her satırda kayıtlı).
+
+### Sonuç: 20 yakalandı, **6 hiçbir katmanda görülmedi**
+
+| # | Mutasyon | Vitest | e2e |
+|---|---|---|---|
+| M01 | onaylar olmadan "Onayli plani calistir" etkin | kırmızı | kırmızı |
+| M02 | `model_can_start_a_run` yok sayıldı | kırmızı | kırmızı |
+| **M03** | **`refused` bitişi `planned` etiketi + `ok` tonu aldı** | **yeşil** | **yeşil** |
+| M04 | `ready_to_publish` kullanıcı geçişi olarak eklendi | kırmızı | kırmızı |
+| **M05** | **yanıttaki muhakeme alanı ekrana basıldı** | **yeşil** | **yeşil** |
+| M06 | harcanan tur sayısı `0 / 8` diye sabitlendi | kırmızı | yeşil |
+| M07 | "oturumu unut" sayacı istemcide sıfırladı | kırmızı | yeşil |
+| **M08** | **`not_implemented` hükmü "Gecti" + `ok` tonu aldı** | **yeşil** | **yeşil** |
+| M09 | "yayıma hazır değil" cümlesi koşulsuz olumluya çevrildi | kırmızı | kırmızı |
+| M10 | yayın hazırlığı isteğine `target` alanı eklendi | kırmızı | yeşil |
+| M11 | sağlayıcı cümlesi `dangerouslySetInnerHTML` ile basıldı | kırmızı (kaynak taraması) | yeşil |
+| M12 | kabul koşulu koşulsuz "sağlanıyor" gösterildi | kırmızı | yeşil |
+| M13 | oda başlığı markup olarak basıldı | kırmızı | kırmızı |
+| M14 | alıntı markup olarak basıldı | kırmızı | kırmızı |
+| M15 | okunamayan günlük satırı seçilebilir yapıldı | kırmızı | kırmızı |
+| M16 | yanıtın kümeyi **daraltması** kabul edildi | kırmızı | yeşil |
+| M17 | tarama kapsamına `lobby` eklendi | kırmızı | kırmızı |
+| M18 | on odalık tavan kaldırıldı | kırmızı | yeşil |
+| M19 | gövdesi dışlanmış dosya indirmeye açıldı | kırmızı | yeşil |
+| M20 | dışlama gerekçesi düşürüldü, rozet "pakette" dedi | kırmızı | yeşil |
+| M21 | teslim edilen dosyanın özeti başlıktan değil listeden alındı | kırmızı | yeşil |
+| M22 | tam 64-hex özet DOM'a basıldı | yeşil | **kırmızı** |
+| M23 | tanı yüküne kullanıcı mesajı eklendi | kırmızı | yeşil |
+| **M24** | **araç çağrısı cümlesi koşulsuz "ölçülmüştür" dedi** | **yeşil** | **yeşil** |
+| **M25** | **"duyurulan adı bir yabancı yazdı" başlığı silindi** | **yeşil** | **yeşil** |
+| **M26** | **yazma reddi cümlesi istemciye sabitlendi** | **yeşil** | **yeşil** |
+
+Altı deliğin **altısı da aynı şekle** sahip: iddiayı taşıyan **okunan cümle**
+test edilmiyor, yanındaki **makine değeri** test ediliyordu. `Sonuc: refused`
+yazan span iddia ediliyordu; yanındaki, kullanıcının gerçekten okuduğu rozet
+"Model bir plan onerdi ve plan kaydedildi" diyebiliyordu, üstelik yeşil tikle.
+Aynısı `Test sonucu: not_implemented` ile yanındaki "Gecti" rozeti için de
+geçerliydi.
+
+M05 ayrı bir sebeple görülmedi: **hiçbir fixture** yanıtta bir muhakeme alanı
+göndermiyordu, yani ihlal edilecek bir şey ekranda hiç oluşmuyordu. Kanarya
+artık testin kendisidir.
+
+### Ürün kusuru **bulunmadı**
+
+Altı delik de **test tarafındadır**. Hiçbir ürün davranışı değiştirilmedi ve
+hiçbir ürün cümlesi düzeltilmedi; `apps/station-web/src` altındaki tek
+değişiklik testlerdedir.
+
+### Eklenen testler (hepsi **bileşen** katmanında, 15 test)
+
+Katman seçimi tek kurala dayanıyor: altı iddianın altısı da bir **render**
+kuralıdır — kapalı bir haritadan çıkan etiket ve ton, bir alanın DOM'a ulaşıp
+ulaşmadığı, bir cümlenin yükten mi istemci sabitinden mi geldiği. Hiçbiri
+gerçek tarayıcı, gerçek backend veya gerçek CSP istemez, o yüzden hiçbiri
+e2e'ye kondu — ve hiçbiri **iki** katmana birden kondu.
+
+| Test | Kapattığı |
+|---|---|
+| `TasksPanel.test.tsx::words and tones the one ending that recorded a plan as the recorded plan` | M03 (pozitif kontrol) |
+| `::does not let the %s ending wear the recorded plan's words or its tone` (6 bitiş) | M03 |
+| `::renders the %s verdict as its own sentence and its own tone` (3 hüküm) | M08 |
+| `::renders nothing from a reasoning field the provider sent` | M05 |
+| `::says the tool-call format was measured only when the wire says it was` | M24 |
+| `WorkScanPanel.test.tsx::labels an announced room name as something a stranger wrote` | M25 |
+| `::shows the payload's own write refusal rather than one of its own` (2 yük) | M26 |
+
+Her yeni test **kırmızı görüldü** (mutasyon yeniden uygulanarak) ve mutasyon
+geri alındıktan sonra **yeşil**:
+
+```
+RED-CHECK M03-refusal-as-success                | FAIL "does not let the refused ending wear the recorded plan's words or its tone"
+  AssertionError: expected 'Sonuc: refused✓Model bir plan onerdi …' not to contain 'plan kaydedildi'
+RED-CHECK M05-reasoning-displayed               | FAIL "renders nothing from a reasoning field the provider sent"
+RED-CHECK M08-not-implemented-as-pass           | FAIL "renders the not_implemented verdict as its own sentence and its own tone"
+  AssertionError: expected 'Test sonucu: not_implemented✓Gecti: p…' to contain 'Uygulanmadi'
+RED-CHECK M24-tool-calls-claimed-measured       | FAIL "says the tool-call format was measured only when the wire says it was"
+RED-CHECK M25-discovery-untrusted-heading-...   | FAIL "labels an announced room name as something a stranger wrote"
+RED-CHECK M26-write-refusal-hardcoded           | FAIL (2) "shows the payload's own write refusal rather than one of its own"
+```
+
+### Bilerek eklenmeyenler
+
+- **e2e'ye tek satır eklenmedi.** Suite disiplini (`discipline.ts`,
+  `suite-discipline.spec.ts`) gevşetilmedi: `.only`/`.skip` yok, `retries` 0,
+  tek worker, yalnız Chromium.
+- `tests/security/` altında hiçbir şey silinmedi, atlanmadı veya zayıflatılmadı.
+- `OUTBOUND_CLIENT_MODULES` **beşte** kaldı.
+- Hiçbir test sağlayıcıya veya Technocore'a gerçek istek atmıyor.
+
+### Değişen dosyalar
+
+- `apps/station-web/src/components/tasks/TasksPanel.test.tsx` — beş yeni test
+  bloğu (12 test) ve iki yardımcı (`outcomePill`, `pillFor`).
+- `apps/station-web/src/components/workscan/WorkScanPanel.test.tsx` — iki yeni
+  test bloğu (3 test).
+- `docs/security-invariants.md` — **SI-346** ve mutasyon kaydı.
+- `PROJECT_STATUS.md` — bu bölüm.
+
+### Koşulan kapılar
+
+`AGENTS.md` §4'ün **tamamı**, paketleme yarısı dâhil:
+
+```
+uv run --directory apps/station-api ruff check .
+  -> All checks passed!
+uv run --project apps/station-api ruff check apps/station-api/src packages/technocore-conform/src tests
+  -> All checks passed!
+uv run --project apps/station-api mypy --config-file apps/station-api/pyproject.toml
+  -> Success: no issues found in 144 source files
+uv run --directory apps/station-api pytest ../../tests
+  -> 2661 passed, 2 warnings in 182.92s (0:03:02)
+npm --prefix apps/station-web run lint
+  -> (cikti yok; 0 hata)
+npm --prefix apps/station-web run test
+  -> Test Files 13 passed (13) / Tests 449 passed (449)      [onceki tur: 434]
+npm --prefix apps/station-web run build
+  -> built in 3.70s; index-BvXmzoH8.css 411.61 kB, index-D-ceerYF.js 565.35 kB
+npm --prefix apps/station-web run test:e2e
+  -> 79 passed (53.2s)
+uv run --project apps/station-api python packaging/build_bundle.py
+  -> 26 229 133 bayt,
+     SHA-256 b6549d5ab5310e1548d06728d55c5712695e9053dc92f5775f1ea776175a63c5
+uv run --directory apps/station-api pytest -p no:warnings     ../../tests/security/test_frontend_bundle.py ../../tests/security/test_packaging_boundary.py
+  -> 82 passed in 5.89s
+```
+
+Bir ara ölçüm kayda değer: mutasyon süpürmesi `dist`'i mutasyonlu hâlde
+bıraktığı için ilk `pytest` koşusunda
+`test_the_shipped_spa_is_byte_for_byte_the_audited_dist` **kırmızıydı**
+(`1 failed, 2660 passed`). Temiz kaynaktan yeniden derlenen `dist` ise
+denetlenen paketle **bayt bayt aynı** çıktı ve test yeniden yeşile döndü —
+yani SPA baytları bu turda hiç değişmedi. `build_bundle.py` yine de yeniden
+koşuldu ve iki bayt denetimi ondan **sonra** çalıştırıldı; zip özetinin
+değişmesi PyInstaller arşivinin bayt-yeniden-üretilebilir olmamasındandır,
+SPA'nın değişmesinden değil.
+
+Süpürme sonrası `git status --short` **boştu**; çalışan ağaçtaki tek
+değişiklik yukarıda listelenen dört dosyadır.
+
+Commit, push veya deploy **yapılmadı** (INV-08).
