@@ -126,10 +126,13 @@ SECRET_IMPORTS = (
 #:
 #: ``0009`` until Package H4, which added ``0010``: one additive column,
 #: ``agent_run.acceptance_json``, carrying the plan's machine-checkable
-#: acceptance conditions. Bumping this constant is the point of writing it
-#: out - a migration is a change a reviewer has to see, and a head read off
-#: the script directory would have agreed with whatever the directory said.
-CURRENT_MIGRATION_HEAD = "0010"
+#: acceptance conditions. ``0011`` is ADR-0013's: one additive table,
+#: ``model_call_ledger``, holding the per-task model-turn count that used to
+#: live in process memory and was therefore cleared by the "start over" button
+#: and by a relaunch. Bumping this constant is the point of writing it out - a
+#: migration is a change a reviewer has to see, and a head read off the script
+#: directory would have agreed with whatever the directory said.
+CURRENT_MIGRATION_HEAD = "0011"
 
 
 def _agent_sources(api_source_root: Path) -> list[Path]:
@@ -380,6 +383,45 @@ def test_migration_0009_changed_no_existing_table(engine: Engine) -> None:
         assert table in names, f"{table} was not created"
 
 
+def test_migration_0011_added_one_table_and_touched_nothing_else(
+    engine: Engine,
+) -> None:
+    """ADR-0013's revision is one new table, and it is shaped to be a ceiling.
+
+    ``model_call_ledger`` is where a task's spent model turns live now that
+    they may not live in a session object the "start over" button deletes. The
+    assertions are about the *shape*, because the shape is the argument:
+
+    * ``task_id`` is the primary key, so the ceiling is per task rather than a
+      product-wide meter or a per-session one;
+    * the count is the only non-timestamp column, so there is nothing here to
+      read as a permission, an allowance or a reset;
+    * every table the earlier revisions created is still present with the name
+      it had, which is what "additive" means.
+    """
+    inspector = inspect(engine)
+    names = set(inspector.get_table_names())
+
+    assert "model_call_ledger" in names, "the ledger table was not created"
+    for table in ("agent_run", "agent_run_step", "activity_event", "task_record"):
+        assert table in names, f"{table} disappeared"
+
+    columns = {
+        str(column["name"]): column for column in inspector.get_columns("model_call_ledger")
+    }
+
+    assert set(columns) == {
+        "task_id",
+        "model_calls_used",
+        "first_call_at",
+        "last_call_at",
+    }, sorted(columns)
+    assert columns["task_id"]["primary_key"], columns["task_id"]
+
+    keys = inspector.get_foreign_keys("model_call_ledger")
+    assert [key["referred_table"] for key in keys] == ["task_record"], keys
+
+
 def test_migration_0010_only_added_a_column(engine: Engine) -> None:
     """H4's revision is one column on one table, and it changed nothing else.
 
@@ -429,7 +471,12 @@ def test_the_agent_tables_have_no_secret_shaped_columns(engine: Engine) -> None:
     inspector = inspect(engine)
     offenders: list[str] = []
 
-    for table in ("agent_run", "agent_run_step", "activity_event"):
+    for table in (
+        "agent_run",
+        "agent_run_step",
+        "activity_event",
+        "model_call_ledger",
+    ):
         assert table in inspector.get_table_names(), f"{table} was not migrated"
         for column in inspector.get_columns(table):
             name = str(column["name"]).lower()
@@ -460,7 +507,12 @@ def test_no_agent_table_can_hold_a_model_reasoning_trace(engine: Engine) -> None
     inspector = inspect(engine)
     offenders: list[str] = []
 
-    for table in ("agent_run", "agent_run_step", "activity_event"):
+    for table in (
+        "agent_run",
+        "agent_run_step",
+        "activity_event",
+        "model_call_ledger",
+    ):
         for column in inspector.get_columns(table):
             name = str(column["name"]).lower()
             if any(fragment in name for fragment in forbidden):

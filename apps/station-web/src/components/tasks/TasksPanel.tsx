@@ -2095,11 +2095,20 @@ function ModelPlanRegion({
         </Button>
       </div>
 
+      {/* The last sentence used to be a claim this build did not keep:
+          `forget` dropped the session object the counter lived on, so the
+          ceiling really did reset. ADR-0013 moved the counter to a per-task
+          row; the sentence is now true and says the whole of it, including
+          the relaunch, because "a ceiling a restart clears" and "a ceiling a
+          restart does not clear" are different promises. */}
       <p className="text-xs text-muted" data-testid="tasks-model-turn-rule">
         Bir istek bir tur harcar ve tur istegin icinde biter: zamanlayici, arka
         plan gorevi ve otomatik ikinci tur yoktur. Oturumu unutmak yalnizca
         bellekteki konusmayi duser; kaydedilmis planlar, calisma alani ve
-        kanitlar oldugu gibi kalir ve tavan sifirlanmaz.
+        kanitlar oldugu gibi kalir ve tavan sifirlanmaz. Harcanan tur sayisi
+        goreve yazilir: ne oturumu unutmak ne de uygulamayi yeniden baslatmak
+        onu geri verir. Tavani dolan bir gorevin turu geri gelmez; yeni bir
+        gorev kendi tavaniyla baslar.
       </p>
 
       {proposal === null ? (

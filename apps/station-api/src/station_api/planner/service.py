@@ -8,11 +8,14 @@ carries, and no way for a proposal to skip a step a typed plan has to take.
 
 Four gates, in this order
 --------------------------
-1. **the ceiling.** A session may spend at most
+1. **the ceiling.** A **task** may spend at most
    :attr:`station_api.agent.budget.RunCeiling.max_model_calls` turns, checked
    by the same pure :func:`station_api.agent.budget.check` the runner uses,
    before the request is built. A refusal here costs nothing because nothing
-   was sent.
+   was sent. It says *task* rather than *session* since ADR-0013, and that is
+   the whole of that decision: the count was a field on the session, "start
+   over" drops the session, so the only spend control this product owns was
+   one button press away from being refilled.
 2. **the registry.** Every proposed ``function.name`` is looked up in the
    compile-time tool registry and every argument is bound against that tool's
    declared parameter types. There is no ``path`` and no ``url`` type, so a
@@ -28,16 +31,26 @@ Four gates, in this order
    from here to :meth:`AgentService.start_run`, and a test reads the syntax
    tree to say so.
 
-The session lives in memory and says so
-----------------------------------------
-There is no table. The conversation is rebuilt from the task, the workspace
-and the run rows on each turn, and what cannot be rebuilt - the exact
-assistant turn, so the following ``role: "tool"`` messages can name the call
-ids the provider issued - is held in this process and lost on restart. That is
-the honest shape rather than a limitation worked around: SI-224 says a restart
-resumes nothing, a stored conversation is the thing somebody would resume, and
-ADR-0008 6 says there is nowhere in this application's schema to put model
-output in the first place.
+The conversation lives in memory; the spend does not
+-----------------------------------------------------
+**The conversation.** There is no table for it. It is rebuilt from the task,
+the workspace and the run rows on each turn, and what cannot be rebuilt - the
+exact assistant turn, so the following ``role: "tool"`` messages can name the
+call ids the provider issued - is held in this process and lost on restart.
+That is the honest shape rather than a limitation worked around: SI-224 says a
+restart resumes nothing, a stored conversation is the thing somebody would
+resume, and ADR-0008 6 says there is nowhere in this application's schema to
+put model output in the first place.
+
+**The spend.** One table, and it holds one integer per task:
+``model_call_ledger``, behind
+:class:`station_api.agent.model_calls.ModelCallCounter`. This paragraph used
+to say "there is no table" full stop, and the count was inside the object
+above - so it went with the conversation, on a ``forget`` and on a relaunch.
+The two facts had different lifetimes all along and only one home, and a
+count that a button clears is not a ceiling (ADR-0013). Nothing about a
+model's *output* is stored by this: the row is a task id, a number and two
+timestamps.
 """
 
 from __future__ import annotations
@@ -279,6 +292,10 @@ class SessionState:
     run is still waiting for a person. The messages themselves are not here
     and are not anywhere a surface can reach - there is no route that returns
     them and no column that holds them.
+
+    The first two survive this process and the last two do not, which is not
+    an inconsistency but the point: a spend is a fact about the task and a
+    conversation is a fact about this run of the application (ADR-0013).
     """
 
     model_calls_used: int
@@ -296,10 +313,18 @@ class SessionState:
 
 @dataclass(slots=True)
 class _Session:
-    """One task's planning conversation. Process memory, never a row."""
+    """One task's planning conversation. Process memory, never a row.
+
+    It used to carry ``model_calls`` as well, and that was the defect
+    ADR-0013 removes. The conversation is the thing a restart is *meant* to
+    lose (SI-224) and the thing ``forget`` exists to drop; the count is
+    neither, and the two shared a home only by accident. The count lives in
+    :class:`~station_api.agent.model_calls.ModelCallCounter` now, which is a
+    row, so dropping this object costs a person their context and nothing
+    else.
+    """
 
     messages: list[Message] = field(default_factory=list)
-    model_calls: int = 0
     #: The calls the last assistant turn proposed, in the order the plan's
     #: steps were recorded, so a tool result can name the right call id.
     pending_calls: tuple[ProposedCall, ...] = ()
@@ -320,7 +345,13 @@ def _clean(text: str, limit: int) -> str:
 
 
 class ModelPlannerService:
-    """Owns the planning sessions. One instance per process, no table."""
+    """Owns the planning conversations. One instance per process.
+
+    The conversations are this object's; the **count** is not. It is read from
+    and written to :attr:`AgentService.model_calls`, which is a row, so a
+    second instance of this class over the same database - which is what a
+    relaunch is - sees the same spend rather than a clean slate (ADR-0013).
+    """
 
     def __init__(
         self,
@@ -362,24 +393,37 @@ class ModelPlannerService:
         that may never have had one. Reusing the view would have forced an
         ``outcome`` on a session with no outcome, and the honest value for
         that field would have had to be invented.
+
+        The two halves come from two different places on purpose. What was
+        **spent** is read from the ledger, so it is the same number whether or
+        not this process happens to be holding a conversation for the task;
+        what the conversation is *doing* - stopped, or holding a run whose
+        results are still to be fed back - is read from the session, and a
+        task with no session in this process has neither.
         """
         session = self._sessions.get(task_id)
-        if session is None:
-            return SessionState(
-                model_calls_used=0,
-                max_model_calls=budget.CEILING.max_model_calls,
-                finished=False,
-                pending_run_id="",
-            )
         return SessionState(
-            model_calls_used=session.model_calls,
+            model_calls_used=self._agent.model_calls.used(task_id),
             max_model_calls=budget.CEILING.max_model_calls,
-            finished=session.finished,
-            pending_run_id=session.pending_run_id,
+            finished=session.finished if session is not None else False,
+            pending_run_id=session.pending_run_id if session is not None else "",
         )
 
     def forget(self, task_id: str) -> None:
-        """Drop a task's session. A person starting over is not a resume."""
+        """Drop a task's conversation. A person starting over is not a resume.
+
+        It drops the **conversation** and that is now all it drops. It used to
+        drop the model-call count with it, because the count was a field on
+        the object being popped - so "start over" handed back a fresh ceiling,
+        as many times as somebody pressed the button, against a metered
+        endpoint. ADR-0013 moved the count to a row; this method never touches
+        it, and there is no method here that does.
+
+        What a person gets back is what the button always claimed: a turn that
+        begins from the task, the workspace and the recorded runs as they
+        stand, with no memory of what was said. What they do not get back is
+        spend.
+        """
         self._sessions.pop(task_id, None)
 
     # --- one turn ----------------------------------------------------------
@@ -401,7 +445,11 @@ class ModelPlannerService:
                 # This lane makes no tool call and takes no wall-clock budget
                 # of its own; the run it produces is bounded separately.
                 tool_calls=0,
-                model_calls=session.model_calls,
+                # The ledger, not the session: what a task has spent is a fact
+                # about the task, and reading it from an object ``forget``
+                # deletes is what made "start over" a second ceiling
+                # (ADR-0013).
+                model_calls=self._agent.model_calls.used(task_id),
                 elapsed_seconds=0.0,
             )
         )
@@ -413,7 +461,7 @@ class ModelPlannerService:
                 verdict.detail,
             )
             return self._view(
-                task_id, session, ProposalOutcome.BUDGET_EXHAUSTED, verdict.detail
+                task_id, ProposalOutcome.BUDGET_EXHAUSTED, verdict.detail
             )
 
         if not session.messages:
@@ -438,11 +486,12 @@ class ModelPlannerService:
             self._record(
                 task_id, ActivityAction.MODEL_CALLED, ActivityOutcome.REFUSED, detail
             )
-            return self._view(
-                task_id, session, ProposalOutcome.PROVIDER_FAILED, detail
-            )
+            return self._view(task_id, ProposalOutcome.PROVIDER_FAILED, detail)
 
-        session.model_calls += 1
+        # The one place a turn is counted, unchanged in *when* it happens: an
+        # answer came back and was parsed. What changed is where the number
+        # goes - a row rather than the session object ``forget`` deletes.
+        self._agent.model_calls.record_call(task_id)
         usage = _usage_detail(proposal)
         self._record(
             task_id,
@@ -457,7 +506,7 @@ class ModelPlannerService:
         if proposal.failure is not None:
             detail = _clean(proposal.failure.detail, MAX_DETAIL_CHARS)
             return self._view(
-                task_id, session, ProposalOutcome.PROVIDER_FAILED, detail, usage=usage
+                task_id, ProposalOutcome.PROVIDER_FAILED, detail, usage=usage
             )
 
         if not proposal.wants_tools:
@@ -513,7 +562,6 @@ class ModelPlannerService:
             )
             return self._view(
                 task_id,
-                session,
                 ProposalOutcome.FINISHED,
                 detail,
                 usage=usage,
@@ -527,12 +575,11 @@ class ModelPlannerService:
             # finished. Showing a fragment there would relabel a cut as a
             # conclusion, which is the same over-claim in a smaller place.
             return self._view(
-                task_id, session, ProposalOutcome.TRUNCATED, TRUNCATED_DETAIL, usage=usage
+                task_id, ProposalOutcome.TRUNCATED, TRUNCATED_DETAIL, usage=usage
             )
 
         return self._view(
             task_id,
-            session,
             ProposalOutcome.INCONCLUSIVE,
             _inconclusive_detail(reason),
             usage=usage,
@@ -556,7 +603,7 @@ class ModelPlannerService:
                 "durumuna alin."
             )
             return self._view(
-                task.id, session, ProposalOutcome.REFUSED, detail, usage=usage
+                task.id, ProposalOutcome.REFUSED, detail, usage=usage
             )
 
         steps: list[tuple[str, dict[str, str]]] = []
@@ -566,7 +613,6 @@ class ModelPlannerService:
             except OpenCodeError as exc:
                 return self._refuse_proposal(
                     task.id,
-                    session,
                     f"Model '{call.name}' icin okunamayan argumanlar gonderdi: "
                     f"{exc}",
                     usage,
@@ -587,14 +633,13 @@ class ModelPlannerService:
             # approving something nobody wrote.
             return self._refuse_proposal(
                 task.id,
-                session,
                 f"Model kayitli olmayan bir arac veya gecersiz bir arguman "
                 f"onerdi; oneri butunuyle reddedildi: {exc}",
                 usage,
             )
         except (RunError, AgentError) as exc:
             return self._refuse_proposal(
-                task.id, session, f"Plan kaydedilemedi: {exc}", usage
+                task.id, f"Plan kaydedilemedi: {exc}", usage
             )
 
         session.messages.append(
@@ -611,7 +656,6 @@ class ModelPlannerService:
         )
         return self._view(
             task.id,
-            session,
             ProposalOutcome.PLANNED,
             detail,
             run_id=view.id,
@@ -619,7 +663,7 @@ class ModelPlannerService:
         )
 
     def _refuse_proposal(
-        self, task_id: str, session: _Session, detail: str, usage: str
+        self, task_id: str, detail: str, usage: str
     ) -> ProposalView:
         """Record the refusal as a decision point and end the turn.
 
@@ -633,9 +677,7 @@ class ModelPlannerService:
         self._record(
             task_id, ActivityAction.PERMISSION_DENIED, ActivityOutcome.REFUSED, safe
         )
-        return self._view(
-            task_id, session, ProposalOutcome.REFUSED, safe, usage=usage
-        )
+        return self._view(task_id, ProposalOutcome.REFUSED, safe, usage=usage)
 
     # --- feeding the results back -------------------------------------------
 
@@ -755,7 +797,6 @@ class ModelPlannerService:
     def _view(
         self,
         task_id: str,
-        session: _Session,
         outcome: ProposalOutcome,
         detail: str,
         *,
@@ -763,12 +804,21 @@ class ModelPlannerService:
         usage: str = "",
         closing: str = "",
     ) -> ProposalView:
+        """One turn's answer, with the count read from the ledger.
+
+        It used to take the session and read ``session.model_calls`` off it,
+        which meant the number a person saw came from an object the "start
+        over" button deletes. It is read here instead - one small query, at
+        the point the answer is built - so every outcome reports the same
+        durable figure and there is no second place a count could drift into
+        (ADR-0013).
+        """
         return ProposalView(
             task_id=task_id,
             outcome=outcome,
             run_id=run_id,
             detail=detail[:MAX_DETAIL_CHARS],
-            model_calls_used=session.model_calls,
+            model_calls_used=self._agent.model_calls.used(task_id),
             max_model_calls=budget.CEILING.max_model_calls,
             usage_detail=usage,
             closing_text=closing,

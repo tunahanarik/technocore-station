@@ -38,7 +38,9 @@ What this file holds
 
 from __future__ import annotations
 
+import ast
 import json
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -46,6 +48,7 @@ import pytest
 from station_api.agent.budget import CEILING
 from station_api.agent.service import AgentService, RunPhase
 from station_api.agent.workspace import ensure_workspace, write_text
+from station_api.modules.registry import ModuleId
 from station_api.opencode.adapters import MAX_REQUEST_BYTES
 from station_api.opencode.client import OpenCodeClient
 from station_api.opencode.planner import (
@@ -70,6 +73,7 @@ from station_api.planner.service import (
     ProposalOutcome,
 )
 from station_api.tasks.service import TaskService, TaskView
+from station_api.tasks.sources import TaskSourceId
 from station_api.tasks.states import TaskState
 from station_api.workscan.request_file import REQUEST_FILE_NAME
 
@@ -1053,23 +1057,368 @@ def test_a_session_stops_at_the_model_call_ceiling(
 
 
 def test_forgetting_a_session_does_not_forget_the_spend(
-    planner, task: TaskView  # type: ignore[no-untyped-def]
+    planner, agent: AgentService, task: TaskView  # type: ignore[no-untyped-def]
 ) -> None:
-    """Starting over discards the conversation, not the recorded work.
+    """Starting over discards the conversation, not the spend and not the work.
 
     ``forget`` exists so a person can begin again from the task as it stands.
     It is deliberately *not* a reset of anything durable: the runs, the
-    workspace and the evidence are untouched, and the next turn re-reads them.
+    workspace, the evidence **and the turns already spent** are untouched, and
+    the next turn re-reads them.
+
+    This test's name always said that. Its body used to assert
+    ``model_calls_used == 0`` - the opposite - so it read as coverage to
+    anybody who grepped for it while holding the defect in place. The
+    assertion is what changed; the name was right all along.
+
+    Both halves are asserted, because ``forget`` has to keep doing its job
+    while it stops being a way around the ceiling: the spend survives **and**
+    the conversation really is dropped, which is observable as the pending run
+    the session was holding on to.
     """
     service, _ = planner([_tool_call_body([_write_call()]), _closing_body()])
     first = service.propose(task.id)
     assert first.outcome is ProposalOutcome.PLANNED
+    assert service.session_state(task.id).pending_run_id == first.run_id
 
     service.forget(task.id)
     state = service.session_state(task.id)
 
-    assert state.model_calls_used == 0
+    assert state.model_calls_used == 1
     assert state.max_model_calls == CEILING.max_model_calls
+    # The conversation is gone: nothing is held waiting to be fed back.
+    assert state.pending_run_id == ""
+    assert state.finished is False
+    # And the recorded work is exactly where it was.
+    assert [run.id for run in agent.list_runs(task.id)] == [first.run_id]
+
+
+def test_forget_cannot_be_clicked_for_a_second_ceiling(
+    planner, task: TaskView  # type: ignore[no-untyped-def]
+) -> None:
+    """The abuse, driven: spend the ceiling, press "start over", ask again.
+
+    ``max_model_calls`` is the only spend control this product owns
+    (ADR-0012 3): tokens and cost are recorded exactly as the provider states
+    them and neither is ever read as a limit, so the call count is the whole
+    budget. A ``forget`` that handed back a fresh count would hand back the
+    whole budget, as many times as somebody pressed the button, against a
+    metered endpoint.
+
+    The transport is scripted with far more answers than the ceiling allows,
+    so nothing here stops at the end of a list: what stops it has to be the
+    ceiling. And the count that decides is the **recorder's** - a refusal that
+    still sent the request is not a refusal.
+    """
+    turns = CEILING.max_model_calls
+    service, recorder = planner([_closing_body() for _ in range(turns * 4)])
+
+    for _ in range(turns):
+        service.propose(task.id)
+    spent = recorder.count
+
+    assert spent == turns, "the scripted turns did not all reach the transport"
+    assert service.propose(task.id).outcome is ProposalOutcome.BUDGET_EXHAUSTED
+    assert recorder.count == spent
+
+    # Press "start over" three times, and ask for a turn after each.
+    for attempt in range(3):
+        service.forget(task.id)
+        view = service.propose(task.id)
+
+        assert view.outcome is ProposalOutcome.BUDGET_EXHAUSTED, (
+            f"forget #{attempt + 1} handed back a fresh ceiling: {view.outcome}"
+        )
+        assert view.model_calls_used == turns, view.model_calls_used
+        assert recorder.count == spent, (
+            f"forget #{attempt + 1} bought {recorder.count - spent} metered "
+            "request(s) past the ceiling"
+        )
+
+    assert service.session_state(task.id).model_calls_used == turns
+
+
+def test_the_ceiling_survives_a_restart_of_the_process(
+    planner, task: TaskView  # type: ignore[no-untyped-def]
+) -> None:
+    """The same question asked of a relaunch rather than of a button.
+
+    A ceiling kept only in process memory is one an application restart
+    clears, and a restart is a door the user already has. The conversation is
+    a different matter and is *meant* to die with the process (SI-224): what
+    has to survive is the count.
+
+    A second ``ModelPlannerService`` over the same engine is what a relaunch
+    produces - a service with no sessions at all - so this drives the fresh
+    instance rather than reaching into the first one's state.
+    """
+    turns = CEILING.max_model_calls
+    service, recorder = planner([_closing_body() for _ in range(turns * 2)])
+    for _ in range(turns):
+        service.propose(task.id)
+    spent = recorder.count
+    assert spent == turns
+
+    relaunched, second_recorder = planner([_closing_body() for _ in range(turns * 2)])
+    view = relaunched.propose(task.id)
+
+    assert view.outcome is ProposalOutcome.BUDGET_EXHAUSTED, view.outcome
+    assert view.model_calls_used == turns
+    assert second_recorder.count == 0, "the relaunched process sent a request"
+    assert relaunched.session_state(task.id).model_calls_used == turns
+
+
+def test_the_ceiling_is_counted_per_task_and_not_across_them(
+    planner, tasks: TaskService, task: TaskView  # type: ignore[no-untyped-def]
+) -> None:
+    """A durable counter must not become a product-wide one.
+
+    The ceiling is a property of one task's planning session, and making it
+    survive ``forget`` must not quietly turn it into a limit on the product:
+    a second task starts at zero, and spending the first task's ceiling does
+    not spend the second's.
+    """
+    other = tasks.open_task(
+        module_id=ModuleId.AGENT_WORKSPACE,
+        source=TaskSourceId.OPERATOR_REQUEST,
+        content=b"TEST-ONLY ikinci gorev icerigi",
+        title="TEST-ONLY ikinci gorev",
+    )
+    turns = CEILING.max_model_calls
+    service, _ = planner([_closing_body() for _ in range(turns * 3)])
+
+    for _ in range(turns):
+        service.propose(task.id)
+
+    assert service.propose(task.id).outcome is ProposalOutcome.BUDGET_EXHAUSTED
+    assert service.session_state(other.id).model_calls_used == 0
+
+    view = service.propose(other.id)
+
+    assert view.outcome is not ProposalOutcome.BUDGET_EXHAUSTED
+    assert view.model_calls_used == 1
+
+
+# ---------------------------------------------------------------------------
+# The counter only goes up
+# ---------------------------------------------------------------------------
+#
+# The behavioural tests above say the ceiling survives a button and a
+# relaunch. They say it about today's code, which is exactly what the previous
+# arrangement could also have claimed on the day it was written: the count was
+# a field on an object, and the object acquired a way to be deleted. So the
+# rule is also read off the syntax tree - there is **one** writer of
+# ``model_calls_used`` in the whole product and it adds one.
+
+
+#: The one write, as ``<file>:<function>``.
+THE_ONLY_COUNTER_WRITE = "model_calls.py:record_call"
+
+
+class _CounterWriteFinder(ast.NodeVisitor):
+    """Every write to ``model_calls_used``, with the function it is in.
+
+    Four spellings, for ``_StateWriteFinder``'s reason: plain assignment,
+    annotated assignment, augmented assignment and ``setattr`` with a literal
+    name. A scan that knew only the first would walk past
+    ``row.model_calls_used = 0`` written as ``setattr(row, "model_calls_used",
+    0)``, which is the spelling somebody reaches for when the direct one is
+    being watched.
+    """
+
+    ATTRIBUTE = "model_calls_used"
+
+    def __init__(self, filename: str) -> None:
+        self.filename = filename
+        self._stack: list[str] = []
+        self.offenders: list[str] = []
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._stack.append(node.name)
+        self.generic_visit(node)
+        self._stack.pop()
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._stack.append(node.name)
+        self.generic_visit(node)
+        self._stack.pop()
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        for target in node.targets:
+            self._check(target)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self._check(node.target)
+        self.generic_visit(node)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        self._check(node.target)
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if isinstance(node.func, ast.Name) and node.func.id == "setattr":
+            named = node.args[1] if len(node.args) > 1 else None
+            if isinstance(named, ast.Constant) and named.value == self.ATTRIBUTE:
+                self._record()
+        self.generic_visit(node)
+
+    def _check(self, target: ast.expr) -> None:
+        if isinstance(target, ast.Attribute) and target.attr == self.ATTRIBUTE:
+            self._record()
+
+    def _record(self) -> None:
+        where = self._stack[-1] if self._stack else "<module>"
+        self.offenders.append(f"{self.filename}:{where}")
+
+
+def _counter_writes(root: Path) -> list[str]:
+    """Every write to the counter anywhere under ``station_api``.
+
+    The whole tree, not the two packages somebody thought of. This repository
+    has now found the "a rule scoped to a directory stops covering the code it
+    was written for" shape eleven times over, and the ledger is a fresh place
+    for the twelfth.
+
+    The ORM class declaration in ``db/models.py`` is a ``mapped_column``
+    binding rather than an assignment to an attribute, so it is not a write and
+    does not need an exemption - which is the point of scanning for
+    ``.model_calls_used`` as an *attribute target* rather than for the name.
+    """
+    writes: list[str] = []
+    for path in sorted((root / "station_api").rglob("*.py")):
+        finder = _CounterWriteFinder(path.name)
+        finder.visit(ast.parse(path.read_text(encoding="utf-8")))
+        writes.extend(finder.offenders)
+    return sorted(writes)
+
+
+def test_nothing_lowers_the_model_call_counter(api_source_root: Path) -> None:
+    """One writer, and it adds. There is no reset in this product.
+
+    ADR-0013's decision has a cost and this is where the cost is pinned: an
+    exhausted per-task ceiling stays exhausted. There is deliberately no route,
+    no method and no tool that lowers the count, because a reset is ``forget``
+    again wearing a different name - and the recourse ADR-0013 chose instead is
+    a new task, which starts at zero because the ledger is keyed by task.
+
+    A behavioural test cannot say this. It can only say the paths that exist
+    today do not lower it; this says none exists.
+    """
+    writes = _counter_writes(api_source_root)
+
+    assert writes == [THE_ONLY_COUNTER_WRITE], (
+        "the model-call counter grew a second writer. It is the only spend "
+        f"control this product owns (ADR-0012 3): {writes}"
+    )
+
+
+def test_the_counter_write_scan_would_see_a_planted_reset(tmp_path: Path) -> None:
+    """Guards the guard, on a throwaway tree, in the four spellings.
+
+    Written because the assertion above is a comparison against a
+    one-element list, and a scan that found nothing at all would satisfy it
+    the moment somebody renamed the real method.
+    """
+    planted = tmp_path / "station_api" / "planted"
+    planted.mkdir(parents=True)
+    (planted / "reset.py").write_text(
+        "\n".join(
+            (
+                "def clear(row):",
+                "    row.model_calls_used = 0",
+                "def discount(row):",
+                "    row.model_calls_used -= 1",
+                "def sneak(row):",
+                '    setattr(row, "model_calls_used", 0)',
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    writes = _counter_writes(tmp_path)
+
+    assert writes == [
+        "reset.py:clear",
+        "reset.py:discount",
+        "reset.py:sneak",
+    ], writes
+
+
+def test_the_ledger_row_is_never_deleted_and_reaches_only_two_modules(
+    api_source_root: Path,
+) -> None:
+    """The other way to lower a count: remove the row that holds it.
+
+    Found by **mutation**. The scan above was driven by reverting the fix, and
+    the revert it was written for - ``forget`` clearing the count - passed the
+    scan when it was spelled ``session.delete(row)``: deleting the ledger row
+    lowers ``model_calls_used`` to zero without ever assigning to it. A guard
+    that only watches the attribute is a guard somebody walks around by
+    deleting the record.
+
+    So two things are asserted, and each closes one half of the door:
+
+    * nothing in ``model_calls.py`` deletes anything - no ``delete`` name, no
+      ``.delete`` attribute, no SQLAlchemy ``Delete``;
+    * ``ModelCallLedger`` is named in exactly two modules in the whole product,
+      the one that declares it and the one that counts with it. This is the
+      ``TaskRecord``-in-exactly-two-modules pin from ``test_task_states.py``,
+      applied to the ledger: a third module reaching the table is a third
+      module able to write it, whatever it happens to do today.
+
+    The row does still go when its task does, through
+    ``ON DELETE CASCADE`` - which is the database saying a ceiling belongs to
+    a task, not a way for a task that still exists to lose its count.
+    """
+    counter = api_source_root / "station_api" / "agent" / "model_calls.py"
+    tree = ast.parse(counter.read_text(encoding="utf-8"))
+    deleters = [
+        f"{counter.name}:{node.lineno}"
+        for node in ast.walk(tree)
+        if (isinstance(node, ast.Name) and node.id in ("delete", "Delete"))
+        or (isinstance(node, ast.Attribute) and node.attr == "delete")
+        or isinstance(node, ast.Delete)
+    ]
+
+    assert deleters == [], f"the counter grew a way to remove its own row: {deleters}"
+
+    naming: list[str] = []
+    for path in sorted((api_source_root / "station_api").rglob("*.py")):
+        module = ast.parse(path.read_text(encoding="utf-8"))
+        if any(
+            (isinstance(node, ast.Name) and node.id == "ModelCallLedger")
+            or (isinstance(node, ast.Attribute) and node.attr == "ModelCallLedger")
+            or (isinstance(node, ast.alias) and node.name == "ModelCallLedger")
+            or (isinstance(node, ast.ClassDef) and node.name == "ModelCallLedger")
+            for node in ast.walk(module)
+        ):
+            relative = path.relative_to(api_source_root / "station_api")
+            naming.append(str(relative).replace("\\", "/"))
+
+    assert naming == ["agent/model_calls.py", "db/models.py"], naming
+
+
+def test_the_only_counter_write_is_an_increment(api_source_root: Path) -> None:
+    """The named write is an addition, read off the tree rather than trusted.
+
+    ``THE_ONLY_COUNTER_WRITE`` pins *where* the single write is. It says
+    nothing about what the write does, and "one writer" is worth nothing if
+    that writer assigns zero. So the statement itself is read: an ``Add``
+    augmented assignment, and nothing else.
+    """
+    path = api_source_root / "station_api" / "agent" / "model_calls.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+
+    operators = [
+        type(node.op).__name__
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AugAssign)
+        and isinstance(node.target, ast.Attribute)
+        and node.target.attr == "model_calls_used"
+    ]
+
+    assert operators == ["Add"], operators
 
 
 # ---------------------------------------------------------------------------

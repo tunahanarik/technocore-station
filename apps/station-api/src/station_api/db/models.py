@@ -928,3 +928,61 @@ class ActivityEvent(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"ActivityEvent(id={self.id!r}, action={self.action!r})"
+
+
+class ModelCallLedger(Base):
+    """How many model turns one task has spent. One row per task, monotonic.
+
+    ADR-0013. ``max_model_calls`` is the only spend control this product owns:
+    ADR-0012 3 decided that deliberately, because ``usage`` and ``cost`` are
+    the provider's declaration rather than our measurement, so the call count
+    is the whole budget. A budget kept in process memory is a budget cleared
+    by a button and by a relaunch, which is what this table exists to stop.
+
+    Deliberately **not** a column on ``task_record``: SI-225 says the task
+    layer opens no budget field, and ``test_the_task_layer_opens_no_budget_field``
+    keeps that literally true rather than turning it into a sentence about
+    where the field moved. It is deliberately not derived from
+    ``activity_event`` either - that table has a retention policy and a
+    user-invoked delete, so a ceiling read from it would be a ceiling cleared
+    by tidying the timeline.
+
+    Two properties are the whole point of the shape:
+
+    * ``task_id`` is the primary key, so the ceiling is **per task**. A second
+      task starts at zero and one task's spend is never another's.
+    * ``model_calls_used`` only ever goes **up**. There is no code path that
+      lowers it, no route that resets it and no tool in the registry that
+      names it; the only writer is
+      :meth:`station_api.agent.model_calls.ModelCallCounter.record_call`, and
+      a test reads the syntax tree to say so.
+
+    No column here holds a seed, a key, a credential, a prompt, a completion,
+    a provider payload or a model reasoning trace. It holds a task id, an
+    integer and two timestamps.
+    """
+
+    __tablename__ = "model_call_ledger"
+
+    task_id: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("task_record.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    #: Turns this task's planning lane has spent. Never decremented.
+    model_calls_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: When the first turn was counted, and the most recent one. Recorded so a
+    #: person looking at an exhausted ceiling can see *when* it was spent
+    #: rather than only that it is gone.
+    first_call_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    last_call_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return (
+            f"ModelCallLedger(task_id={self.task_id!r}, "
+            f"model_calls_used={self.model_calls_used!r})"
+        )

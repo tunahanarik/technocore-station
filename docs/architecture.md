@@ -247,16 +247,23 @@ sertleştirme başlıklarını taşır.
   `audit_chain_metadata`, `task_record`, `task_evidence_outcome`,
   `task_state_transition`, `opencode_catalog_check`,
   `opencode_credential_metadata`, `opencode_model_snapshot`, `agent_run`,
-  `agent_run_step`, `activity_event`.
+  `agent_run_step`, `activity_event`, `model_call_ledger`.
   Bu liste Paket J'de **sayılarak** düzeltildi: `0001`…`0007` başlığı ile on
   dört ad taşıyordu, `0008` ve `0009`'un altı tablosu hiç eklenmemişti.
 - **Hiçbir tabloda seed veya secret alanı yoktur.** Görev tablolarında bu
   denetim `key` parçasını da kapsar.
-- `0007`, `0008` ve `0009` yalnız ekleme yapar: hiçbir mevcut tablo adı,
-  sütun veya kayıt kimliği değişmedi
+- `0007`, `0008`, `0009`, `0010` ve `0011` yalnız ekleme yapar: hiçbir mevcut
+  tablo adı, sütun veya kayıt kimliği değişmedi
   (`test_module_registry.py::test_migration_0007_changed_no_existing_table`,
   `::test_migration_0008_changed_no_existing_table`,
-  `test_agent_boundary.py::test_migration_0009_changed_no_existing_table`).
+  `test_agent_boundary.py::test_migration_0009_changed_no_existing_table`,
+  `::test_migration_0010_only_added_a_column`,
+  `::test_migration_0011_added_one_table_and_touched_nothing_else`).
+- `model_call_ledger` görev başına harcanan model turu sayısını tutar
+  (ADR-0013). `task_record`'da **değildir** — SI-225 görev katmanının bütçe
+  alanı açmadığını söyler — ve `activity_event`'ten **türetilmez**: o tablonun
+  saklama politikası ve kullanıcının çağırdığı bir silmesi var, yani ondan
+  okunan bir tavan günlüğü temizlemekle temizlenirdi.
 
 ### Başlangıçta ne olur, ne olmaz
 

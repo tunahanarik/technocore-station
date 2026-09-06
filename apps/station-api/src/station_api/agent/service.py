@@ -86,6 +86,7 @@ from station_api.agent.language import (
     assert_no_forbidden_claim,
     neutralise,
 )
+from station_api.agent.model_calls import ModelCallCounter
 from station_api.agent.tools import (
     ToolArgument,
     ToolId,
@@ -328,6 +329,7 @@ class AgentService:
         self._data_dir = data_dir
         self._tasks = tasks
         self._activity = activity
+        self._model_calls = ModelCallCounter(engine=engine)
         tasks.bind_output_reader(self.output_revision)
         with Session(engine) as session:
             self._interrupted_ids = set(
@@ -339,6 +341,16 @@ class AgentService:
     @property
     def activity(self) -> ActivityLog:
         return self._activity
+
+    @property
+    def model_calls(self) -> ModelCallCounter:
+        """The durable, per-task count of model turns spent (ADR-0013).
+
+        Exposed the way :attr:`activity` is, and for the same reason: the
+        planning lane needs it and has no engine of its own. Reading it here
+        keeps the one place that owns the database owning it.
+        """
+        return self._model_calls
 
     def output_revision(self, task_id: str) -> str:
         """Stable review anchor: plan/run and actual bytes, excluding acceptance."""

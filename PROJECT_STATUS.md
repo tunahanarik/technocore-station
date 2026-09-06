@@ -3163,3 +3163,141 @@ iki dosyanın doğruluğunu bugün **yalnız insan incelemesi** tutuyor.
   tartışmasız olanı — kayıtlı planların, çalışma alanının ve kanıtların
   yerinde kaldığını — soruyor; kılavuz da tavan hakkında bir şey söylemiyor.
   Ayrı bir tur konusudur ve **kod değişikliği ister**.
+  → **KAPANDI** (6 Eylül 2026, ADR-0013): sayaç `model_call_ledger`
+  tablosuna taşındı, `forget` ona dokunmuyor, dört cümlenin dördü de düzeltildi.
+  Ayrıntı aşağıdaki bölümdedir.
+
+---
+
+## Tavan bir düğmeyle sıfırlanıyordu (6 Eylül 2026) — ADR-0013
+
+`ed39521`'in **açık riski kapandı**. Bir önceki tur belge turuydu ve
+kapatamadığı şeyi adıyla kaydetmişti: `ModelPlannerService.forget` model turu
+sayacını sıfırlıyordu. Bu tur onu kapattı ve **kod değiştirdi**.
+
+### Kusur, ölçülerek (önce kırmızı istenen regresyon)
+
+`max_model_calls` bu ürünün **sahip olduğu tek harcama kontrolüdür** —
+ADR-0012 §3 token ve para birimini bilerek reddetti, çünkü ikisi de
+sağlayıcının beyanıdır. O sayı `_Session.model_calls` alanındaydı ve `forget`
+o nesneyi `pop` ediyordu.
+
+Regresyon testleri **düzeltmeden önce** yazıldı ve düzeltmesiz kodda
+sürüldü:
+
+| Test | Düzeltmesiz sonuç |
+|---|---|
+| `::test_forgetting_a_session_does_not_forget_the_spend` (düzeltilmiş iddia) | `AssertionError: assert 0 == 1` — bir tur harcanmıştı, `forget` sonrası 0 |
+| `::test_forget_cannot_be_clicked_for_a_second_ceiling` | `forget #1 handed back a fresh ceiling: finished` — 8/8 dolduktan sonra tek bir "unut" tam tavan geri verdi, `model_calls_used=1` |
+| `::test_the_ceiling_survives_a_restart_of_the_process` | Aynı motora kurulan ikinci servis dokuzuncu turu **gönderdi** (`model_calls_used=1`) |
+
+`3 failed, 4 passed` (`-k "forget or restart or per_task or ceiling"`).
+
+### Karar ve bedeli
+
+Sayaç `model_call_ledger` tablosuna taşındı (migration **`0011`**, yalnız
+ekleme; `task_id` birincil anahtar, `model_calls_used` yalnız artan tamsayı,
+iki zaman damgası). Erişim `station_api/agent/model_calls.py::ModelCallCounter`,
+`AgentService.model_calls` üzerinden — `activity` özelliğinin aynısı gibi.
+
+**Yeniden başlatma da aynı kusur mudur? Evet.** Uygulamayı kapatıp açmak
+kullanıcının zaten sahip olduğu bir kapıdır; süreç belleğindeki bir tavan o
+kapıdan geçilir. Bu yüzden karar "unutmaya dayanıklı" değil **kalıcı**dır.
+Konuşma ise kalıcı **değildir** ve olmamalıdır (SI-224, ADR-0008 §6): iki
+olgunun ömrü baştan beri farklıydı, tek evleri vardı.
+
+**Bedel açıkça yazıldı ve üründe de söyleniyor:** tavanı dolan bir görevin
+turları geri gelmez. Sıfırlama rotası/metodu/aracı **yoktur ve bilerek
+yoktur** — bir sıfırlama `forget`'in başka adla dönmesidir. Yol yeni bir
+görevdir (tavan görev başına). Backfill yoktur: turları hiç kaydedilmemiş bir
+göreve sayı uydurmak tahminden yapılmış bir tavan olurdu.
+
+Reddedilen üç ev, gerekçeleriyle: `task_record` sütunu (SI-225'i koda
+uydurmak olurdu), `activity_event` satırlarını saymak (saklama politikası +
+kullanıcının çağırdığı silme = tavanı temizlemenin ikinci kapısı),
+`budget.py` (sınır ile sayaç farklı şeylerdir).
+
+### Mutasyon — ve mutasyonun bulduğu delik
+
+Yalnız `forget` değişikliği geri alındı (sayacı silen bir `forget_the_spend`
+eklenerek): **2 kırmızı, 51 geçti**. Yerinde duran
+`::test_the_ceiling_survives_a_restart_of_the_process` doğru biçimde yeşil
+kaldı — başka bir kapıyı ölçüyor.
+
+Ama mutasyon bir şey daha gösterdi: revert `session.delete(row)` yazımıyla
+yapıldığında **sözdizimi taraması onu görmedi**. Satırı silmek de sayacı
+düşürür ve yalnız niteliğe bakan bir tarama bunu kaçırır. Muhafız
+güçlendirildi (`::test_the_ledger_row_is_never_deleted_and_reaches_only_two_modules`)
+ve mutasyon tekrarlandı: **3 kırmızı, 51 geçti**. Mutasyon geri alındı;
+`grep -rn "MUTATION\|forget_the_spend" apps/station-api/src/` yalnız bayat
+`.pyc` dosyalarını gösteriyor.
+
+### Düzeltilen dört cümle
+
+1. `TasksPanel.tsx` — "tavan sifirlanmaz" **kaldı** (artık doğru); yanına
+   yeniden başlatma ve "dolan tavan geri gelmez" yarısı eklendi.
+2. `TasksPanel.test.tsx` — cümle pini korundu **ama tek dayanak değil**: onu
+   gerçekten tutan Python testleri adıyla yazıldı, ve bu katmana ait iddia
+   eklendi (ekran sunucunun sayısını gösterir, kendi `0 / 8`'ini uydurmaz).
+   Testin adı da düzeltildi.
+3. `routes/planner.py::forget_session` — düzyazı cümlenin **yazıldığında
+   yanlış** olduğunu ve neyin doğru kıldığını söylüyor; yanıt cümlesi artık
+   harcanan tur sayısının da durduğunu söylüyor.
+4. `test_forgetting_a_session_does_not_forget_the_spend` — **silinmedi,
+   düzeltildi.** Adı doğruydu. Yerine geçen iddia daha fazlasını sabitliyor:
+   harcama duruyor **ve** konuşma gerçekten düşüyor (`pending_run_id` boşalıyor)
+   **ve** kayıtlı çalışma yerinde.
+
+### Değişen dosyalar
+
+- `apps/station-api/src/station_api/agent/model_calls.py` — **yeni**;
+  `ModelCallCounter` (`used`, `record_call`; sıfırlama yok, silme yok).
+- `apps/station-api/src/station_api/db/migrations/versions/0011_model_call_ledger.py`
+  — **yeni**; tek tablo, yalnız ekleme.
+- `apps/station-api/src/station_api/db/models.py` — `ModelCallLedger`.
+- `apps/station-api/src/station_api/agent/service.py` — sayaç kuruluyor ve
+  `model_calls` özelliğiyle veriliyor.
+- `apps/station-api/src/station_api/planner/service.py` — `_Session.model_calls`
+  **kaldırıldı**; tavan denetimi, sayma ve görünüm defteri okuyor; `_view` ile
+  `_refuse_proposal` artık oturum almıyor; modül düzyazısı düzeltildi.
+- `apps/station-api/src/station_api/routes/planner.py` — düzyazı ve yanıt cümlesi.
+- `apps/station-web/src/components/tasks/TasksPanel.tsx` — kural cümlesi.
+- `apps/station-web/src/components/tasks/TasksPanel.test.tsx` — pin gerekçesi
+  ve iki yeni iddia.
+- `tests/security/test_model_planner.py` — yedi yeni test + düzeltilen iddia.
+- `tests/security/test_agent_boundary.py` — `CURRENT_MIGRATION_HEAD = "0011"`,
+  yeni migration testi, iki sütun taramasına `model_call_ledger` eklendi.
+- `tests/security/test_database.py` — `CURRENT_MIGRATION_HEAD = "0011"`.
+- `docs/decisions/0013-...md` — **yeni ADR**; `docs/decisions/README.md`'ye
+  hem 0013 hem de **indekste hiç olmayan 0012** satırı eklendi.
+- `docs/security-invariants.md` — **SI-345**.
+- `docs/architecture.md` — tablo listesi ve migration cümlesi.
+- `docs/kullanim-kilavuzu.md` §5.3, `docs/kullanici-kabul-listesi.md`
+  **H5-11, H5-12, H5-13**.
+- `PROJECT_STATUS.md` — bu bölüm; `ed39521` riski **kapandı** olarak işaretlendi.
+
+### Koşulan kapılar
+
+`ruff check .` (**All checks passed!**) ·
+`ruff check apps/station-api/src packages/technocore-conform/src tests`
+(**All checks passed!**) · `mypy --config-file apps/station-api/pyproject.toml`
+(**Success: no issues found in 144 source files**; önceki tur 142 — iki yeni
+dosya) · `pytest ../../tests` (**2661 passed in 185.88s**; önceki tur 2653,
+sekiz yeni test) · `npm run lint` (temiz) · `npm run test` (**434 passed**,
+13 dosya) · `npm run build` (**built in 3.59s**).
+
+SPA değiştiği için `packaging/build_bundle.py` yeniden koşuldu
+(SHA-256 `caec026961fb5d67e5291f78893b26e7ffc4c14d15bea2b4e608af5d23166889`,
+26 229 144 bayt) ve bayt-birebir denetimler ondan **sonra** koşuldu:
+`pytest ../../tests/security/test_frontend_bundle.py ../../tests/security/test_packaging_boundary.py`
+(**82 passed**).
+
+### Açık risk
+
+`activity_event`'in saklama politikası (`RETAINED_EVENTS = 500`) ve
+kullanıcının çağırdığı silmesi, `model_called` satırlarını timeline'dan
+düşürebilir. Bu **tavanı etkilemez** — tavan artık ayrı bir tabloda — ama
+harcamanın *hikâyesi* (ne zaman, hangi turda ne kadar) budanabilir.
+`model_call_ledger` toplamı ve iki zaman damgasını tutar, tur tur dökümü
+tutmaz; böyle bir döküm istenirse ayrı bir turdur. Bugün bir kusur değil,
+**bilinçli bir kapsam sınırıdır** ve kayda geçirilmiştir.

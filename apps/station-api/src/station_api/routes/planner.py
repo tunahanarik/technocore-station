@@ -208,6 +208,15 @@ def forget_session(
     ceiling either - the recorded runs, the workspace and the task's evidence
     are all untouched, and the next turn will re-read them. What is discarded
     is the in-memory conversation, which is the only thing this lane keeps.
+
+    The second clause of that sentence was **false when it was written**, and
+    ADR-0013 is what made it true. The model-call count lived on the session
+    object this route pops, so pressing "start over" handed back a fresh
+    ceiling - and on a metered endpoint where the call count is the only spend
+    control this product owns (ADR-0012 3), a fresh ceiling is the whole
+    budget, as many times as somebody pressed the button. The count is a
+    per-task row now; this route reads it back rather than resetting it, and
+    the response says so in the same sentence that says what was dropped.
     """
     del session
     planner = _planner(request)
@@ -227,7 +236,8 @@ def forget_session(
             run_id="",
             detail=(
                 "Bu gorevin model oturumu unutuldu. Kaydedilmis planlar, "
-                "calisma alani ve kanitlar oldugu gibi durur."
+                "calisma alani ve kanitlar oldugu gibi durur. Harcanan model "
+                "turu sayisi da durur: unutmak tavani sifirlamaz."
             ),
             model_calls_used=state.model_calls_used,
             max_model_calls=state.max_model_calls,

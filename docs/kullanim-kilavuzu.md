@@ -387,6 +387,11 @@ kayıt olsa uygulama **başlamaz**. Bir araca **adres verilemez**: `path` ve
 **Tavan dört birimdir ve derleme zamanındadır:** en çok 32 araç çağrısı,
 en çok 8 model çağrısı, en çok 120 saniye duvar saati, eşzamanlılık **1**.
 
+Model çağrısı tavanı **görev başınadır ve kalıcıdır**: harcanan tur sayısı
+göreve yazılır, oturumu unutmak veya uygulamayı kapatıp açmak onu geri vermez
+(ADR-0013). Öteki üç birim bir **çalışmaya** aittir ve her yeni çalışma kendi
+sayacıyla başlar; ikisi farklı şeyleri sınırladığı için farklı ömürleri vardır.
+
 Token ve para birimi **reddedilmiştir** ve reddedildikleri adıyla yayımlanır.
 Gerekçesi değişti ve sertleşti: eskiden "model yolu kapalı olduğu için
 sağlayıcıdan gelen bir kullanım değeri yok" idi; sağlayıcı artık hem `usage`
@@ -418,7 +423,18 @@ model seçtiğinizde de olur: model **adıyla** reddedilir ve okunmamış bir
 sözleşmeye istek gönderilmez.
 
 **Oturumu unutmak** bellekteki konuşmayı düşürür; kaydedilmiş planlar,
-çalışma alanı ve kanıtlar olduğu gibi kalır.
+çalışma alanı ve kanıtlar olduğu gibi kalır. **Harcanan tur sayısı da kalır.**
+Bu cümle bir süre yanlıştı: sayaç yalnız bellekte duruyordu, "Oturumu unut"
+onu düşürüyordu ve düğmeye basan kişi ölçülü uca karşı yeni bir tavan alıyordu.
+ADR-0013 sayacı göreve yazdı; artık ne unutmak ne de uygulamayı yeniden
+başlatmak harcanan turu geri verir.
+
+**Bunun bedeli açıktır ve size aittir:** tavanı dolan bir görevin turları geri
+gelmez. Sıfırlama düğmesi yoktur ve bilerek yoktur — çünkü model çağrısı sayısı
+bu üründe **para harcamayı sınırlayan tek şeydir** (token ve maliyet
+sağlayıcının beyanıdır, sınır olarak okunmaz). O görevde yapabileceğiniz iki
+şey vardır: kaydedilmiş bir planı elle sürdürmek, ya da yeni bir görev açmak —
+tavan görev başına sayıldığı için yeni görev kendi sekiz turuyla başlar.
 
 **Çalışma alanı** `<veri dizini>/workspace/v1/<görev kimliği>/` altındadır ve
 dört katman korur: dosya adı süzülmez, **yeniden kurulur**; her okuma ve her

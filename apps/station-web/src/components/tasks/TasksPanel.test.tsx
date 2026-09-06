@@ -1626,7 +1626,26 @@ describe("Gorevler: the model proposes and cannot approve or start", () => {
     expect(screen.getByTestId("tasks-model-usage")).toHaveTextContent("(bildirilmedi)");
   });
 
-  it("says forgetting the session keeps the plans, the workspace and the ceiling", async () => {
+  /**
+   * Forgetting a session must not clear the counter on the screen either.
+   *
+   * This test used to end on a bare substring check for "tavan sifirlanmaz",
+   * and the sentence it pinned was **false**: the backend's `forget` dropped
+   * the session object the model-call counter lived on, so pressing the button
+   * really did hand back a fresh ceiling. A component test cannot see that,
+   * and pinning the claim here made the screen look covered while the
+   * behaviour was not. What holds the claim now is where the counter is -
+   * `test_model_planner.py::test_forget_cannot_be_clicked_for_a_second_ceiling`
+   * and `::test_the_ceiling_survives_a_restart_of_the_process` drive the abuse
+   * against a mock transport and count the requests that reach it (ADR-0013).
+   *
+   * The sentence check is kept, because a screen that quietly stopped saying
+   * this is a real regression at this layer - but it is no longer the only
+   * thing standing behind it, and the assertion that actually belongs here is
+   * the one below it: the panel renders the server's count and never invents a
+   * zero of its own after a forget.
+   */
+  it("keeps the plans, the workspace and the server's spent-turn count on forget", async () => {
     const sent: Recorded[] = [];
     modelStub(
       proposal({
@@ -1648,8 +1667,15 @@ describe("Gorevler: the model proposes and cannot approve or start", () => {
 
     expect(sent.some((entry) => entry.url.endsWith("/model-plan/forget"))).toBe(true);
     // The counter comes back from the server rather than being reset here.
-    expect(screen.getByTestId("tasks-model-calls")).toHaveTextContent("2 / 8");
-    expect(screen.getByTestId("tasks-model-turn-rule")).toHaveTextContent("tavan sifirlanmaz");
+    const calls = screen.getByTestId("tasks-model-calls");
+    expect(calls).toHaveTextContent("2 / 8");
+    expect(calls.textContent ?? "").not.toContain("0 / 8");
+
+    const rule = screen.getByTestId("tasks-model-turn-rule");
+    expect(rule).toHaveTextContent("tavan sifirlanmaz");
+    // And the restart half of the same promise, which the sentence now makes
+    // because the answer changed: the count is written to the task.
+    expect(rule).toHaveTextContent("yeniden baslatmak");
   });
 
   /**
