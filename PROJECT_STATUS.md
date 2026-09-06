@@ -2521,10 +2521,135 @@ dönüyor. Mutasyon kararı tersine çevirdiği için muhafızlar gerçektir.
 `pytest ../../tests` (**2523 geçti**) · `npm run lint` · `npm run test`
 (**434 geçti**) · `npm run build`. SPA bundle **değişmedi**.
 
-### Açık risk
+### Açık risk — **kapandı** (bir sonraki bölüm)
 
-Tarama birimi **paket**tir (`station_api` altındaki dizinler), üst düzey tek
+Tarama birimi **paket**ti (`station_api` altındaki dizinler), üst düzey tek
 dosyalık modüller (`app.py`, `schemas.py`, `resources.py`, …) değil.
 `resources.py` paketlenmiş varlıklar için `importlib.resources` kullanır ve
-bu meşrudur; ama yeni bir üst düzey modül bu üç taramanın da dışında kalır ve
-muhafız bunu söylemez. Bir sonraki tur için kayda geçirildi.
+bu meşrudur; ama yeni bir üst düzey modül bu üç taramanın da, bütçe
+taramasının da dışında kalıyor ve muhafız bunu söylemiyordu. Kayda geçirildi
+ve **bir sonraki turda ölçülerek kapatıldı**; ayrıntı aşağıda.
+
+---
+
+## Aynı kusurun **onuncu** örneği: gevşek üst-seviye modüller
+
+**Durum:** kapandı. Commit edilmedi (INV-08).
+
+Yedinci ve sekizinci örnek kapatılırken onuncusu **düzeltilmedi, düzyazıya
+yazıldı** — yukarıdaki "Açık risk" başlığı odur. Yorumdaki bir not muhafız
+değildir.
+
+### Kusur, ölçülerek (önce kırmızı istenen regresyon)
+
+`station_api` altında doğrudan duran **on dört** gevşek `.py` dosyası üç
+registry kuralının (`dynamic-loading`, `outbound`, `secret-boundary`) ve
+bütçe kuralının dışındaydı. Dört gevşek modül ekildi; iki muhafız dosyasının
+**175 testinin tamamı yeşil kaldı** — temiz ağaçtaki koşuyla birebir aynı
+sayı.
+
+| Ekilen gevşek modül | Ekimden önce | Ekimden sonra (eski muhafız) |
+|---|---|---|
+| `zz_plant_dynamic.py`: `import importlib` + `loader = importlib.import_module` | 175 geçti | **175 geçti** |
+| `zz_plant_outbound.py`: `import requests` | 175 geçti | **175 geçti** |
+| `zz_plant_secret.py`: `from station_api.vault.service import VaultService` | 175 geçti | **175 geçti** |
+| `zz_plant_budget.py`: `estimated_budget = 10` + `run.budget_left` | 175 geçti | **175 geçti** |
+
+Bütün `tests/security` koşusunda dört ekimin verdiği tek ilgili kırmızı
+`test_write_gate.py::test_httpx_is_imported_only_by_the_reviewed_clients`
+oldu ve o da yalnız `requests` **HTTP kütüphanesi** olduğu için: giden yüzey
+kuralının iç istemci yarısı (`socket`, `station_api.opencode`,
+`station_api.technocore.client`, …) hiçbir gevşek modülde görülmüyordu.
+Diğer iki kırmızı `test_tracked_sources.py`'nin git-takip kontrolüydü —
+ekimler untracked olduğu için; gerçek bir değişiklikte o kontrol hiç
+konuşmaz.
+
+### Yeni muhafız: kırmızı, iki katmanda
+
+| Adım | Sonuç |
+|---|---|
+| Dört modül ekli, tuple'lara **eklenmemiş** | **2 kırmızı**: her iki dosyada `::test_every_loose_module_is_scanned_and_every_scanned_module_exists` |
+| Aynı dört modül tuple'lara **eklenmiş** (listeyi genişleten geliştirici) | **4 kırmızı**: `test_no_module_is_ever_loaded_from_disk` (`attribute .import_module`, `import importlib`), `test_the_task_layer_has_no_outbound_surface` (`requests`), `test_the_task_layer_reaches_no_vault_and_no_signer` (`station_api.vault.service`), `test_the_task_layer_opens_no_budget_field` |
+
+Yani hem "listeyi genişletmeyi unutmak" hem de "listeyi genişletip ihlali
+bırakmak" kapalı.
+
+### Muhafız mutasyonla sürüldü
+
+Keşif `glob("*.py")` yerine elle yazılmış dosya adı listesini okuyacak biçimde
+çevrildi (`_loose_modules` → `set(REGISTRY_SCANNED_MODULES)` /
+`set(BUDGET_SCANNED_MODULES)`), dört ekim yerinde bırakıldı:
+
+| Mutasyon | Sonuç |
+|---|---|
+| `_loose_modules` dizini yürüyor (asıl hâli) | **2 kırmızı** |
+| `_loose_modules` tuple okuyor (mutasyon) | **236 geçti, sıfır kırmızı** — muhafız kör |
+
+Karar tersine döndü; muhafız gerçektir.
+
+### Düzeltme — yeni kalıp uydurulmadı
+
+Mevcut kalıp (yürüyüş + sayılı, gerekçeli muafiyet + bayatlama sabitlemesi)
+bir seviye aşağı taşındı. **Gevşek modül için bütün-modül muafiyeti yoktur**:
+bir modül tek dosyadır, onu muaf etmek kuralın bütün yazımlarını o dosyaya
+vermek olurdu — kapatılan boşluğun bir kat aşağıya taşınmış hâli. Modülün
+alabileceği tek şey **adlandırılmış izin**dir.
+
+Genişletilen taramanın gerçek ağaçta bulduğu beş şey ve verilen karar:
+
+| Bulgu | Karar |
+|---|---|
+| `resources.py`: `from importlib import resources` | **Üye düzeyinde izin.** `importlib.resources` paketlenmiş veri okur, keyfi kod yükleyemez; ADR-017'nin yasakladığı yükleme yolu değildir (ADR-0010 §1). İzin `import importlib.resources` dizesidir — modül adı değil. |
+| `app.py`: `station_api.technocore.write_client`, `station_api.opencode.service` | **Ad düzeyinde izin.** Montaj noktası gözden geçirilmiş istemciyi kurup enjekte eder; kendi istemcisini açmaz. `station_api.opencode.client` **verilmedi**. |
+| `app.py`: `station_api.vault`, `vault.errors`, `compose.signer`, `compose.service`, `compose.nonce` | **Ad düzeyinde izin.** Kasayı biri kurmak zorunda; `app.py` zaten signer'ı adlandırabilen iki modülden biridir ve bu çift `test_the_signer_is_named_by_exactly_the_modules_written_down_here` ile sabitlidir. |
+| `schemas.py`: `budget_available`, `budget_detail`, `budget_state` | **Ad düzeyinde izin.** `routes` muafiyetinin hep hakkında olduğu dosya buydu — gerekçe doğru dosyayı adlandırıyor, yanlış dosyayı kapsıyordu. Dördüncü bir bütçe biçimli üye aynı dosyada kırmızıdır. |
+| `launcher.py`: `import socket` | **Ad düzeyinde izin.** **Dinleyen** soket: `reserve_loopback_socket` port 0 ile bağlanır, INV-02/SI-02, `test_bind.py` tutar. Giden bağlantı değildir. |
+
+Üründe düzeltilmesi gereken gerçek ihlal **çıkmadı**; beş bulgunun beşi de
+gerekçesiyle sayılı izindir. `dynamic-loading` kuralının paket düzeyinde hâlâ
+**sıfır** muafiyeti var ve ağaçtaki tek adlandırılmış izin `resources.py`
+içindeki üyedir. `OUTBOUND_CLIENT_MODULES` **beşte** kaldı.
+
+Tarama kendisi de bir yer daraldı: `from x import y`, banlı bir paketten
+geldiğinde artık **üye üye** raporlanıyor (`import importlib.resources`,
+`import importlib` değil). Etiket inceldi, hüküm değil — banlı bir modülden
+gelen her `from` ifadesi hâlâ en az bir offender üretir.
+
+### Değişen dosyalar
+
+- `tests/security/test_module_registry.py` — `REGISTRY_SCANNED_MODULES`,
+  `MODULE_ALLOWANCES`, `_scope_of`, `_allowances`, `_loose_modules`,
+  `_unfiltered_offenders`; dört yeni test
+  (`::test_every_loose_module_is_scanned_and_every_scanned_module_exists`,
+  `::test_a_planted_violation_is_reported_from_every_scanned_loose_module`,
+  `::test_every_module_allowance_is_used_and_is_scoped`,
+  `::test_the_importlib_allowance_is_the_data_reader_and_not_a_loader`).
+- `tests/security/test_task_evidence.py` — `BUDGET_SCANNED_MODULES`,
+  `BUDGET_NAMES_ONE_MODULE_MAY_USE`, `_loose_modules`; üç yeni test.
+- `docs/security-invariants.md` — SI-210, SI-213, SI-225 kapsam hücreleri ve
+  test atıfları; "Aynı kusurun **onuncu** örneği" ölçüm kaydı.
+- `PROJECT_STATUS.md` — bu bölüm.
+
+Ürün kodunda **hiçbir dosya değişmedi**.
+
+### Koşulan kapılar
+
+`ruff check .` (**All checks passed**) ·
+`ruff check apps/station-api/src packages/technocore-conform/src tests`
+(**All checks passed**) · `mypy --config-file apps/station-api/pyproject.toml`
+(**Success: no issues found in 142 source files**) · `pytest ../../tests`
+(**2584 geçti**, 176.87 sn; önceki tur 2523) · `npm run lint` (temiz) ·
+`npm run test` (**434 geçti**, 13 dosya) · `npm run build` (**built in
+3.56s**). Web kaynağı değişmediği için **SPA bundle değişmedi**; paketleme
+artefaktı yeniden üretilmedi.
+
+Ekimlerin hiçbiri hayatta kalmadı: `git status --untracked-files=all` yalnız
+değişen dört dosyayı `M` olarak gösteriyor, untracked girdi yok.
+
+### Açık risk
+
+`test_task_states.py`'nin `STATE_WRITER_DIRS` taraması hâlâ **paket**
+birimindedir; bu turun kapsamı dört kuraldı (`dynamic-loading`, `outbound`,
+`secret-boundary`, bütçe) ve beşinci kurala dokunulmadı. Gevşek modüllerin
+hiçbiri bugün durum yazmıyor, ama bunu söyleyen bir muhafız yok — aynı
+kalıbın **on birinci** örneği olarak kayda geçirildi.

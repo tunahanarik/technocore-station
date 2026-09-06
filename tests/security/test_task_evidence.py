@@ -150,6 +150,81 @@ BUDGET_SCANNED_DIRS = (
     "vault",
 )
 
+#: Every loose module directly under ``station_api``, written out.
+#:
+#: The tuple above stopped being a short list of the trees somebody thought
+#: of, and the comment on it explains why at length. It then left the scan
+#: unit as the *package*, so the fourteen ``.py`` files sitting directly in
+#: ``station_api`` were outside SI-225 entirely - and **it was measured**: a
+#: loose module carrying ``estimated_budget = 10`` and ``run.budget_left``
+#: left every assertion in this file green.
+#:
+#: There is no whole-module equivalent of
+#: :data:`PACKAGES_OUTSIDE_THE_BUDGET_SCAN`, deliberately. A module is one
+#: file, and exempting a file would hand it every budget-shaped name at once.
+#: What a module gets instead is :data:`BUDGET_NAMES_ONE_MODULE_MAY_USE` -
+#: named allowances, the shape ``opencode`` and ``planner`` already have.
+#:
+#: Written out rather than globbed, for the same reason as the tuple above:
+#: :func:`test_every_loose_module_is_scanned_and_every_scanned_module_exists`
+#: walks the tree and compares it against this, and a tuple derived from
+#: ``glob`` would agree with whatever it found.
+BUDGET_SCANNED_MODULES = (
+    "__init__.py",
+    "__main__.py",
+    "app.py",
+    "config.py",
+    "dependencies.py",
+    "digests.py",
+    "downloads.py",
+    "launcher.py",
+    "logging_setup.py",
+    "resources.py",
+    "schemas.py",
+    "seed_import.py",
+    "single_instance.py",
+    "strict_json.py",
+)
+
+#: Budget-shaped names one loose module may use, and only that module.
+#:
+#: ``schemas.py`` is the file the ``routes`` exemption above has always been
+#: about - it says, in so many words, that ``budget_available`` and
+#: ``budget_detail`` "are response members declared in ``schemas.py``". The
+#: reason was written for the package that serialises them and the file that
+#: declares them was outside the scan, which is the tenth instance of this
+#: repository's signature defect in miniature: the exemption named the right
+#: file and covered the wrong one.
+#:
+#: Scoped to the three names rather than to the module, so a fourth
+#: budget-shaped member - ``budget_left``, ``budget_remaining``, anything that
+#: could carry a number - is red in the same file. Each is a declared absence
+#: whose *value* is checked by
+#: :func:`test_the_declared_absences_are_still_absences`, which is what keeps
+#: a permitted name from quietly becoming a permitted field.
+BUDGET_NAMES_ONE_MODULE_MAY_USE: dict[str, dict[str, str]] = {
+    "schemas.py": {
+        "budget_available": (
+            "``Literal[False]`` on the write-gate and spending-context "
+            "responses. SI-225's second half requires the user to be told "
+            "where the ceiling is instead of being left to conclude there is "
+            "none, and the annotation is what stops the answer from becoming "
+            "a number later."
+        ),
+        "budget_detail": (
+            "The sentence beside it, carrying ``BUDGET_DETAIL`` - the one "
+            "name ``_ALLOWED_BUDGET_NAMES`` permits everywhere. A string "
+            "saying where the ceiling lives; nothing reads a limit out of it."
+        ),
+        "budget_state": (
+            "``Literal['not_implemented']`` on the scanned-candidate "
+            "response, the wire half of ``workscan.candidates.BUDGET_STATE``. "
+            "A declared absence in the three-valued verdict, so a missing "
+            "budget never serialises as an approved one."
+        ),
+    },
+}
+
 #: Every other package under ``station_api``, one by one, with the reason a
 #: budget-shaped name there is not the field SI-225 forbids.
 #:
@@ -1226,15 +1301,33 @@ _ALLOWED_BUDGET_NAMES = frozenset({"BUDGET_DETAIL"})
 
 
 def _budget_scanned_files(root: Path) -> list[Path]:
-    """Every file the budget scan opens, so "it scanned nothing" is visible."""
+    """Every file the budget scan opens, so "it scanned nothing" is visible.
+
+    Two kinds of scan unit, because the tree has two: packages, and the loose
+    modules that sit beside them. ``is_file`` rather than a bare append so a
+    throwaway tree holding only packages still scans cleanly - the tuple is
+    checked against the real tree by
+    :func:`test_every_loose_module_is_scanned_and_every_scanned_module_exists`.
+    """
     found: list[Path] = []
     for directory in BUDGET_SCANNED_DIRS:
         found.extend((root / "station_api" / directory).rglob("*.py"))
+    found.extend(
+        root / "station_api" / name
+        for name in BUDGET_SCANNED_MODULES
+        if (root / "station_api" / name).is_file()
+    )
     return sorted(found)
 
 
 def _package_of(root: Path, path: Path) -> str:
-    """The ``station_api`` package one scanned file belongs to."""
+    """The scan unit one scanned file belongs to.
+
+    A package name for a file inside one, and the file's own name for a loose
+    module: ``station_api/tasks/service.py`` is ``tasks``,
+    ``station_api/schemas.py`` is ``schemas.py``. One helper for both, because
+    an allowance is looked up the same way whichever kind of unit granted it.
+    """
     return path.relative_to(root / "station_api").parts[0]
 
 
@@ -1242,14 +1335,19 @@ def _budget_offenders(root: Path) -> list[str]:
     """Every budget-shaped identifier in the scanned trees.
 
     ``_ALLOWED_BUDGET_NAMES`` applies everywhere;
-    :data:`BUDGET_NAMES_ONE_PACKAGE_MAY_USE` adds to it for one package only,
-    so widening the scan onto the model lane did not hand the same names to
-    the task layer.
+    :data:`BUDGET_NAMES_ONE_PACKAGE_MAY_USE` and
+    :data:`BUDGET_NAMES_ONE_MODULE_MAY_USE` add to it for one package or one
+    module only, so widening the scan onto the model lane did not hand the
+    same names to the task layer, and widening it onto the loose modules did
+    not hand ``schemas.py``'s wire members to anybody else.
     """
     offenders: list[str] = []
     for path in _budget_scanned_files(root):
-        allowed = _ALLOWED_BUDGET_NAMES | set(
-            BUDGET_NAMES_ONE_PACKAGE_MAY_USE.get(_package_of(root, path), ())
+        scope = _package_of(root, path)
+        allowed = (
+            _ALLOWED_BUDGET_NAMES
+            | set(BUDGET_NAMES_ONE_PACKAGE_MAY_USE.get(scope, ()))
+            | set(BUDGET_NAMES_ONE_MODULE_MAY_USE.get(scope, ()))
         )
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
@@ -1281,6 +1379,16 @@ def _packages(api_source_root: Path) -> set[str]:
         for entry in root.iterdir()
         if entry.is_dir() and (entry / "__init__.py").is_file()
     }
+
+
+def _loose_modules(api_source_root: Path) -> set[str]:
+    """Every ``.py`` file directly under ``station_api``.
+
+    Read off the tree rather than listed, for the reason :func:`_packages`
+    gives: a guard built out of the list cannot see what the list omits.
+    """
+    root = api_source_root / "station_api"
+    return {entry.name for entry in root.glob("*.py") if entry.is_file()}
 
 
 def _modules_importing(api_source_root: Path, module: str) -> list[str]:
@@ -1505,6 +1613,113 @@ def test_every_package_budget_allowance_is_used_and_is_scoped(
         stale = sorted(set(names) - found)
         assert not stale, (
             f"{package} no longer uses these allowed budget names, so the "
+            f"allowance is open for nothing: {stale}"
+        )
+        for reason in names.values():
+            assert reason.strip()
+
+
+def test_every_loose_module_is_scanned_and_every_scanned_module_exists(
+    api_source_root: Path,
+) -> None:
+    """The tenth instance, closed on this side too.
+
+    The guard above walks the tree for *directories* and was written because a
+    list cannot see what it omits. It left the same defect one level up: the
+    scan unit was the package, so the fourteen loose ``.py`` files beside them
+    were outside SI-225 altogether, and the file recorded that in a comment
+    rather than checking it. ``schemas.py`` - the file the ``routes``
+    exemption is literally about - was one of them.
+
+    Both directions, for the same reasons the package guard gives:
+
+    * a loose module the tuple does not name is the growth case;
+    * a name in the tuple with no file behind it is the staleness case, and it
+      is quieter here than for packages: :func:`_budget_scanned_files` uses
+      ``is_file`` exactly as ``rglob`` swallows a missing directory, so a
+      misspelling widens the scan by zero files and reports nothing.
+
+    The last assertion is the one that makes the other two mean something: the
+    scan's own file list has to contain every module the tuple names, so a
+    tuple that is right and a scan that opens nothing cannot both pass.
+    """
+    modules = _loose_modules(api_source_root)
+    scanned = set(BUDGET_SCANNED_MODULES)
+
+    unexplained = sorted(modules - scanned)
+    assert not unexplained, (
+        "these loose modules sit directly under station_api and are outside "
+        f"the budget-field scan: {unexplained}. Add them to "
+        "BUDGET_SCANNED_MODULES, and if a budget-shaped name there is not the "
+        "field SI-225 forbids, permit that exact name in "
+        "BUDGET_NAMES_ONE_MODULE_MAY_USE with the reason."
+    )
+
+    gone = sorted(scanned - modules)
+    assert not gone, (
+        "BUDGET_SCANNED_MODULES names modules that no longer exist; the scan "
+        f"opens nothing for them: {gone}"
+    )
+
+    opened = {
+        path.name
+        for path in _budget_scanned_files(api_source_root)
+        if path.parent == api_source_root / "station_api"
+    }
+    assert opened == scanned, sorted(scanned - opened)
+
+
+@pytest.mark.parametrize("module", BUDGET_SCANNED_MODULES)
+def test_a_planted_budget_field_is_reported_from_every_scanned_loose_module(
+    module: str, tmp_path: Path
+) -> None:
+    """The scan, driven once per loose module it claims to cover.
+
+    The package version of this test is what proved
+    :data:`BUDGET_SCANNED_DIRS` was real rather than decorative. This is the
+    same measurement for the fourteen files that version could not see.
+
+    ``estimated_budget`` is outside every allowance ``schemas.py`` holds, so
+    a permission that had widened into a module-shaped exemption fails here
+    rather than passing quietly.
+    """
+    root = tmp_path / "station_api"
+    root.mkdir(parents=True)
+    for name in BUDGET_SCANNED_MODULES:
+        (root / name).write_text("value = 1\n", encoding="utf-8")
+    (root / module).write_text("estimated_budget = 10\n", encoding="utf-8")
+
+    assert _budget_offenders(tmp_path) == [f"{module}: estimated_budget"]
+
+
+def test_every_loose_module_budget_allowance_is_used_and_is_scoped(
+    api_source_root: Path,
+) -> None:
+    """The module allowances, checked the way the package ones are.
+
+    An allowance nobody uses is a permission sitting open for whoever needs
+    one next. So each name has to be found in the module it was granted to,
+    each module has to be one the scan opens, and each reason has to be
+    written down.
+    """
+    for module, names in BUDGET_NAMES_ONE_MODULE_MAY_USE.items():
+        assert module in BUDGET_SCANNED_MODULES, (
+            f"{module} has budget-name allowances but is not scanned; an "
+            "allowance in an unscanned module permits nothing and hides that "
+            "it permits nothing"
+        )
+        path = api_source_root / "station_api" / module
+        assert path.is_file(), module
+        found: set[str] = set()
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                found.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                found.add(node.attr)
+        stale = sorted(set(names) - found)
+        assert not stale, (
+            f"{module} no longer uses these allowed budget names, so the "
             f"allowance is open for nothing: {stale}"
         )
         for reason in names.values():
