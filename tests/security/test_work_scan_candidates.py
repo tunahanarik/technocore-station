@@ -644,3 +644,39 @@ def test_a_candidate_without_an_identity_cannot_be_constructed() -> None:
 
     with pytest.raises(CandidateError):
         replace(candidate, id="")
+
+
+def test_the_title_cap_that_actually_binds_is_the_task_services() -> None:
+    """Two title caps in a row, and which one is real.
+
+    ``workscan.service.MAX_TITLE_CHARS`` cuts the quote before it is handed
+    over; ``tasks.service.MAX_TITLE_CHARS`` cuts it again on the way into a
+    column declared ``String(200)``. When the scan's cap was 120 it was the
+    binding one, so the number a reader found by following the scan was the
+    number that mattered. It was raised to 2 000, which makes the *task
+    service* binding and leaves the scan's constant stating an intent rather
+    than an effect.
+
+    That is a fine arrangement and a bad one to discover by surprise, so the
+    relationship is written down here. Both directions are assertions: the
+    scan's cap must sit above the task service's, and the task service's must
+    not exceed the width the column declares - a title cut by the service is
+    a title; a title cut by SQLite is a schema question.
+    """
+    from station_api.db.models import TaskRecord
+    from station_api.tasks.service import MAX_TITLE_CHARS as TASK_TITLE_CHARS
+    from station_api.workscan.service import MAX_TITLE_CHARS as SCAN_TITLE_CHARS
+
+    column_width = TaskRecord.__table__.c.title.type.length
+
+    assert SCAN_TITLE_CHARS > TASK_TITLE_CHARS, (
+        "the scan's cap is the binding one again; either that is intended - "
+        "in which case say so where the constant is - or the task service's "
+        "cap moved and this pair needs re-reading"
+    )
+    assert column_width >= TASK_TITLE_CHARS, (
+        f"the task service admits {TASK_TITLE_CHARS} characters into a "
+        f"column declared String({column_width}); SQLite does not enforce "
+        "the width, so this would be silent over-long data rather than an "
+        "error. Widen the column in a migration first."
+    )

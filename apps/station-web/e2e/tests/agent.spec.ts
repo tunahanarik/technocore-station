@@ -86,6 +86,26 @@ const SURFACE = {
       produces_artifact: true,
     },
   ],
+  // The closed acceptance registry, published beside the tools (Paket H4).
+  // Two of the five, because a screen that rendered a hard-coded list would
+  // pass with one.
+  acceptance_checks: [
+    {
+      kind: "artifact_exists",
+      purpose: "TEST-ONLY: adi verilen dosya calisma alaninda var mi.",
+      params: [
+        { name: "name", type: "file_name", required: true, detail: "TEST-ONLY: sade dosya adi." },
+      ],
+    },
+    {
+      kind: "artifact_contains",
+      purpose: "TEST-ONLY: dosya istenen metni iceriyor mu.",
+      params: [
+        { name: "name", type: "file_name", required: true, detail: "TEST-ONLY: sade dosya adi." },
+        { name: "text", type: "text", required: true, detail: "TEST-ONLY: aranacak metin." },
+      ],
+    },
+  ],
   honesty: RUN_HONESTY,
   stop_statement: STOP_STATEMENT,
   interrupted_runs: [] as unknown[],
@@ -147,6 +167,9 @@ const PLANNED_RUN = {
   stop_requested: false,
   plan_sha256: "5d4c3b2a19876543",
   test_condition: "TEST-ONLY: uretilen dosya alintiyla yan yana okunur.",
+  // Empty on purpose: this plan recorded only the sentence, which is exactly
+  // the case whose verdict has to stay `not_implemented` (Paket H4).
+  acceptance: [] as unknown[],
   test_result_state: "not_implemented",
   test_result_detail: TEST_RESULT_DETAIL,
   expected_artifacts: ["rapor.md"],
@@ -300,7 +323,33 @@ const ACTIVITY = {
 /** Every start this spec sends, recorded from the intercepted requests. */
 interface RunLedger {
   readonly starts: string[];
+  /** Every model turn, so "a turn happens only inside a click" is checkable. */
+  readonly turns: string[];
 }
+
+/**
+ * One model turn's answer, mocked (ADR-0012).
+ *
+ * Mocked rather than real, and that is a rule rather than a convenience: a
+ * spec that spent a real turn would make an outbound request from the test
+ * suite, which `shell.spec.ts` measures and refuses. What is under test here
+ * is what the *screen* does with a proposal, and that needs no provider.
+ */
+const MODEL_PROPOSAL = {
+  outcome: "planned",
+  run_id: RUN_ID,
+  detail:
+    "TEST-ONLY: Model 1 adimlik bir plan onerdi ve plan kaydedildi. Hicbir adim kosulmadi.",
+  model_calls_used: 1,
+  max_model_calls: 8,
+  usage_detail: "giris token=184, cikis token=46, maliyet='0'",
+  closing_text: "",
+  tool_call_provenance:
+    "TEST-ONLY: Arac cagrisi bicimi hesap sahibinin kendi anahtariyla olculdu.",
+  task: TASK,
+  runs: [PLANNED_RUN],
+  model_can_start_a_run: false,
+};
 
 /**
  * Answer the task and activity groups locally.
@@ -320,6 +369,11 @@ async function mockAgentSurface(page: Page, ledger: RunLedger): Promise<void> {
       }
       if (url.pathname === "/api/tasks") {
         await route.fulfill({ json: TASK_LIST });
+        return;
+      }
+      if (url.pathname.endsWith("/model-plan")) {
+        ledger.turns.push(url.pathname);
+        await route.fulfill({ json: MODEL_PROPOSAL });
         return;
       }
       if (url.pathname.endsWith("/start")) {
@@ -361,11 +415,111 @@ async function openTask(page: Page): Promise<void> {
   await expect(page.getByRole("region", { name: "Gorev ayrintisi" })).toBeVisible();
 }
 
+/**
+ * The model lane, in a real browser and under the real CSP.
+ *
+ * What this proves that a jsdom test cannot: the region renders, its controls
+ * are reachable, and a proposed plan still meets the four approvals with a
+ * real focus ring and a real keyboard - the same path a hand-written plan
+ * takes. Nothing here contacts a provider: the turn is answered by the route
+ * mock above, and `shell.spec.ts` separately measures that the backend made
+ * no outbound attempt during the whole run.
+ */
+test.describe("Gorevler: modelden plan onerisi", () => {
+  test("spends no turn until a control is pressed, and starts nothing when it does", async ({
+    page,
+  }) => {
+    const ledger: RunLedger = { starts: [], turns: [] };
+    await mockAgentSurface(page, ledger);
+    await openApp(page);
+    await navEntry(page, "Gorevler").click();
+    await openTask(page);
+
+    // Opening a task reads; it does not spend anything.
+    expect(ledger.turns, "opening a task may not spend a model turn").toEqual([]);
+    await expect(page.getByTestId("tasks-model-no-turn")).toBeVisible();
+
+    // The two rules are readable before the control that would spend a turn.
+    await expect(page.getByTestId("tasks-model-approval-rule")).toContainText(
+      "hicbir adimi atlatmaz",
+    );
+    await expect(page.getByTestId("tasks-model-registry-rule")).toContainText(
+      "oneri butunuyle reddedilir",
+    );
+
+    await page.getByRole("button", { name: /Modelden plan oner/ }).click();
+    await expect(page.getByTestId("tasks-model-outcome")).toBeVisible();
+
+    expect(ledger.turns).toHaveLength(1);
+    // The turn recorded a plan and started nothing.
+    expect(ledger.starts, "a model turn may not start a run").toEqual([]);
+    await expect(page.getByTestId("tasks-model-cannot-start")).toContainText(
+      "Model bir calismayi baslatamaz",
+    );
+    // The provider's numbers, labelled as the provider's.
+    await expect(page.getByTestId("tasks-model-usage")).toContainText("Saglayicinin beyani");
+    await expect(page.getByTestId("tasks-model-usage-rule")).toContainText(
+      "bizim olcumumuz degildir",
+    );
+  });
+
+  test("still refuses to carry out the proposed plan until all four approvals are given", async ({
+    page,
+  }) => {
+    const ledger: RunLedger = { starts: [], turns: [] };
+    await mockAgentSurface(page, ledger);
+    await openApp(page);
+    await navEntry(page, "Gorevler").click();
+    await openTask(page);
+
+    await page.getByRole("button", { name: /Modelden plan oner/ }).click();
+    await expect(page.getByTestId("tasks-model-outcome")).toBeVisible();
+
+    const start = page.getByRole("button", { name: /Onayli plani calistir/ });
+    await expect(start).toBeDisabled();
+
+    // Three of four is not four. Every intermediate state is checked, because
+    // an off-by-one in the approval gate would pass a test that only looked
+    // at nought and four.
+    await tick(page, /Plani okudum/);
+    await expect(start).toBeDisabled();
+    await tick(page, /Veri paylasimini/);
+    await expect(start).toBeDisabled();
+    await tick(page, /Calisma alanini/);
+    await expect(start).toBeDisabled();
+    await tick(page, /Butceyi/);
+    await expect(start).toBeEnabled();
+
+    expect(ledger.starts, "nothing may have started while approvals were given").toEqual([]);
+  });
+
+  test("says the publish-ready state is derived and offers no control that names it", async ({
+    page,
+  }) => {
+    const ledger: RunLedger = { starts: [], turns: [] };
+    await mockAgentSurface(page, ledger);
+    await openApp(page);
+    await navEntry(page, "Gorevler").click();
+    await openTask(page);
+
+    await expect(page.getByTestId("tasks-readiness-rule")).toContainText(
+      "Istek bir hedef alani tasimaz",
+    );
+    await expect(page.getByTestId("tasks-readiness-blocking")).toContainText("test_result");
+
+    const named = await page
+      .getByRole("button")
+      .filter({ hasText: /yayima hazir/i })
+      .count();
+    expect(named, "no control may name the derived state as its own output").toBe(0);
+  });
+});
+
 test.describe("Gorevler", () => {
   test("appears in the navigation, opens from the keyboard and states why nothing runs", async ({
     page,
   }) => {
-    const ledger: RunLedger = { starts: [] };
+    const ledger: RunLedger = { starts: [], turns: [] };
     await mockAgentSurface(page, ledger);
     await openApp(page);
 
@@ -401,7 +555,7 @@ test.describe("Gorevler", () => {
   test("shows the budget in three units and refuses to denominate it in tokens", async ({
     page,
   }) => {
-    const ledger: RunLedger = { starts: [] };
+    const ledger: RunLedger = { starts: [], turns: [] };
     await mockAgentSurface(page, ledger);
     await openApp(page);
     await navEntry(page, "Gorevler").click();
@@ -423,7 +577,7 @@ test.describe("Gorevler", () => {
   test("needs four approvals before a plan runs, and still reports the test as unimplemented", async ({
     page,
   }) => {
-    const ledger: RunLedger = { starts: [] };
+    const ledger: RunLedger = { starts: [], turns: [] };
     await mockAgentSurface(page, ledger);
     await openApp(page);
     await navEntry(page, "Gorevler").click();
@@ -470,7 +624,7 @@ test.describe("Gorevler", () => {
 
 test.describe("Aktivite", () => {
   test("opens from the keyboard and keeps five kinds of moment apart", async ({ page }) => {
-    const ledger: RunLedger = { starts: [] };
+    const ledger: RunLedger = { starts: [], turns: [] };
     await mockAgentSurface(page, ledger);
     await openApp(page);
 
@@ -517,7 +671,7 @@ test.describe("Aktivite", () => {
     consoleLog,
     page,
   }) => {
-    const ledger: RunLedger = { starts: [] };
+    const ledger: RunLedger = { starts: [], turns: [] };
     await mockAgentSurface(page, ledger);
     await openApp(page);
     await navEntry(page, "Aktivite").click();

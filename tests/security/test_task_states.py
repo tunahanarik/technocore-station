@@ -68,6 +68,7 @@ from __future__ import annotations
 import ast
 import inspect
 import itertools
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, get_args, get_type_hints
@@ -181,7 +182,115 @@ TEST_ONLY_CONTENT = b"TEST-ONLY task content, not a real work item."
 #: directories while the fourth was free to write the column would have
 #: reported "one writer" about a product with two - the same hole H2 found,
 #: one package later.
-STATE_WRITER_DIRS = ("modules", "tasks", "agent", "proof")
+#: Package H4 adds ``planner`` for the fourth time, and for the reason the
+#: paragraphs above give twice already. A model planning lane is a very
+#: natural place for somebody to write ``row.state = "running"`` after a
+#: proposal - it *feels* like the thing that starts work - and the whole of
+#: ADR-0012 2 is that it must not: a proposal produces a recorded plan and a
+#: **person** starts it. A scan that read four directories while the fifth
+#: was free to write the column would report "one writer" about a product
+#: with two, which is the hole H2 found and H3 found again.
+#:
+#: ``workscan`` is the sixth name, and it is the one that says this list must
+#: stop being the thing anybody trusts. It was missing while
+#: ``station_api.workscan`` was already the package that *creates* suggested
+#: tasks - a function appended to ``workscan/discovery.py`` that set
+#: ``row.state`` was measured to turn nothing in this file red - and the four
+#: paragraphs above are four separate people writing down the same lesson and
+#: then leaving the same shape of hole behind. The lesson is not "remember the
+#: next directory". It is that a rule scoped by a hand-written list of
+#: directories is only as complete as the list, and nothing was checking the
+#: list.
+#:
+#: So :data:`PACKAGES_OUTSIDE_THE_STATE_WRITE_SCAN` now carries the other half,
+#: and :func:`test_every_package_is_scanned_or_is_a_written_down_exception`
+#: walks the **repository** rather than this tuple. A seventh package cannot be
+#: forgotten: it is either added here or written down there with a reason.
+STATE_WRITER_DIRS = (
+    "modules",
+    "tasks",
+    "agent",
+    "proof",
+    "planner",
+    "workscan",
+)
+
+#: Every other package under ``station_api``, one by one, with the reason it is
+#: outside the scan. A **counted list, not a pattern** - the
+#: ``_ROWS_WITHOUT_A_PYTHON_TEST`` shape from ``test_security_invariants_doc``,
+#: used here for the same reason it is used there: a directory leaves the scan
+#: only by somebody writing down why, and a directory listed here that is later
+#: scanned, or that stops existing, is reported as stale. Both directions fail.
+#:
+#: This is what makes the guard's other half real. The plant test below drives
+#: the scan through every directory the tuple names, which proves the tuple
+#: works and proves nothing at all about what the tuple *omits*; this dict is
+#: the omissions, and it is checked against the tree.
+PACKAGES_OUTSIDE_THE_STATE_WRITE_SCAN: dict[str, str] = {
+    "cli": (
+        "Seed import from the command line. It never opens the task tables - "
+        "the one thing it writes is the vault - and it holds no session a "
+        "task could be moved from."
+    ),
+    "compose": (
+        "The one package with a legitimate ``.state`` write, which is exactly "
+        "why it is written down rather than scanned: ``nonce.py:_settle_once`` "
+        "sets ``MessageNonceReservation.state``, a different table with a "
+        "different lifecycle. Scanning it would report a second task-state "
+        "writer that is not one, and the way that gets fixed under time "
+        "pressure is by loosening the assertion."
+    ),
+    "conformance": (
+        "A thin adapter over ``technocore_conform.run_self_test``. It answers "
+        "a question about the write gate and returns a verdict; it holds no "
+        "database session."
+    ),
+    "db": (
+        "Where ``TaskRecord.state`` is *declared*. A column definition is not "
+        "a writer, and scanning the declaration site would make the one true "
+        "sentence this file asserts - one writer - false by construction."
+    ),
+    "evidence": (
+        "Evidence and audit. It records what was verified about a task and "
+        "the task service reads that record to derive "
+        "``ready_to_publish``; the derivation is the task service's, so this "
+        "package influences the state without writing it, which is the "
+        "arrangement ADR-0004 3 asks for."
+    ),
+    "identity": (
+        "The seed lifecycle. It is the one package that holds a seed in "
+        "memory and it touches no task table at all."
+    ),
+    "opencode": (
+        "The provider connection: bytes in, typed values out. It has no "
+        "database session by construction (``test_planner_boundary.py`` pins "
+        "that import boundary), so it cannot write any row, let alone this "
+        "column."
+    ),
+    "recovery": (
+        "``.tcrec`` file format. Pure serialisation of a recovery payload; no "
+        "task, no session."
+    ),
+    "routes": (
+        "The HTTP surface. It calls services and serialises their answers, and "
+        "the layering that keeps it from holding a session is pinned "
+        "elsewhere. A route that opened one would be caught as a layering "
+        "break before it was caught as a state write."
+    ),
+    "security": (
+        "Session, token and request-guard primitives, memory only. Nothing "
+        "here reaches SQLite."
+    ),
+    "technocore": (
+        "The read-only Technocore client and its projection helpers. It "
+        "returns remote documents as values; the task service decides what a "
+        "document means for a task."
+    ),
+    "vault": (
+        "DPAPI secret storage. It holds the seed and nothing else, and it is "
+        "the package most strongly forbidden from touching anything else."
+    ),
+}
 
 #: The one function permitted to write a task's state, as
 #: ``<file>:<function>``. Anything else in the two packages is an offender.
@@ -264,6 +373,10 @@ def _candidate_values(name: str, annotation: Any) -> tuple[Any, ...]:
     otherwise be silently left undriven, which is the exact failure this test
     is being repaired for.
     """
+    # A trusted read dependency is also a public method input. Drive it with
+    # both an absent revision and a changed one; do not omit the method.
+    if annotation == Callable[[str], str]:
+        return (lambda _task_id: "", lambda _task_id: "TEST-ONLY changed revision")
     union = get_args(annotation)
     if union:
         values: list[Any] = [None] if type(None) in union else []
@@ -440,8 +553,22 @@ class _StateWriteFinder(ast.NodeVisitor):
         self.offenders.append(f"{self.filename}:{where}")
 
 
+def _packages(api_source_root: Path) -> set[str]:
+    """Every Python package directly under ``station_api``.
+
+    Read off the tree rather than listed, because the whole point of the
+    guard below is that a list is what went wrong.
+    """
+    root = api_source_root / "station_api"
+    return {
+        entry.name
+        for entry in root.iterdir()
+        if entry.is_dir() and (entry / "__init__.py").is_file()
+    }
+
+
 def _state_writers(api_source_root: Path) -> list[str]:
-    """``<file>:<function>`` for every state write in the three scanned trees."""
+    """``<file>:<function>`` for every state write in the scanned trees."""
     writers: list[str] = []
     for name in STATE_WRITER_DIRS:
         for path in (api_source_root / "station_api" / name).rglob("*.py"):
@@ -726,6 +853,134 @@ def test_the_state_write_scan_would_see_a_second_writer(tmp_path: Path) -> None:
         "service.py:start_running",
         THE_ONLY_STATE_WRITER,
     ]
+
+
+@pytest.mark.parametrize("package", STATE_WRITER_DIRS)
+def test_a_planted_state_writer_is_reported_from_every_scanned_package(
+    package: str, tmp_path: Path
+) -> None:
+    """The scan, driven once per directory it claims to cover.
+
+    The test above plants in ``tasks`` and that is the directory nobody was
+    ever going to forget. The five others were each added by a different
+    package, each with a paragraph beside them, and not one of them was ever
+    driven: ``rglob`` on a directory that does not exist returns nothing
+    rather than raising, so a name misspelled in the tuple - or a package
+    later renamed - would widen the scan by exactly zero files and every
+    assertion in this file would still be green.
+
+    So each name gets its own planted writer, in its own throwaway tree, and
+    has to come back. Parametrised over the tuple rather than written out, so
+    a seventh directory is driven the day it is added.
+    """
+    for name in STATE_WRITER_DIRS:
+        (tmp_path / "station_api" / name).mkdir(parents=True, exist_ok=True)
+    (tmp_path / "station_api" / package / "planted.py").write_text(
+        "def _planted_state_writer(row):\n    row.state = 'published'\n",
+        encoding="utf-8",
+    )
+
+    assert _state_writers(tmp_path) == ["planted.py:_planted_state_writer"]
+
+
+def test_every_scanned_directory_is_a_real_package(api_source_root: Path) -> None:
+    """The tuple, checked against the tree it names.
+
+    Half of the failure above: a directory in the tuple that is not in the
+    repository is a scan of nothing, reported as a scan.
+    """
+    missing = sorted(set(STATE_WRITER_DIRS) - _packages(api_source_root))
+
+    assert not missing, (
+        "STATE_WRITER_DIRS names directories that are not packages under "
+        f"station_api; the scan opens nothing for them: {missing}"
+    )
+
+
+def test_every_package_is_scanned_or_is_a_written_down_exception(
+    api_source_root: Path,
+) -> None:
+    """The guard that does not read the list it is guarding.
+
+    ``test_the_state_write_scan_would_see_a_second_writer`` and the
+    parametrised plant above both iterate :data:`STATE_WRITER_DIRS`, so both
+    are blind in exactly the way that let ``workscan`` sit outside the scan
+    while it was the package creating suggested tasks. A guard built out of
+    the list cannot see what the list omits.
+
+    This one walks ``apps/station-api/src/station_api`` instead. Every package
+    there is scanned, or it is named in
+    :data:`PACKAGES_OUTSIDE_THE_STATE_WRITE_SCAN` with the reason - and both
+    directions are failures, which is what keeps the pair honest as the tree
+    changes:
+
+    * a package that is neither scanned nor written down is the growth case,
+      and it is the seventh occurrence of this defect refusing to happen;
+    * a package written down as an exception that is now scanned, or that no
+      longer exists, is the staleness case - an exemption nobody re-read,
+      which is how a list of reasons decays into a list of names.
+    """
+    packages = _packages(api_source_root)
+    scanned = set(STATE_WRITER_DIRS)
+    exempt = set(PACKAGES_OUTSIDE_THE_STATE_WRITE_SCAN)
+
+    unexplained = sorted(packages - scanned - exempt)
+    assert not unexplained, (
+        f"these packages are outside the task-state write scan and nobody "
+        f"wrote down why: {unexplained}. Add them to STATE_WRITER_DIRS, or to "
+        "PACKAGES_OUTSIDE_THE_STATE_WRITE_SCAN with the reason a state write "
+        "there is not the defect SI-226 is about."
+    )
+
+    also_scanned = sorted(exempt & scanned)
+    assert not also_scanned, (
+        "these packages are listed as exceptions but are also scanned; drop "
+        f"them from PACKAGES_OUTSIDE_THE_STATE_WRITE_SCAN: {also_scanned}"
+    )
+
+    gone = sorted(exempt - packages)
+    assert not gone, (
+        "these packages are written down as exceptions but no longer exist; "
+        f"drop them from PACKAGES_OUTSIDE_THE_STATE_WRITE_SCAN: {gone}"
+    )
+
+
+def test_the_exempt_packages_cannot_reach_the_task_table(
+    api_source_root: Path,
+) -> None:
+    """The reasons above, held up by something other than the prose.
+
+    Every entry in :data:`PACKAGES_OUTSIDE_THE_STATE_WRITE_SCAN` says, one way
+    or another, "this package is not on the task lifecycle". A sentence cannot
+    stop being true loudly, so the mechanical version of the same claim is
+    asserted here: ``TaskRecord`` - the class that *has* the column - is named
+    in exactly two modules in the whole tree, the one that declares it and the
+    one permitted to write it.
+
+    An exempt package that started importing ``TaskRecord`` would fail here
+    long before anybody re-read the paragraph explaining why it was exempt.
+
+    Read off the syntax tree rather than by searching the text: the first
+    version of this test grepped, and a *comment* in ``workscan/service.py``
+    that mentioned the column width turned it red. A prose mention of a class
+    is not a reference to it, and a test that cannot tell the difference
+    teaches people to stop writing the prose.
+    """
+    naming: list[str] = []
+    for path in sorted((api_source_root / "station_api").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        referenced = any(
+            (isinstance(node, ast.Name) and node.id == "TaskRecord")
+            or (isinstance(node, ast.Attribute) and node.attr == "TaskRecord")
+            or (isinstance(node, ast.alias) and node.name == "TaskRecord")
+            or (isinstance(node, ast.ClassDef) and node.name == "TaskRecord")
+            for node in ast.walk(tree)
+        )
+        if referenced:
+            relative = path.relative_to(api_source_root / "station_api")
+            naming.append(str(relative).replace("\\", "/"))
+
+    assert naming == ["db/models.py", "tasks/service.py"]
 
 
 def test_the_state_write_scan_reaches_the_proof_package(

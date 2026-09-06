@@ -47,9 +47,21 @@ kullanıcıya kadar gidiyor.
 | Auth header'ının adı/formatı | `client.AUTH_HEADER_NAME` üzerinde büyük harflerle `NOT VERIFIED IN THE OFFICIAL DOCUMENTATION`; tek yerde tanımlı ve bir test başka hiçbir modülde `Authorization`/`Bearer ` **string sabiti** olmadığını doğrular | **Evet** — `auth_header_caveat` alanı |
 | Katalogda olup **tabloda olmayan** modelin protokol ailesi | `MappingVerification.UNVERIFIED`; `ModelMapping.selectable` bundan **türetilir**, ayrı bir bayrak değildir | **Evet** — her modelin `reason` alanı |
 | Üç ailenin gövde şekli | `adapters.SHAPE_PROVENANCE`: "üst protokol ailelerinin bilinen non-streaming biçimi, fixture'a karşı doğrulandı" | **Evet** — `protocol_context.shape_provenance` |
-| Streaming ve tool-call biçimi | `events.STREAMING_SUPPORTED = False`, `TOOL_CALLS_SUPPORTED = False`, `DEFERRAL_SENTENCE` | **Evet** — `protocol_context` |
+| Streaming biçimi | `events.STREAMING_SUPPORTED = False`, `DEFERRAL_SENTENCE`'ın ilk yarısı | **Evet** — `protocol_context` |
 | Hata gövdelerinin şekli | `FailureKind.PROVIDER_ERROR` — "görebildiğimiz ama sınıflandırdığımızı iddia etmediğimiz hata" kovası | **Evet** — `failure.detail` |
 | **Eşlemesiz** modellerin veri saklama koşulu | `TrainingUse.UNKNOWN`; `requires_training_acknowledgement` `UNKNOWN`'da da `True` | **Evet** — `retention`, `training_use` |
+
+Bu tabloda **bir satır eksildi**. "Streaming ve tool-call biçimi" tek satırdı
+ve `TOOL_CALLS_SUPPORTED = False` diyordu; artık yalnız streaming satırı var.
+Tool-call biçimi
+[ADR-0012](decisions/0012-model-yolu-sozlesme-dogrulamasi-2026-09-06.md) ile
+hesap sahibinin kendi anahtarıyla **ölçüldü** — `chat/completions` üzerinde
+`tools`/`tool_choice` gönderildi, yanıt `finish_reason: "tool_calls"` ve
+gerçek bir `tool_calls` dizisi döndürdü — dolayısıyla artık
+"doğrulanamayan" değil. `TOOL_CALLS_SUPPORTED` `True`'dur. Sabit
+**silinmedi**: önceki sürümde `false` gören bir okuyucuya alanın sessizce
+kaybolduğu değil, **değerinin değiştiği** söylenir. Streaming ölçülmedi ve
+bu tabloda kalır.
 
 ### Düzeltilen bir yanlış iddia
 
@@ -336,9 +348,16 @@ Yanlış aile seçildiğinde gövde **sessizce parse olmaz** — bu, tahmin edil
 bir eşlemenin üreteceği hata biçimidir ve ADR-0005 §5'in tahmini
 yasaklamasının somut nedenidir.
 
-**Streaming ve tool-call yoktur** (ADR-0005 §2). Sözleşmeleri yayımlanmadığı
-için yazmak tahmin olurdu; erteleme H2'ye aittir ve `protocol_context`
-üzerinden görünürdür.
+**Streaming yoktur** (ADR-0005 §2). Sözleşmesi yayımlanmadığı için yazmak
+tahmin olurdu; erteleme `protocol_context` üzerinden görünürdür.
+
+**Tool-call vardır** ve bu satır eskiden streaming ile aynı cümledeydi. İki
+biçim aynı gerekçeyi paylaşıyordu — "sözleşme yayımlanmadı" — ama artık aynı
+cevabı paylaşmıyorlar: tool-call biçimi ADR-0012 ile ölçüldü, streaming
+ölçülmedi. Tek cümle ikisinden biri hakkında zorunlu olarak yanlış olacağı
+için ikiye ayrıldı. Ölçülen yol yalnız **ölçülen protokol ailesi** için
+açıktır ve ayrıştırma `opencode/planner.py`'dedir; `arguments` bir JSON
+**dizesidir** ve ayrıştırılması gerekir.
 
 ---
 
@@ -522,10 +541,10 @@ autouse ağ kesici iki katmanda blokludur.
 
 | Konu | Nereye |
 |---|---|
-| Streaming / SSE | H2 — sözleşme yayımlandığında |
-| Tool-call | H2 — aynı gerekçe |
+| Streaming / SSE | Ertelenmiş — sözleşmesi hâlâ ölçülmedi; `streaming_supported` `False` |
+| ~~Tool-call~~ | **Kapandı.** ADR-0012 sözleşmeyi ölçtü; `tool_calls_supported` `True` ve yol H4'te (`opencode/planner.py`, `planner/`) açıldı |
 | Gerçek probe ("anahtarı doğrula") | Kullanıcının açık eylemine bağlı; ücretli olabileceği için bu turda uygulanmadı |
-| Gerçek bütçe sınırı ve eşzamanlılık | H2 |
+| ~~Gerçek bütçe sınırı ve eşzamanlılık~~ | **Kapandı.** H2 `agent/budget.py`'yi yazdı: araç çağrısı, duvar saati ve eşzamanlılık (`Literal[1]`); H4 dördüncü birimi ekledi (`max_model_calls`). `usage`/`cost` kaydedilir, **tavan olarak okunmaz** (ADR-0012 §3) |
 | Katalogdaki **7 eşlemesiz** model | Belge "Endpoints" tablosuna eklediğinde `MODEL_MAPPINGS`'te satır başına tek satır |
 
 **Kalan riskler:**

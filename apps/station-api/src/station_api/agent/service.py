@@ -52,7 +52,7 @@ import json
 import time
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -60,7 +60,13 @@ from pathlib import Path
 from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
 
-from station_api.agent import budget, isolation, workspace
+from station_api.agent import acceptance, budget, isolation, workspace
+from station_api.agent.acceptance import (
+    MAX_ACCEPTANCE_CONDITIONS,
+    AcceptanceCondition,
+    AcceptanceOutcome,
+    AcceptanceState,
+)
 from station_api.agent.activity import (
     ActivityAction,
     ActivityActor,
@@ -109,14 +115,45 @@ MAX_TEST_CONDITION_CHARS = 500
 #: Longest sentence stored on a run or a step.
 MAX_DETAIL_CHARS = 500
 
-#: What the run reports for its test field, always, in this release.
-TEST_RESULT_STATE = "not_implemented"
+#: What a run reports for its test field when its plan wrote **no**
+#: machine-checkable acceptance condition.
+#:
+#: It used to be what a run reported *always*, because nothing could decide a
+#: criterion. :mod:`station_api.agent.acceptance` can decide five of them now,
+#: so this is the honest answer for one case rather than the only answer there
+#: is - and it is still the answer that keeps the gate closed, which is what a
+#: plan that recorded only a sentence has earned.
+TEST_RESULT_STATE = AcceptanceState.NOT_IMPLEMENTED.value
 
-TEST_RESULT_DETAIL = (
-    "Test sonucu bu surumde uygulanmadi. Plan bir basari olcutu kaydeder, "
-    "fakat onu kosacak yurutme kapalidir (execution_unavailable), bu yuzden "
-    "kaydedilmis bir sonuc yoktur ve gorev yayima hazir sayilamaz."
+#: What a cancelled step says when the call it discarded had **created** a
+#: file: the file is gone, because it never existed before this call.
+DISCARD_NEW_FILE_DETAIL = (
+    "Iptalden sonra donen sonuc kaydedilmedi; adimin olusturdugu dosya "
+    "calisma alanindan kaldirildi. Devamda adim yeniden denenir."
 )
+
+#: What it says when the call it discarded had **overwritten** one. The file
+#: stays, holding the bytes it held before this call.
+#:
+#: Two sentences rather than one, because one sentence was false for one of
+#: the two cases. "The file it produced was removed" described a cancelled
+#: update as a deletion, and a user reading it would have expected their
+#: earlier, completed step's output to be gone as well.
+DISCARD_UPDATE_DETAIL = (
+    "Iptalden sonra donen sonuc kaydedilmedi; adimin ustune yazdigi dosyanin "
+    "onceki baytlari geri yuklendi. Devamda adim yeniden denenir."
+)
+
+#: And when the call left no file at all. Named rather than left implicit so
+#: "nothing was rolled back" is a thing the timeline says instead of a silence.
+DISCARD_NOTHING_DETAIL = (
+    "Iptalden sonra donen sonuc kaydedilmedi; bu adim dosya birakmadi, geri "
+    "alinacak bir sey yoktu. Devamda adim yeniden denenir."
+)
+
+#: The sentence for the ``not_implemented`` case, kept under its old name
+#: because it is still shown - just no longer unconditionally.
+TEST_RESULT_DETAIL = acceptance.NOT_IMPLEMENTED_DETAIL
 
 
 class RunPhase(StrEnum):
@@ -211,6 +248,12 @@ class RunView:
     stop_requested: bool
     plan_sha256: str
     test_condition: str
+    #: The plan's machine-checkable conditions, in the order it wrote them.
+    acceptance: tuple[AcceptanceCondition, ...]
+    #: What those conditions establish about the workspace **as it stands
+    #: now**. Recomputed on every read rather than stored, so a task whose
+    #: output changed after a run finished never keeps yesterday's verdict.
+    test_result: AcceptanceOutcome
     expected_artifacts: tuple[str, ...]
     tool_calls_used: int
     elapsed_ms: int
@@ -226,13 +269,25 @@ class RunView:
 
     @property
     def test_result_state(self) -> str:
-        """Always ``not_implemented``. A property, not a stored column.
+        """``passed``, ``failed`` or ``not_implemented``. Never a stored column.
 
-        Storing it would invite a code path that writes something else. The
-        executor that could produce a real result is the closed one, so this
-        is derived from that fact rather than from a row.
+        Storing it would invite a code path that writes something else, and it
+        would also make the value survive its own evidence: a verdict computed
+        from bytes has to be recomputed when the bytes change, and the cheapest
+        way to guarantee that is to have nowhere to keep a stale one.
         """
-        return TEST_RESULT_STATE
+        return self.test_result.state.value
+
+    @property
+    def test_result_detail(self) -> str:
+        """One safe sentence about the verdict, and the failing conditions."""
+        if self.test_result.state is not AcceptanceState.FAILED:
+            return self.test_result.detail
+        return (
+            self.test_result.detail
+            + " Saglanmayan kosullar: "
+            + ", ".join(self.test_result.failing_labels)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,6 +301,7 @@ class ToolOutcome:
     #: This is the "recorded result" half of ADR-0008 7: a verdict a later
     #: reader can re-derive, rather than a claim the runner made.
     check_sha256: str = ""
+    previous_body: str | None = field(default=None, repr=False)
 
 
 def _clean(text: str) -> str:
@@ -272,6 +328,11 @@ class AgentService:
         self._data_dir = data_dir
         self._tasks = tasks
         self._activity = activity
+        tasks.bind_output_reader(self.output_revision)
+        with Session(engine) as session:
+            self._interrupted_ids = set(
+                session.scalars(select(AgentRun.id).where(AgentRun.phase == RunPhase.RUNNING.value))
+            )
 
     # --- the surface, read-only -------------------------------------------
 
@@ -279,11 +340,30 @@ class AgentService:
     def activity(self) -> ActivityLog:
         return self._activity
 
+    def output_revision(self, task_id: str) -> str:
+        """Stable review anchor: plan/run and actual bytes, excluding acceptance."""
+        runs = self.list_runs(task_id)
+        if not runs:
+            return ""
+        try:
+            files = self.workspace_files(task_id)
+        except WorkspaceError:
+            return "unreadable"
+        latest = runs[0]
+        return hashlib.sha256(
+            canonical_json_bytes(
+                {
+                    "run": latest.id,
+                    "plan": latest.plan_sha256,
+                    "phase": latest.phase.value,
+                    "files": _artifact_set_digest(files),
+                }
+            )
+        ).hexdigest()
+
     def workspace_files(self, task_id: str) -> tuple[workspace.WorkspaceFile, ...]:
         """What one task's workspace holds. A read; creates nothing."""
-        return workspace.list_files(
-            workspace.task_workspace(self._data_dir, task_id)
-        )
+        return workspace.list_files(workspace.task_workspace(self._data_dir, task_id))
 
     def interrupted_runs(self) -> tuple[RunView, ...]:
         """Runs left in ``running`` by a restart. A read, and only a read.
@@ -308,6 +388,7 @@ class AgentService:
         steps: Sequence[tuple[str, dict[str, str]]],
         expected_artifacts: Sequence[str],
         test_condition: str,
+        acceptance_conditions: Sequence[tuple[str, dict[str, str]]] = (),
     ) -> RunView:
         """Write down the whole plan, before anything runs.
 
@@ -330,9 +411,7 @@ class AgentService:
                 reason="task_not_awaiting_approval",
             )
         if not steps:
-            raise RunError(
-                "Plan en az bir adim icermeli.", reason="plan_empty"
-            )
+            raise RunError("Plan en az bir adim icermeli.", reason="plan_empty")
         if len(steps) > MAX_PLAN_STEPS:
             raise RunError(
                 f"Plan en cok {MAX_PLAN_STEPS} adim tasiyabilir; tavan bu "
@@ -342,17 +421,19 @@ class AgentService:
 
         planned = tuple(self._plan_step(task_id, raw) for raw in steps)
         artifacts = self._plan_artifacts(task_id, expected_artifacts)
+        conditions = self._plan_acceptance(task_id, acceptance_conditions)
         condition = _clean(test_condition)[:MAX_TEST_CONDITION_CHARS]
         if not condition:
             raise RunError(
                 "Plan, basarinin nasil olculecegini yazmadan kaydedilemez. "
-                "Bu surumde olcut kaydedilir fakat kosulmaz.",
+                "Olcut bir cumle olarak kaydedilir; makinece degerlendirilmesi "
+                "icin ayrica kabul kosulu yazilir.",
                 reason="plan_has_no_test_condition",
             )
 
         run_id = uuid.uuid4().hex
         now = datetime.now(UTC)
-        digest = _plan_digest(planned, artifacts, condition)
+        digest = _plan_digest(planned, artifacts, condition, conditions)
 
         with Session(self._engine) as session, session.begin():
             session.add(
@@ -364,6 +445,7 @@ class AgentService:
                     stop_requested=False,
                     plan_sha256=digest,
                     test_condition=condition,
+                    acceptance_json=_acceptance_json(conditions),
                     expected_artifacts=json.dumps(list(artifacts)),
                     tool_calls_used=0,
                     elapsed_ms=0,
@@ -382,9 +464,7 @@ class AgentService:
                         ordinal=ordinal,
                         tool_id=step.tool.id.value,
                         scope=step.tool.scope.value,
-                        arguments_json=json.dumps(
-                            argument_map(step.arguments), sort_keys=True
-                        ),
+                        arguments_json=json.dumps(argument_map(step.arguments), sort_keys=True),
                         arguments_sha256=step.digest,
                         phase=StepPhase.PLANNED.value,
                     )
@@ -396,7 +476,9 @@ class AgentService:
 
         detail = (
             f"{len(planned)} adimlik plan kaydedildi. Beklenen ciktilar: "
-            f"{len(artifacts)}. Basari olcutu kaydedildi ve kosulmayacak."
+            f"{len(artifacts)}. Basari olcutu bir cumle olarak kaydedildi ve "
+            f"kosulmayacak; makinece degerlendirilecek kabul kosulu sayisi: "
+            f"{len(conditions)}."
         )
         assert_no_forbidden_claim(detail, where="run plan detail")
         self._activity.record(
@@ -409,9 +491,7 @@ class AgentService:
         )
         return self.get_run(run_id)
 
-    def _plan_step(
-        self, task_id: str, raw: tuple[str, dict[str, str]]
-    ) -> PlannedStep:
+    def _plan_step(self, task_id: str, raw: tuple[str, dict[str, str]]) -> PlannedStep:
         """Resolve one step, or record the right refusal and raise it.
 
         Two refusals, not one, and the difference is what the user is told.
@@ -460,9 +540,41 @@ class AgentService:
             raise
         return PlannedStep(tool=record, arguments=bound)
 
-    def _plan_artifacts(
-        self, task_id: str, names: Sequence[str]
-    ) -> tuple[str, ...]:
+    def _plan_acceptance(
+        self, task_id: str, raw: Sequence[tuple[str, dict[str, str]]]
+    ) -> tuple[AcceptanceCondition, ...]:
+        """Resolve the plan's acceptance conditions, or record the refusal.
+
+        Validated **here**, at plan time, for the reason every other part of
+        the plan is: the row that gets written has to be a plan that could in
+        principle be carried out and then judged. A condition naming a file the
+        plan never promises is still permitted - a run may legitimately be
+        judged on a file the user put there - but a condition naming something
+        outside the registry, or carrying an argument of the wrong type, is a
+        refusal the author sees while planning.
+        """
+        if len(raw) > MAX_ACCEPTANCE_CONDITIONS:
+            raise RunError(
+                f"Plan en cok {MAX_ACCEPTANCE_CONDITIONS} kabul kosulu "
+                "tasiyabilir.",
+                reason="plan_too_many_acceptance_conditions",
+            )
+        conditions: list[AcceptanceCondition] = []
+        for kind, arguments in raw:
+            try:
+                conditions.append(acceptance.bind_condition(kind, arguments))
+            except (ToolRegistryError, ToolArgumentError) as exc:
+                self._deny(
+                    task_id=task_id,
+                    detail=(
+                        f"Kapsam disi kabul kosulu reddedildi: {exc}. Gorev "
+                        "baska bir hedefe kaydirilmadi."
+                    ),
+                )
+                raise
+        return tuple(conditions)
+
+    def _plan_artifacts(self, task_id: str, names: Sequence[str]) -> tuple[str, ...]:
         if len(names) > MAX_EXPECTED_ARTIFACTS:
             raise RunError(
                 f"Plan en cok {MAX_EXPECTED_ARTIFACTS} cikti soz verebilir.",
@@ -499,6 +611,7 @@ class AgentService:
             )
         self._assert_plan_intact(view)
         self._transition(view.task_id, TaskState.RUNNING, detail=RUN_HONESTY_SENTENCE)
+        self._tasks.invalidate_output_evidence(view.task_id)
         self._set_phase(run_id, RunPhase.RUNNING, started=True)
 
         detail = f"Calisma baslatildi. {RUN_HONESTY_SENTENCE}"
@@ -522,6 +635,9 @@ class AgentService:
         user says so (SI-224, ADR-0008 10).
         """
         view = self.get_run(run_id)
+        if view.phase is RunPhase.RUNNING and run_id in self._interrupted_ids:
+            self._recover_interrupted(view)
+            view = self.get_run(run_id)
         if view.phase is not RunPhase.PAUSED:
             raise RunError(
                 f"Calisma '{view.phase.value}' asamasinda; yalnizca "
@@ -529,6 +645,17 @@ class AgentService:
                 reason="run_not_paused",
             )
         self._assert_plan_intact(view)
+        # A stopped, rolled-back step is retried only by this explicit action.
+        with Session(self._engine) as session, session.begin():
+            for row in session.scalars(
+                select(AgentRunStep).where(
+                    AgentRunStep.run_id == run_id,
+                    AgentRunStep.phase == StepPhase.SKIPPED.value,
+                )
+            ):
+                row.phase = StepPhase.PLANNED.value
+                row.started_at = None
+                row.finished_at = None
         self._clear_stop(run_id)
         self._transition(
             view.task_id,
@@ -546,6 +673,19 @@ class AgentService:
         )
         return self._execute(run_id)
 
+    def _recover_interrupted(self, view: RunView) -> None:
+        if any(
+            step.phase is StepPhase.PLANNED and step.started_at is not None for step in view.steps
+        ):
+            raise RunError(
+                "Kesilen adimin uygulanip uygulanmadigi belirsiz. Dosyalari "
+                "inceleyip yeni plan olusturun; otomatik tekrar yapilmadi.",
+                reason="recovery_step_unknown",
+            )
+        self._assert_plan_intact(view)
+        self._pause(view, "Yeniden baslatma sonrasi kullanici devam istegi.")
+        self._interrupted_ids.discard(view.id)
+
     def request_stop(self, run_id: str) -> RunView:
         """Set the stop flag. The runner reads it before every tool call.
 
@@ -557,9 +697,9 @@ class AgentService:
         """
         view = self.get_run(run_id)
         if view.finished:
-            raise RunError(
-                "Bitmis bir calisma durdurulamaz.", reason="run_finished"
-            )
+            raise RunError("Bitmis bir calisma durdurulamaz.", reason="run_finished")
+        if view.phase is RunPhase.RUNNING and run_id in self._interrupted_ids:
+            self._recover_interrupted(view)
         with Session(self._engine) as session, session.begin():
             row = self._row(session, run_id)
             row.stop_requested = True
@@ -593,7 +733,11 @@ class AgentService:
 
             verdict = budget.check(
                 budget.RunUsage(
-                    tool_calls=calls, elapsed_seconds=elapsed_ms / 1000
+                    tool_calls=calls,
+                    # The runner makes none. The planning session counts its
+                    # own, against the same ceiling, in its own call site.
+                    model_calls=0,
+                    elapsed_seconds=elapsed_ms / 1000,
                 )
             )
             if not verdict.allowed:
@@ -609,17 +753,9 @@ class AgentService:
             # discarded and any file it produced is removed. Checked *after*
             # the call, which is the only place a late reply can be seen.
             if self._stop_requested(run_id):
-                self._discard(directory, outcome)
+                undone = self._discard(directory, outcome)
                 self._store_step(
-                    run_id,
-                    step.ordinal,
-                    StepPhase.SKIPPED,
-                    ToolOutcome(
-                        detail=(
-                            "Iptalden sonra donen sonuc kaydedilmedi ve "
-                            "urettigi dosya calisma alanindan kaldirildi."
-                        )
-                    ),
+                    run_id, step.ordinal, StepPhase.SKIPPED, ToolOutcome(detail=undone)
                 )
                 self._store_usage(run_id, calls, elapsed_ms)
                 return self._pause(view, "Kullanici durdurdu.")
@@ -653,6 +789,14 @@ class AgentService:
             return ToolOutcome(detail=str(exc)), StepPhase.REFUSED
 
         try:
+            with Session(self._engine) as session, session.begin():
+                row = session.scalars(
+                    select(AgentRunStep).where(
+                        AgentRunStep.run_id == view.id,
+                        AgentRunStep.ordinal == step.ordinal,
+                    )
+                ).one()
+                row.started_at = datetime.now(UTC)
             return self._call(record, arguments, task, directory), StepPhase.RAN
         except (WorkspaceError, ToolArgumentError, ToolRegistryError) as exc:
             self._deny(task_id=view.task_id, run_id=view.id, detail=str(exc))
@@ -694,6 +838,11 @@ class AgentService:
             )
 
         if record.id in (ToolId.WRITE_WORKSPACE_FILE, ToolId.UPDATE_WORKSPACE_FILE):
+            previous = (
+                workspace.read_text(directory, arguments["name"])
+                if record.id is ToolId.UPDATE_WORKSPACE_FILE
+                else None
+            )
             produced = workspace.write_text(
                 directory,
                 arguments["name"],
@@ -707,6 +856,7 @@ class AgentService:
                 ),
                 artifact_name=produced.name,
                 artifact_sha256=produced.sha256,
+                previous_body=previous,
             )
 
         if record.id is ToolId.VALIDATE_JSON_FILE:
@@ -717,9 +867,7 @@ class AgentService:
                 report = f"'{arguments['name']}' gecerli JSON degil: {exc.args[0]}"
             else:
                 report = f"'{arguments['name']}' gecerli bir JSON belgesi."
-            return ToolOutcome(
-                detail=_clean(report), check_sha256=_digest_of_text(report)
-            )
+            return ToolOutcome(detail=_clean(report), check_sha256=_digest_of_text(report))
 
         if record.id is ToolId.DIFF_WORKSPACE_FILES:
             left = workspace.read_text(directory, arguments["left"])
@@ -734,9 +882,7 @@ class AgentService:
                 )
             )
             report = (
-                "Iki dosya ayni."
-                if not diff
-                else f"Fark bulundu: {len(diff.splitlines())} satir."
+                "Iki dosya ayni." if not diff else f"Fark bulundu: {len(diff.splitlines())} satir."
             )
             return ToolOutcome(detail=report, check_sha256=_digest_of_text(diff))
 
@@ -746,10 +892,7 @@ class AgentService:
             report = (
                 f"'{arguments['name']}' ozeti beklenen degerle ayni."
                 if matched
-                else (
-                    f"'{arguments['name']}' ozeti beklenen degerle ayni degil: "
-                    f"{actual}"
-                )
+                else (f"'{arguments['name']}' ozeti beklenen degerle ayni degil: {actual}")
             )
             return ToolOutcome(detail=report, check_sha256=actual)
 
@@ -823,17 +966,25 @@ class AgentService:
             )
 
         digest = _artifact_set_digest(workspace.list_files(directory))
+        # Decided here, over the bytes the run actually left, and decided
+        # **before** the sentence is written so the sentence cannot disagree
+        # with the verdict.
+        outcome = acceptance.evaluate(view.acceptance, directory)
         detail = (
             f"Plan tamamlandi: {len(view.steps)} adim, {len(present)} dosya. "
-            + TEST_RESULT_DETAIL
+            + outcome.detail
         )
         assert_no_forbidden_claim(detail, where="run finish detail")
 
         self._close(view.id, RunPhase.COMPLETED, detail)
-        # The task's own output is recorded as evidence; the **test** field is
-        # deliberately never written, so the gate keeps blocking and the task
-        # cannot reach ``ready_to_publish`` (ADR-0008 3, SI-222).
+        # Two fields, written separately, and neither inferred from the other.
+        # ``task_outcome`` says what was produced. ``test_result`` says what
+        # the plan's own conditions establish about it - and it is written
+        # only when there were conditions to decide, so a plan that recorded
+        # a sentence and nothing more still leaves the gate closed exactly as
+        # it always did (ADR-0004 4, SI-222).
         self._record_outcome_evidence(view, digest, len(present))
+        self._record_test_result_evidence(view, outcome)
         self._transition(view.task_id, TaskState.REVIEW_NEEDED, detail=detail)
         self._activity.record(
             action=ActivityAction.RUN_FINISHED,
@@ -857,9 +1008,7 @@ class AgentService:
         )
         return self.get_run(view.id)
 
-    def _record_outcome_evidence(
-        self, view: RunView, digest: str, file_count: int
-    ) -> None:
+    def _record_outcome_evidence(self, view: RunView, digest: str, file_count: int) -> None:
         try:
             self._tasks.record_evidence(
                 view.task_id,
@@ -867,6 +1016,46 @@ class AgentService:
                 ref_id=view.id,
                 verified=True,
                 detail=f"{file_count} dosya uretildi; kume ozeti {digest[:12]}.",
+            )
+        except TaskError:  # pragma: no cover - the task was read one call ago
+            return
+
+    def _record_test_result_evidence(
+        self, view: RunView, outcome: AcceptanceOutcome
+    ) -> None:
+        """Write the test field from the conditions, or write nothing.
+
+        Three outcomes, and the third one is the important one:
+
+        * **passed** - every condition held over the bytes on disk, so the
+          field is recorded ``verified=True`` and the gate can open;
+        * **failed** - at least one condition did not hold. The field is
+          recorded ``verified=False`` and names the conditions that failed,
+          so the gate blocks with a reason rather than with a silence;
+        * **not_implemented** - the plan wrote no condition a machine can
+          decide. **Nothing is recorded at all.** An unverified row here would
+          look like a check that ran and disagreed, and the honest statement
+          is that no check was ever specified.
+
+        No branch of this method can produce a pass from a file merely
+        existing: the only thing that sets ``verified=True`` is
+        :func:`station_api.agent.acceptance.evaluate` having decided every
+        recorded condition in favour.
+        """
+        if outcome.state is AcceptanceState.NOT_IMPLEMENTED:
+            return
+        detail = (
+            "Kabul kosullarinin tamami dogrulandi."
+            if outcome.passed
+            else "Saglanmayan kabul kosullari: " + ", ".join(outcome.failing_labels)
+        )
+        try:
+            self._tasks.record_evidence(
+                view.task_id,
+                field=EvidenceField.TEST_RESULT,
+                ref_id=view.id,
+                verified=outcome.passed,
+                detail=detail,
             )
         except TaskError:  # pragma: no cover - the task was read one call ago
             return
@@ -966,10 +1155,9 @@ class AgentService:
 
     def _to_view(self, session: Session, row: AgentRun) -> RunView:
         steps = session.scalars(
-            select(AgentRunStep)
-            .where(AgentRunStep.run_id == row.id)
-            .order_by(AgentRunStep.ordinal)
+            select(AgentRunStep).where(AgentRunStep.run_id == row.id).order_by(AgentRunStep.ordinal)
         ).all()
+        conditions = _acceptance_from_json(row.acceptance_json)
         return RunView(
             id=row.id,
             task_id=row.task_id,
@@ -980,6 +1168,8 @@ class AgentService:
             stop_requested=row.stop_requested,
             plan_sha256=row.plan_sha256,
             test_condition=row.test_condition,
+            acceptance=conditions,
+            test_result=self._judge(row.task_id, conditions),
             expected_artifacts=tuple(json.loads(row.expected_artifacts)),
             tool_calls_used=row.tool_calls_used,
             elapsed_ms=row.elapsed_ms,
@@ -1003,6 +1193,30 @@ class AgentService:
                 for step in steps
             ),
         )
+
+    def _judge(
+        self, task_id: str, conditions: tuple[AcceptanceCondition, ...]
+    ) -> AcceptanceOutcome:
+        """Decide a plan's conditions against the workspace as it stands now.
+
+        The filesystem is touched only when there is something to decide, so a
+        plan that wrote no condition costs a read of nothing - which is every
+        plan written before :mod:`station_api.agent.acceptance` existed.
+
+        A workspace that cannot be read is a **failed** condition set rather
+        than an exception: a verdict that could not be computed is not a
+        verdict that passed, and a view is not the place to raise.
+        """
+        if not conditions:
+            return acceptance.NOT_IMPLEMENTED_OUTCOME
+        try:
+            directory = workspace.task_workspace(self._data_dir, task_id)
+        except WorkspaceError as exc:  # pragma: no cover - the id came from a row
+            return AcceptanceOutcome(
+                state=AcceptanceState.FAILED,
+                detail=f"Kabul kosullari degerlendirilemedi: {exc}",
+            )
+        return acceptance.evaluate(conditions, directory)
 
     def _row(self, session: Session, run_id: str) -> AgentRun:
         row = session.get(AgentRun, run_id)
@@ -1034,13 +1248,14 @@ class AgentService:
             recomputed = hashlib.sha256(
                 canonical_json_bytes(
                     {
+                        "acceptance": _acceptance_payload(view.acceptance),
                         "artifacts": list(view.expected_artifacts),
                         "steps": [
                             {"arguments": step.arguments_sha256, "tool": step.tool_id}
                             for step in steps
                         ],
                         "test_condition": view.test_condition,
-                        "v": 1,
+                        "v": 2,
                     }
                 )
             ).hexdigest()
@@ -1066,9 +1281,7 @@ class AgentService:
             if started:
                 row.started_at = datetime.now(UTC)
 
-    def _close(
-        self, run_id: str, phase: RunPhase, detail: str, *, finished: bool = True
-    ) -> None:
+    def _close(self, run_id: str, phase: RunPhase, detail: str, *, finished: bool = True) -> None:
         with Session(self._engine) as session, session.begin():
             row = self._row(session, run_id)
             row.phase = phase.value
@@ -1110,11 +1323,7 @@ class AgentService:
         self._activity.record(
             action=ActivityAction.TOOL_CALLED,
             actor=ActivityActor.STATION_RUNNER,
-            outcome=(
-                ActivityOutcome.OK
-                if phase is StepPhase.RAN
-                else ActivityOutcome.REFUSED
-            ),
+            outcome=(ActivityOutcome.OK if phase is StepPhase.RAN else ActivityOutcome.REFUSED),
             run_id=view.id,
             task_id=view.task_id,
             check_sha256=outcome.check_sha256,
@@ -1139,41 +1348,120 @@ class AgentService:
                 task_id=view.task_id,
                 check_sha256=outcome.check_sha256,
                 detail=(
-                    "Deterministik dogrulayicinin sonucu kaydedildi. Bu bir "
-                    "test sonucu degildir."
+                    "Deterministik dogrulayicinin sonucu kaydedildi. Bu bir test sonucu degildir."
                 ),
             )
 
     @staticmethod
-    def _discard(directory: Path, outcome: ToolOutcome) -> None:
-        """Remove what a late reply produced. Best effort, and stated as such."""
+    def _discard(directory: Path, outcome: ToolOutcome) -> str:
+        """Undo only this call, and return the sentence that says which undo ran.
+
+        Three outcomes, three sentences, because the three are genuinely
+        different events and a single wording was wrong for two of them:
+
+        * the call created a file - it is removed, and the workspace is back
+          to not having it;
+        * the call overwrote a file - the bytes it replaced are written back,
+          so a **completed** earlier step's output survives a later step's
+          cancellation. Restoring rather than deleting is the repair; deleting
+          was destroying output the run had already shown the user;
+        * the call left no file - nothing is undone, and saying so is better
+          than a sentence about a rollback that did not happen.
+
+        The sentence is returned rather than chosen by the caller so the undo
+        and its description cannot drift apart.
+        """
         if not outcome.artifact_name:
-            return
-        try:
+            return DISCARD_NOTHING_DETAIL
+        if outcome.previous_body is None:
             workspace.remove_file(directory, outcome.artifact_name)
-        except WorkspaceError:  # pragma: no cover - the name passed once already
-            return
+            return DISCARD_NEW_FILE_DETAIL
+        workspace.write_text(
+            directory, outcome.artifact_name, outcome.previous_body, replace_existing=True
+        )
+        return DISCARD_UPDATE_DETAIL
 
 
 def _plan_digest(
     steps: tuple[PlannedStep, ...],
     artifacts: tuple[str, ...],
     test_condition: str,
+    conditions: tuple[AcceptanceCondition, ...],
 ) -> str:
-    """The digest a later start re-derives. Canonical JSON, as everywhere else."""
+    """The digest a later start re-derives. Canonical JSON, as everywhere else.
+
+    ``v`` moved from 1 to 2 when the acceptance conditions joined the payload.
+    The version is inside the digest rather than beside it so a run planned
+    under the old shape cannot accidentally re-derive to the new one: it
+    simply does not match, and a mismatch is a refusal with a sentence.
+    """
     return hashlib.sha256(
         canonical_json_bytes(
             {
+                "acceptance": _acceptance_payload(conditions),
                 "artifacts": list(artifacts),
-                "steps": [
-                    {"arguments": step.digest, "tool": step.tool.id.value}
-                    for step in steps
-                ],
+                "steps": [{"arguments": step.digest, "tool": step.tool.id.value} for step in steps],
                 "test_condition": test_condition,
-                "v": 1,
+                "v": 2,
             }
         )
     ).hexdigest()
+
+
+def _acceptance_payload(
+    conditions: tuple[AcceptanceCondition, ...],
+) -> list[dict[str, object]]:
+    """The conditions as the digest and the row both see them: kind + arguments."""
+    return [
+        {"arguments": condition.argument_map, "kind": condition.kind.value}
+        for condition in conditions
+    ]
+
+
+def _acceptance_json(conditions: tuple[AcceptanceCondition, ...]) -> str:
+    """The stored form: a canonical JSON object wrapping the condition list.
+
+    An object rather than a bare array because
+    :func:`station_api.strict_json.canonical_json_bytes` canonicalises
+    documents, and because a wrapper leaves room for a later revision to say
+    something *about* the list without changing what one entry looks like.
+    """
+    return canonical_json_bytes(
+        {"conditions": _acceptance_payload(conditions)}
+    ).decode("utf-8")
+
+
+def _acceptance_from_json(raw: str) -> tuple[AcceptanceCondition, ...]:
+    """Read the stored conditions back, re-validating every one of them.
+
+    Re-validated rather than trusted, for :meth:`_recorded_arguments`'s
+    reason: a row edited underneath a run must not change what the run is
+    judged by. A row this function cannot read produces **no** conditions,
+    which reports ``not_implemented`` and keeps the gate closed - the failure
+    direction that cannot turn an unreadable plan into a passed one.
+    """
+    try:
+        stored = json.loads(raw)
+    except ValueError:  # pragma: no cover - written by this module only
+        return ()
+    if not isinstance(stored, dict):  # pragma: no cover - same
+        return ()
+    entries = stored.get("conditions")
+    if not isinstance(entries, list):  # pragma: no cover - same
+        return ()
+    conditions: list[AcceptanceCondition] = []
+    for entry in entries:
+        if not isinstance(entry, dict):  # pragma: no cover - same
+            return ()
+        try:
+            conditions.append(
+                acceptance.bind_condition(
+                    str(entry.get("kind", "")), dict(entry.get("arguments", {}))
+                )
+            )
+        except (ToolRegistryError, ToolArgumentError):
+            return ()
+    return tuple(conditions)
 
 
 def _artifact_set_digest(files: tuple[workspace.WorkspaceFile, ...]) -> str:

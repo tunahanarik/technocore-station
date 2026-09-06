@@ -113,11 +113,16 @@ const BASE: OpenCodeStatus = {
   protocol_context: {
     protocols: ["responses", "messages", "chat_completions"],
     streaming_supported: false,
+    // Kept `false` on purpose. The panel's wording is derived from this
+    // value now, so this fixture is what proves the "arac cagrisi: yok"
+    // branch still reads from the wire; the measured case is fixtured
+    // separately below.
     tool_calls_supported: false,
     deferral:
       "Akis (streaming) ve arac cagrisi bu surumde yoktur: resmi belgede bu iki bicimin sozlesmesi yayimlanmamis, tahmin edilmemistir. Sozlesme yayimlandiginda yurutucu paketinin isidir.",
     shape_provenance:
       "Uc protokol ailesinin govde bicimi OpenCode belgelerinde yayimlanmis degildir. Station, endpoint adlarinin isaret ettigi ust protokol ailelerinin bilinen non-streaming bicimini kullanir.",
+    tool_call_provenance: "",
   },
 };
 
@@ -435,6 +440,43 @@ describe("OpenCode honest status", () => {
     expect(screen.getByText(BASE.protocol_context.deferral)).toBeInTheDocument();
     expect(screen.getByText(BASE.protocol_context.shape_provenance)).toBeInTheDocument();
     expect(screen.getByText(/akis: yok · arac cagrisi: yok/)).toBeInTheDocument();
+  });
+
+  /**
+   * The other half of the branch, and the reason this pair exists.
+   *
+   * The panel printed "arac cagrisi: yok" unconditionally, and `types.ts`
+   * mirrored the field as a literal `false`. ADR-0012 measured the contract
+   * and the wire started saying `true`; nothing on this screen changed,
+   * because nothing on this screen was reading the value. The test above
+   * fixtures `false` and this one fixtures `true`, so the wording is now
+   * pinned to the wire in both directions - a panel that went back to a
+   * constant fails one of the two whichever constant it chose.
+   */
+  it("says the tool-call shape was measured, and shows where, when the wire says so", async () => {
+    stub({
+      ...BASE,
+      protocol_context: {
+        ...BASE.protocol_context,
+        tool_calls_supported: true,
+        tool_call_provenance:
+          "TEST-ONLY: Arac cagrisi bicimi hesap sahibinin kendi anahtariyla olculdu; olcum yalnizca bu protokol ailesi icindir.",
+      },
+    });
+    render(<OpenCodeConnectionPanel />);
+    await ready();
+
+    expect(screen.getByTestId("opencode-protocol-summary")).toHaveTextContent(
+      "arac cagrisi: olculdu",
+    );
+    // A supported format with no provenance beside it would be exactly the
+    // unsourced claim this product refuses, so the sentence travels with the
+    // capability rather than under it.
+    expect(screen.getByTestId("opencode-tool-call-provenance")).toHaveTextContent(
+      "hesap sahibinin kendi anahtariyla olculdu",
+    );
+    // Streaming is a `false` literal on the wire and stays absent regardless.
+    expect(screen.getByTestId("opencode-protocol-summary")).toHaveTextContent("akis: yok");
   });
 
   it("says a connected key is not permission to share files", async () => {

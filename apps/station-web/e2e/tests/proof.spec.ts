@@ -318,6 +318,10 @@ const SURFACE = {
     agent_can_raise_ceiling: false,
   },
   tools: [] as unknown[],
+  // The closed acceptance registry (Paket H4). Empty here because this suite
+  // never composes a plan; the shape has to be present all the same, since
+  // the client validates the whole document before React sees it.
+  acceptance_checks: [] as unknown[],
   honesty: RUN_HONESTY,
   stop_statement: "TEST-ONLY: Durdur, sonraki arac cagrisini engeller.",
   interrupted_runs: [] as unknown[],
@@ -402,7 +406,7 @@ test.describe("Kanit calisma alani", () => {
 
     // Nor may anything on the page announce the derived state as reachable.
     await expect(page.getByTestId("proof-publish-unreachable")).toContainText(
-      "tasiyan bir kullanici yolu bu surumde yoktur",
+      "kanittan turetilir ve istenemez",
     );
   });
 

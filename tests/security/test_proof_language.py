@@ -35,9 +35,12 @@ from station_api.agent.language import FORBIDDEN_PHRASES as AGENT_FORBIDDEN_PHRA
 from station_api.evidence.language import (
     FORBIDDEN_PHRASES as EVIDENCE_FORBIDDEN_PHRASES,
 )
+from station_api.modules.registry import ModuleId
 from station_api.proof import bundle as bundle_module
 from station_api.proof import service as service_module
+from station_api.proof.artifacts import EXCLUSION_SENTENCES
 from station_api.proof.language import (
+    BODY_SCOPE_SENTENCE,
     BUNDLE_SCOPE_SENTENCE,
     FORBIDDEN_PHRASES,
     HASH_SCOPE_SENTENCE,
@@ -49,9 +52,12 @@ from station_api.proof.language import (
     find_forbidden_phrases,
     neutralise,
 )
+from station_api.tasks.sources import TaskSourceId
 from station_api.workscan.language import (
     FORBIDDEN_PHRASES as SCAN_FORBIDDEN_PHRASES,
 )
+
+from tests.security.agent_fixtures import write_plan
 
 pytestmark = pytest.mark.security
 
@@ -543,3 +549,130 @@ def test_the_service_neutralises_a_users_note_before_quoting_it(
         assert "assert_no_forbidden_claim" in calls, name
 
     assert service_module.ACCEPTED_WRITE_OUTCOME == "accepted"
+
+
+# ---------------------------------------------------------------------------
+# The wording that arrived with the artifact bodies
+# ---------------------------------------------------------------------------
+#
+# Carrying a file's own text inside a document this product authors puts the
+# claim/data split under a new kind of pressure. The sentences *around* the
+# body are ours and fail closed; the body is the user's and may neither refuse
+# the bundle nor be quietly edited - the second half is new, and it is the
+# digest that forces it.
+
+
+def test_the_body_wording_passes_the_guard_it_is_written_under() -> None:
+    """Our new sentences, checked against our own registry.
+
+    A guard whose permitted wording could not pass it is a guard somebody edits
+    the guard for, which is why the earlier sentences are checked this way too.
+    """
+    assert find_forbidden_phrases(BODY_SCOPE_SENTENCE) == ()
+    for sentence in EXCLUSION_SENTENCES:
+        assert find_forbidden_phrases(sentence) == (), sentence
+
+    # And they say the three things a reader needs when somebody else's text
+    # turns up inside a document with this product's name on it.
+    assert "bu urunun cumlesi degildir" in BODY_SCOPE_SENTENCE
+    assert "kendi ozetidir" in BODY_SCOPE_SENTENCE
+    assert "adiyla ve nedeniyle listelenir" in BODY_SCOPE_SENTENCE
+
+
+def test_every_sentence_this_package_writes_is_under_the_guard() -> None:
+    """The registry the builder checks has to be the whole set.
+
+    ``PRODUCT_SENTENCES`` is what :func:`assert_product_language` walks. A
+    sentence written into a bundle and left out of that tuple is a sentence
+    nothing checks - and the eight exclusion reasons are read at exactly the
+    moment something is missing, which is the worst possible place for an
+    over-claim to sit unchecked.
+    """
+    assert BODY_SCOPE_SENTENCE in bundle_module.PRODUCT_SENTENCES
+    for sentence in EXCLUSION_SENTENCES:
+        assert sentence in bundle_module.PRODUCT_SENTENCES
+
+
+def test_an_over_claim_in_an_exclusion_reason_refuses_the_bundle(
+    proof, task, monkeypatch: pytest.MonkeyPatch  # type: ignore[no-untyped-def]
+) -> None:
+    """The mutation control, aimed at the newest sentences rather than the oldest.
+
+    The hash-scope sentence has been under this guard since the package was
+    written. The exclusion reasons arrived with the bodies, and a tuple built
+    at import is exactly the kind of thing a later edit adds a sentence to
+    without adding it to the guard. Mutated, an exclusion reason that
+    over-claims is refused before a byte is produced; with the guard turned
+    off, it reaches the document.
+    """
+    over_claim = "Bu dosya icin denetim basariyla kosuldu."
+    monkeypatch.setattr(
+        bundle_module,
+        "PRODUCT_SENTENCES",
+        (*bundle_module.PRODUCT_SENTENCES, over_claim),
+    )
+
+    with pytest.raises(ForbiddenClaimError):
+        proof.build(task.id)
+
+    monkeypatch.setattr(
+        bundle_module, "assert_no_forbidden_claim", lambda text, *, where: None
+    )
+    assert proof.build(task.id).sha256
+
+
+def test_a_forbidden_phrase_inside_a_produced_file_neither_refuses_nor_is_masked(
+    proof, agent, task  # type: ignore[no-untyped-def]
+) -> None:
+    """Where the claim/data split meets the hash contract.
+
+    Two things must both hold, and they pull in opposite directions. A phrase
+    in a file the run produced may not refuse the bundle - a keyboard must not
+    be able to lock a person out of their own proof, which is the lesson
+    ``evidence/language.py`` records. And it may not be *neutralised* either,
+    which is what every other imported string in this package goes through:
+    masking it would change the bytes under a digest that describes the file,
+    and the entry would stop being checkable.
+
+    So the phrase survives in the body, ``NEUTRALISED_MARK`` does not appear in
+    it, and the finding is reported beside it instead.
+    """
+    phrase = PROOF_FORBIDDEN_PHRASES[0]
+    body = f"TEST-ONLY not. {phrase}."
+    agent.start_run(
+        write_plan(agent, task.id, name="not.txt", body=body, expected=("not.txt",))
+    )
+
+    document = proof.build(task.id).document
+    entry = next(
+        item for item in document["artifacts"]["files"] if item["name"] == "not.txt"
+    )
+
+    assert entry["content"] == body
+    assert NEUTRALISED_MARK not in str(entry["content"])
+    assert entry["content_claim_phrases"] == [phrase]
+
+
+def test_a_task_title_carrying_a_phrase_is_still_neutralised(
+    proof, tasks, agent  # type: ignore[no-untyped-def]
+) -> None:
+    """The other half of the split, unchanged by any of this.
+
+    A title is rendered into this product's own sentences and tables, so it is
+    still swept, neutralised and bounded. Only a **body** is exempt, and only
+    because a digest describes it. Asserted here so the exemption cannot
+    quietly widen into "imported text is verbatim now".
+    """
+    phrase = PROOF_FORBIDDEN_PHRASES[0]
+    view = tasks.open_task(
+        module_id=ModuleId.AGENT_WORKSPACE,
+        source=TaskSourceId.OPERATOR_REQUEST,
+        content=TEST_ONLY_CONTENT,
+        title=f"TEST-ONLY {phrase}",
+    )
+    agent.start_run(write_plan(agent, view.id))
+
+    document = proof.build(view.id).document
+
+    assert NEUTRALISED_MARK in document["task"]["title"]
+    assert find_forbidden_phrases(document["task"]["title"]) == ()

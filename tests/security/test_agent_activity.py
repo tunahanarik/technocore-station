@@ -60,6 +60,14 @@ EXPECTED_CHAIN_MEMBERS = frozenset(
 
 #: The events that stay in the timeline only. Written out so a later commit
 #: that promoted one of them into the never-pruned chain is a visible change.
+#: Package H4 added three, and all three are timeline-only on purpose.
+#:
+#: A model turn is not a decision point. What *would* be one - a model asking
+#: for a capability this build does not have - is already ``permission_denied``
+#: and already in the chain, and the planner raises that member rather than a
+#: new one. Adding ``model_called`` to the chain instead would put a row in a
+#: never-pruned ledger for every turn of a conversation, which is exactly the
+#: volume problem ADR-0008 6 separated the two layers to avoid.
 EXPECTED_TIMELINE_ONLY = frozenset(
     {
         "run_planned",
@@ -71,6 +79,9 @@ EXPECTED_TIMELINE_ONLY = frozenset(
         "run_stopped",
         "run_resumed",
         "run_finished",
+        "model_called",
+        "model_plan_proposed",
+        "model_session_ended",
     }
 )
 
@@ -186,7 +197,19 @@ def test_the_step_by_step_actions_stay_out_of_the_chain() -> None:
 
 
 def test_there_is_no_model_actor() -> None:
-    """The timeline cannot attribute anything to a model, because there is none."""
+    """The timeline attributes nothing to a model, and now that is a decision.
+
+    The docstring used to read "because there is none", which stopped being
+    the reason when Package H4 opened the model lane. The assertion is
+    unchanged and the rule is deliberate: Station makes the request, Station
+    writes the row, and a person decides what happens to what came back. An
+    actor named for the model would say the model did something on its own,
+    which is the one thing the planning lane is built to make untrue.
+
+    **Where** a plan came from is not lost by this: it is in the *action* -
+    ``model_plan_proposed`` - so the timeline can still tell a model-proposed
+    plan from one a person typed.
+    """
     assert {actor.value for actor in ActivityActor} == {"user", "station_runner"}
 
 

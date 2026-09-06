@@ -19,6 +19,21 @@ waved at - but a zip buys no behaviour, and
 ``test_the_module_has_no_archive_or_link_creating_helper`` is a test that reads
 names. Producing none means the surface never exists.
 
+The bundle carries the work, not a description of it
+-----------------------------------------------------
+An independent review measured what a person actually received when they
+downloaded a bundle: ``{"contains_filename": true, "contains_artifact_body":
+false}``. Every artifact entry held a name, a byte count and a digest, and the
+report or note the run had produced stayed on disk. That is an inventory, and
+the request it was built for was "do the work and hand me the result".
+
+Since version 2 each entry carries the file's text as well, verbatim, so that
+``sha256(content)`` is the digest printed beside it.
+:mod:`station_api.proof.artifacts` holds the reading, the ceilings and the
+reasons a body is left out; :func:`verify_body_digests` is the check that says
+the two halves of an entry agree. Nothing about the delivery changed: still no
+path, still no archive, still two plain-text formats handed to the browser.
+
 Determinism, unconditionally
 -----------------------------
 The same task, artifacts and runs produce the same bytes on every call. JSON
@@ -57,19 +72,25 @@ import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from station_api.agent.service import (
     TEST_RESULT_DETAIL,
     TEST_RESULT_STATE,
     RunView,
 )
-from station_api.agent.workspace import WorkspaceFile
 from station_api.digests import domain_digest_bytes
 from station_api.evidence.export import escape_markdown
 from station_api.modules.completion import ModuleCompletion
 from station_api.modules.fields import FIELD_DETAIL
+from station_api.proof.artifacts import (
+    BODY_EMBEDDED,
+    CONTENT_ENCODING,
+    EXCLUSION_SENTENCES,
+    ArtifactBody,
+)
 from station_api.proof.language import (
+    BODY_SCOPE_SENTENCE,
     BUNDLE_SCOPE_SENTENCE,
     HASH_SCOPE_SENTENCE,
     assert_no_forbidden_claim,
@@ -97,7 +118,12 @@ BUNDLE_MEDIA_TYPE: dict[str, str] = {
 
 #: Bumped when the document's shape changes, so an old file is never read
 #: under new rules.
-BUNDLE_VERSION = 1
+#:
+#: ``2`` is the version in which an artifact entry began carrying the file's
+#: **body** beside its name and digest. A reader that treats a version-1
+#: document as though it had bodies would report every artifact as excluded;
+#: the number is what stops it.
+BUNDLE_VERSION = 2
 
 BUNDLE_KIND = "technocore-station.proof-bundle"
 
@@ -150,10 +176,17 @@ REPRODUCTION_DETAIL = (
 PRODUCT_SENTENCES: tuple[str, ...] = (
     HASH_SCOPE_SENTENCE,
     BUNDLE_SCOPE_SENTENCE,
+    BODY_SCOPE_SENTENCE,
     INDEPENDENT_CHECK_DETAIL,
     EXIT_CODE_DETAIL,
     REPRODUCTION_DETAIL,
     TEST_RESULT_DETAIL,
+    # Eight more, one per reason a body is left out. They are sentences this
+    # product writes about its own refusals, so they belong under the same
+    # guard as the rest - and a reason that over-claimed would be the worst
+    # possible place for one, since it is read at the moment something is
+    # missing.
+    *EXCLUSION_SENTENCES,
 )
 
 #: Longest interpolated value kept in a bundle sentence.
@@ -213,7 +246,26 @@ def assert_product_language(*, where: str) -> None:
         assert_no_forbidden_claim(sentence, where=where)
 
 
-def artifact_set_sha256(files: Sequence[WorkspaceFile]) -> str:
+class NamedDigest(Protocol):
+    """A name and the digest of the bytes behind it, and nothing more.
+
+    Written as a protocol rather than as ``WorkspaceFile`` because the set
+    digest now has two callers holding two different objects - the agent's
+    listing and this package's :class:`~station_api.proof.artifacts.ArtifactBody`
+    - and the number they compute has to be the same number. Naming the two
+    fields it actually reads is what keeps that true: a structure that grows a
+    third field cannot change the digest by accident, because the digest
+    cannot see the third field.
+    """
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def sha256(self) -> str: ...
+
+
+def artifact_set_sha256(files: Sequence[NamedDigest]) -> str:
     """One digest over the whole produced set, so a review has one anchor.
 
     Byte-for-byte the computation ``AgentService`` already performs when a run
@@ -244,15 +296,68 @@ def _iso(value: datetime | None) -> str | None:
     return None if value is None else value.isoformat()
 
 
-def _artifact_entries(files: Sequence[WorkspaceFile]) -> list[dict[str, Any]]:
+def _artifact_entries(artifacts: Sequence[ArtifactBody]) -> list[dict[str, Any]]:
+    """One entry per file: what it is called, how big it is, and what it says.
+
+    ``name`` goes through :func:`safe_text` and ``content`` deliberately does
+    not. The two are different kinds of value and the difference is the hash
+    contract: a name is a label this document renders into its own sentences,
+    while a body is the artifact itself and has to survive
+    ``sha256(content.encode("utf-8")) == sha256`` unchanged. Sweeping it,
+    masking a phrase inside it or truncating it would each produce a document
+    that carries a digest and a body that disagree.
+
+    In practice the name loses nothing: every workspace name has already been
+    rebuilt from ``[A-Za-z0-9._-]`` and capped well under
+    :data:`MAX_BUNDLE_TEXT_CHARS`, so :func:`safe_text` is the identity on it.
+    It is applied anyway, because "the names happen to be safe" is a property
+    of another module.
+    """
     return [
         {
             "name": safe_text(item.name),
             "byte_count": item.byte_count,
             "sha256": item.sha256,
+            "content_state": item.state,
+            # ``None`` rather than an omitted key when there is no body, so a
+            # reader sees the decision instead of a missing field - the rule
+            # the two unproduced claims are written under.
+            "content_encoding": CONTENT_ENCODING if item.embedded else None,
+            "content": item.content,
+            "content_detail": item.detail,
+            "content_claim_phrases": list(item.claim_phrases),
         }
-        for item in files
+        for item in artifacts
     ]
+
+
+def verify_body_digests(document: dict[str, Any]) -> tuple[str, ...]:
+    """Every embedded body whose bytes do not hash to the digest beside it.
+
+    The reproduction instruction, executable. ``REPRODUCTION_DETAIL`` tells a
+    reader to compare each file's SHA-256 against their own copy; with the
+    bodies in the document there is no longer any need for a second copy to do
+    the first half of that, and a check nobody can run is a check nobody runs.
+
+    Returns names rather than raising, and returns **all** of them: a caller
+    that stopped at the first mismatch would report one corrupt entry in a
+    document that had several.
+    """
+    mismatched: list[str] = []
+    for entry in document.get("artifacts", {}).get("files", []):
+        if entry.get("content_state") != BODY_EMBEDDED:
+            continue
+        content = entry.get("content")
+        if not isinstance(content, str):
+            mismatched.append(str(entry.get("name")))
+            continue
+        payload = content.encode(CONTENT_ENCODING)
+        if (
+            hashlib.sha256(payload).hexdigest() != entry.get("sha256")
+            or len(payload) != entry.get("byte_count")
+        ):
+            mismatched.append(str(entry.get("name")))
+    return tuple(mismatched)
 
 
 def _run_entry(view: RunView) -> dict[str, Any]:
@@ -288,15 +393,21 @@ def _missing_entries(
     gate: TaskGateStatus,
     completion: ModuleCompletion,
     runs: Sequence[RunView],
-    files: Sequence[WorkspaceFile],
+    artifacts: Sequence[ArtifactBody],
 ) -> list[dict[str, str]]:
     """Every gap, named. Absence is stated, never left to be noticed.
 
-    The list is built from four independent sources rather than from one
+    The list is built from five independent sources rather than from one
     summary, because a summary is precisely what this product refuses to hand
     a reader: an evidence field that is blocked, a module requirement that
-    cannot be produced, a run that did not finish and a promised artifact that
-    is not on disk are four different problems with four different remedies.
+    cannot be produced, a run that did not finish, a promised artifact that is
+    not on disk and a file whose **body** could not be carried are five
+    different problems with five different remedies.
+
+    The fifth is the newest and the easiest to have left out. A file listed
+    with a name, a size and a digest but no contents looks complete in a table;
+    naming it here is what makes the absence something a reader meets rather
+    than something they have to notice.
     """
     entries: list[dict[str, str]] = []
 
@@ -320,7 +431,17 @@ def _missing_entries(
                 }
             )
 
-    present = {item.name for item in files}
+    for item in artifacts:
+        if not item.embedded:
+            entries.append(
+                {
+                    "key": f"artifact_body.{safe_text(item.name)}",
+                    "state": item.state,
+                    "detail": item.detail,
+                }
+            )
+
+    present = {item.name for item in artifacts}
     for view in runs:
         if view.phase.value != "completed":
             entries.append(
@@ -364,7 +485,7 @@ def build_document(
     gate: TaskGateStatus,
     completion: ModuleCompletion,
     runs: Sequence[RunView],
-    files: Sequence[WorkspaceFile],
+    artifacts: Sequence[ArtifactBody],
 ) -> dict[str, Any]:
     """Assemble the bundle. Computes no verdict of its own.
 
@@ -393,10 +514,18 @@ def build_document(
             "updated_at": _iso(task.updated_at),
         },
         "artifacts": {
-            "file_count": len(files),
-            "total_bytes": sum(item.byte_count for item in files),
-            "set_sha256": artifact_set_sha256(files),
-            "files": _artifact_entries(files),
+            "file_count": len(artifacts),
+            "total_bytes": sum(item.byte_count for item in artifacts),
+            "set_sha256": artifact_set_sha256(artifacts),
+            #: How much of the produced set is actually **in** this document.
+            #: Stated as a number beside the total rather than left to be
+            #: derived, so "the bundle carries the work" is checkable at a
+            #: glance and a bundle that carries none of it cannot look full.
+            "embedded_file_count": sum(1 for item in artifacts if item.embedded),
+            "embedded_bytes": sum(
+                item.byte_count for item in artifacts if item.embedded
+            ),
+            "files": _artifact_entries(artifacts),
         },
         "evidence_fields": [
             {
@@ -434,11 +563,12 @@ def build_document(
             },
         },
         "missing": _missing_entries(
-            gate=gate, completion=completion, runs=runs, files=files
+            gate=gate, completion=completion, runs=runs, artifacts=artifacts
         ),
         "notes": {
             "hash_scope": HASH_SCOPE_SENTENCE,
             "bundle_scope": BUNDLE_SCOPE_SENTENCE,
+            "body_scope": BODY_SCOPE_SENTENCE,
             "reproduction": REPRODUCTION_DETAIL,
         },
     }
@@ -450,11 +580,19 @@ def build_bundle(
     gate: TaskGateStatus,
     completion: ModuleCompletion,
     runs: Sequence[RunView],
-    files: Sequence[WorkspaceFile],
+    artifacts: Sequence[ArtifactBody],
 ) -> ProofBundle:
-    """The document plus the digest a single-use approval binds to."""
+    """The document plus the digest a single-use approval binds to.
+
+    With the bodies inside the document, that digest now covers the artifact
+    *contents* and not only their names and digests. The single-use approval
+    therefore authorises exactly those bytes: a file edited between the
+    preparation and the delivery changes the body, which changes the document,
+    which changes ``bundle_sha256``, and the approval no longer matches. The
+    binding was transitive through the set digest before; it is direct now.
+    """
     document = build_document(
-        task=task, gate=gate, completion=completion, runs=runs, files=files
+        task=task, gate=gate, completion=completion, runs=runs, artifacts=artifacts
     )
     return ProofBundle(
         task_id=task.id,
@@ -478,12 +616,78 @@ def _markdown_table(rows: Sequence[tuple[str, str]]) -> list[str]:
     ]
 
 
+def _code_fence(body: str) -> str:
+    """A fence no line of ``body`` can close.
+
+    CommonMark ends a fenced block at the first line whose fence is **at least
+    as long** as the opening one, so a body containing ```` ``` ```` breaks out
+    of a three-backtick fence and everything after it is read as Markdown -
+    which for an artifact this product did not write is an injection into a
+    document a person is about to forward. Counting the longest run and adding
+    one removes the case rather than escaping it, and escaping is not available
+    here anyway: an escaped body is a different body and would not hash.
+    """
+    longest = 0
+    run = 0
+    for character in body:
+        run = run + 1 if character == "`" else 0
+        longest = max(longest, run)
+    return "`" * max(3, longest + 1)
+
+
+def _body_section(document: dict[str, Any]) -> list[str]:
+    """The artifacts' own text, fenced, with every absence named.
+
+    Fenced rather than escaped, for the reason :func:`_artifact_entries`
+    records: this is the file, and a file that went through
+    :func:`escape_markdown` would have its newlines replaced by spaces and its
+    metacharacters backslashed - a readable rendering of something that is no
+    longer the artifact, under the artifact's digest.
+
+    Everything *around* the body is escaped as usual, and the fence is
+    computed per body so nothing inside one can end it.
+    """
+    lines: list[str] = ["## Dosya govdeleri", ""]
+    files = document["artifacts"]["files"]
+    if not files:
+        return [*lines, "Calisma alaninda dosya yok.", ""]
+
+    for item in files:
+        name = escape_markdown(str(item["name"]))
+        lines += [
+            f"### `{name}`",
+            "",
+            f"- Bayt: {item['byte_count']}",
+            f"- SHA-256: `{escape_markdown(str(item['sha256']))}`",
+            "",
+        ]
+        if item["content_state"] != BODY_EMBEDDED:
+            lines += [escape_markdown(str(item["content_detail"])), ""]
+            continue
+        if item["content_claim_phrases"]:
+            found = ", ".join(
+                escape_markdown(str(phrase)) for phrase in item["content_claim_phrases"]
+            )
+            lines += [
+                "- Bu dosyanin metninde, bu urunun kendi cumlelerinde "
+                f"kullanmadigi ifadeler gecti: {found}. Metin degistirilmeden "
+                "aktarildi.",
+                "",
+            ]
+        body = str(item["content"])
+        fence = _code_fence(body)
+        lines += [fence, *body.split("\n"), fence, ""]
+    return lines
+
+
 def render_markdown(document: dict[str, Any]) -> bytes:
     """The human-readable format. Fixed sections, fixed order, ``\\n`` endings.
 
-    A **summary**, and it says so: the JSON carries the same facts in a shape
-    a checker can read, and both carry the artifact digests, because a summary
-    nothing can be re-derived from is decoration.
+    No longer only a summary. The tables above are still a summary and still
+    say so, and the last section is the artifacts themselves - because a
+    document a person downloads in order to *have their work* and which
+    contains only a description of it is the defect this package was measured
+    to have.
     """
     task = document["task"]
     artifacts = document["artifacts"]
@@ -497,6 +701,8 @@ def render_markdown(document: dict[str, Any]) -> bytes:
         f"> {escape_markdown(document['notes']['hash_scope'])}",
         "",
         f"> {escape_markdown(document['notes']['bundle_scope'])}",
+        "",
+        f"> {escape_markdown(document['notes']['body_scope'])}",
         "",
         "## Gorev",
         "",
@@ -518,17 +724,20 @@ def render_markdown(document: dict[str, Any]) -> bytes:
                 ("Dosya sayisi", str(artifacts["file_count"])),
                 ("Toplam bayt", str(artifacts["total_bytes"])),
                 ("Kume ozeti (SHA-256)", str(artifacts["set_sha256"])),
+                ("Govdesi pakette olan dosya", str(artifacts["embedded_file_count"])),
+                ("Pakete alinan govde bayti", str(artifacts["embedded_bytes"])),
             ]
         ),
     ]
 
     if artifacts["files"]:
         lines += [
-            "| Dosya | Bayt | SHA-256 |",
-            "| --- | --- | --- |",
+            "| Dosya | Bayt | SHA-256 | Govde |",
+            "| --- | --- | --- | --- |",
             *(
                 f"| {escape_markdown(str(item['name']))} | {item['byte_count']} | "
-                f"`{escape_markdown(str(item['sha256']))}` |"
+                f"`{escape_markdown(str(item['sha256']))}` | "
+                f"{escape_markdown(str(item['content_state']))} |"
                 for item in artifacts["files"]
             ),
             "",
@@ -596,6 +805,7 @@ def render_markdown(document: dict[str, Any]) -> bytes:
         "",
         escape_markdown(document["notes"]["reproduction"]),
         "",
+        *_body_section(document),
     ]
 
     return "\n".join(lines).encode("utf-8")
@@ -628,6 +838,7 @@ __all__ = [
     "REPRODUCTION_DETAIL",
     "BundleFormat",
     "BundleFormatError",
+    "NamedDigest",
     "ProofBundle",
     "artifact_set_sha256",
     "assert_product_language",
@@ -638,4 +849,5 @@ __all__ = [
     "render_json",
     "render_markdown",
     "safe_text",
+    "verify_body_digests",
 ]

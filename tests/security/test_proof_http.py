@@ -25,6 +25,7 @@ is exactly where a project stops inheriting them by accident.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import uuid
 from datetime import UTC, datetime
@@ -43,7 +44,11 @@ from station_api.db.models import EvidenceRecord
 from station_api.modules.registry import ModuleId
 from station_api.proof.bundle import BUNDLE_FORMATS, BUNDLE_STEM
 from station_api.proof.language import BUNDLE_SCOPE_SENTENCE, HASH_SCOPE_SENTENCE
-from station_api.routes.proof import DELIVERED_AT_HEADER
+from station_api.routes.proof import (
+    ARTIFACT_BUNDLE_HEADER,
+    ARTIFACT_DIGEST_HEADER,
+    DELIVERED_AT_HEADER,
+)
 from station_api.schemas import EvidenceExportRequest, ProofShareRequest
 from station_api.tasks.service import TaskService
 from station_api.tasks.sources import TaskSourceId
@@ -66,6 +71,7 @@ EXPECTED_PATHS = {
     "/api/proof/{task_id}",
     "/api/proof/{task_id}/prepare",
     "/api/proof/{task_id}/share",
+    "/api/proof/{task_id}/artifact",
     "/api/proof/{task_id}/acceptance",
     "/api/proof/{task_id}/public-share",
 }
@@ -176,6 +182,10 @@ def test_every_proof_read_is_no_store(
     [
         ("prepare", None),
         ("share", {"share_token": "x", "format": "json", "acknowledged": True}),
+        (
+            "artifact",
+            {"share_token": "x", "name": "rapor.json", "acknowledged": True},
+        ),
         ("acceptance", {"bundle_sha256": "0" * 64}),
         ("public-share", {"evidence_id": "0" * 32}),
     ],
@@ -199,6 +209,10 @@ def test_every_state_changing_route_requires_csrf(
     ("suffix", "body"),
     [
         ("share", {"share_token": "x", "format": "json", "acknowledged": True}),
+        (
+            "artifact",
+            {"share_token": "x", "name": "rapor.json", "acknowledged": True},
+        ),
         ("acceptance", {"bundle_sha256": "0" * 64}),
         ("public-share", {"evidence_id": "0" * 32}),
     ],
@@ -629,3 +643,329 @@ def test_the_task_reports_the_fourth_field_as_available_now(
     assert payload["task"]["public_share_detail"].strip()
     # And it still does not gate finishing.
     assert "public_share" not in payload["task"]["blocking_fields"]
+
+
+# ---------------------------------------------------------------------------
+# Taking the file itself
+# ---------------------------------------------------------------------------
+#
+# The bundle is the document *about* a task. This is the report the run wrote.
+# An independent review measured that the second one could not be taken at all:
+# a download contained the artifact's name and digest and not its contents.
+
+#: A marker a substring search can find in a response body.
+TEST_ONLY_BODY_MARKER = "TEST-ONLY-http-artifact-body-4c71"
+
+#: 64 hex characters. The canary shape ``secret_scan`` refuses; never a key.
+TEST_ONLY_HTTP_CANARY = "f0e1d2c3" * 8
+
+
+def _run_producing(app: FastAPI, task_id: str, *, name: str, body: str) -> None:
+    agent: AgentService = app.state.agent
+    agent.start_run(
+        write_plan(agent, task_id, name=name, body=body, expected=(name,))
+    )
+
+
+def _artifact_task(app: FastAPI, *, name: str, body: str) -> str:
+    tasks: TaskService = app.state.tasks
+    view = tasks.open_task(
+        module_id=ModuleId.AGENT_WORKSPACE,
+        source=TaskSourceId.OPERATOR_REQUEST,
+        content=b"TEST-ONLY http artifact task",
+        title="TEST-ONLY cikti gorevi",
+    )
+    _run_producing(app, view.id, name=name, body=body)
+    return view.id
+
+
+def _take_artifact(
+    client: TestClient, csrf_token: str, task_id: str, name: str
+):  # type: ignore[no-untyped-def]
+    prepared = _prepare(client, csrf_token, task_id)
+    return client.post(
+        f"{PROOF_PREFIX}/{task_id}/artifact",
+        json={
+            "share_token": prepared["share_token"],
+            "name": name,
+            "acknowledged": True,
+        },
+        headers={CSRF: csrf_token},
+    )
+
+
+def test_the_downloaded_bundle_carries_the_produced_file_over_http(
+    client: TestClient, csrf_token: str, app: FastAPI
+) -> None:
+    """The measured defect, at the surface a person actually uses.
+
+    Asserted through the HTTP route rather than against the builder, because
+    the measurement that found this was taken on a download: what reached the
+    browser was an inventory. Both formats, since a person takes one of them.
+    """
+    body = f'{{"TEST_ONLY": "{TEST_ONLY_BODY_MARKER}"}}'
+    task_id = _artifact_task(app, name="rapor.json", body=body)
+
+    for bundle_format in BUNDLE_FORMATS:
+        prepared = _prepare(client, csrf_token, task_id)
+        response = client.post(
+            f"{PROOF_PREFIX}/{task_id}/share",
+            json={
+                "share_token": prepared["share_token"],
+                "format": bundle_format,
+                "acknowledged": True,
+            },
+            headers={CSRF: csrf_token},
+        )
+        assert response.status_code == 200, response.text
+        assert TEST_ONLY_BODY_MARKER in response.text, bundle_format
+
+
+def test_one_produced_file_is_handed_over_as_that_file(
+    client: TestClient, csrf_token: str, app: FastAPI
+) -> None:
+    """The response body **is** the artifact, with nothing wrapped around it.
+
+    Not JSON with the text inside a field: a person saves this response and
+    hashes it, and the number they get has to be the number the bundle printed.
+    Any envelope at all would break that, which is why the digest travels in a
+    header instead.
+    """
+    body = f'{{"TEST_ONLY": "{TEST_ONLY_BODY_MARKER}"}}'
+    task_id = _artifact_task(app, name="rapor.json", body=body)
+
+    response = _take_artifact(client, csrf_token, task_id, "rapor.json")
+
+    assert response.status_code == 200, response.text
+    assert response.content == body.encode("utf-8")
+    assert response.headers[ARTIFACT_DIGEST_HEADER] == hashlib.sha256(
+        body.encode("utf-8")
+    ).hexdigest()
+    assert len(response.headers[ARTIFACT_BUNDLE_HEADER]) == 64
+    assert response.headers[DELIVERED_AT_HEADER]
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert (
+        response.headers["content-disposition"]
+        == 'attachment; filename="rapor.json"'
+    )
+
+
+def test_an_artifact_is_never_served_as_markup(
+    client: TestClient, csrf_token: str, app: FastAPI
+) -> None:
+    """The one that would be a same-origin scripting hole.
+
+    A workspace name only has to survive ``[A-Za-z0-9._-]``, so ``rapor.html``
+    is a legal artifact and a run can write one. Station serves its own SPA
+    from this origin and has no CORS middleware by design, so a response that
+    let a browser render that file would put markup this product did not write
+    on this product's origin, with this session's cookie. The media type is
+    fixed, the disposition is ``attachment``, and ``nosniff`` closes the third
+    door.
+    """
+    body = "<script>TEST_ONLY=1</script>"
+    task_id = _artifact_task(app, name="rapor.html", body=body)
+
+    response = _take_artifact(client, csrf_token, task_id, "rapor.html")
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "text/plain; charset=utf-8"
+    assert response.headers["content-disposition"].startswith("attachment;")
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.content == body.encode("utf-8")
+
+
+def test_an_artifact_delivery_spends_the_approval_exactly_once(
+    client: TestClient, csrf_token: str, app: FastAPI
+) -> None:
+    """One approval, one file. The bundle route's rule, not a looser one.
+
+    The two download routes share the same spending path on purpose: an
+    artifact leaving this machine and a bundle leaving this machine are the
+    same event with different bytes, and a second route that spent tokens more
+    generously would be the quietest way to lose the property.
+    """
+    task_id = _artifact_task(app, name="rapor.json", body='{"TEST_ONLY": true}')
+    prepared = _prepare(client, csrf_token, task_id)
+    payload = {
+        "share_token": prepared["share_token"],
+        "name": "rapor.json",
+        "acknowledged": True,
+    }
+
+    first = client.post(
+        f"{PROOF_PREFIX}/{task_id}/artifact", json=payload, headers={CSRF: csrf_token}
+    )
+    second = client.post(
+        f"{PROOF_PREFIX}/{task_id}/artifact", json=payload, headers={CSRF: csrf_token}
+    )
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 409
+
+
+def test_a_refused_artifact_delivery_still_spends_the_token(
+    client: TestClient, csrf_token: str, app: FastAPI
+) -> None:
+    """A refusal is a use. Asking for a file that is not there burns the
+    approval, so a token cannot be probed name by name until one lands."""
+    task_id = _artifact_task(app, name="rapor.json", body='{"TEST_ONLY": true}')
+    prepared = _prepare(client, csrf_token, task_id)
+
+    missing = client.post(
+        f"{PROOF_PREFIX}/{task_id}/artifact",
+        json={
+            "share_token": prepared["share_token"],
+            "name": "yok.json",
+            "acknowledged": True,
+        },
+        headers={CSRF: csrf_token},
+    )
+    retry = client.post(
+        f"{PROOF_PREFIX}/{task_id}/artifact",
+        json={
+            "share_token": prepared["share_token"],
+            "name": "rapor.json",
+            "acknowledged": True,
+        },
+        headers={CSRF: csrf_token},
+    )
+
+    assert missing.status_code == 404
+    assert retry.status_code == 409
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["../rapor.json", "..\\rapor.json", "C:rapor.json", "alt/rapor.json", ""],
+)
+def test_a_name_carrying_path_syntax_never_reaches_a_handler(
+    client: TestClient, csrf_token: str, proof_task_id: str, name: str
+) -> None:
+    """Depth, not the defence.
+
+    The name never reaches the filesystem - it selects an entry from a document
+    built from the workspace listing - so none of these could traverse anything
+    even if they arrived. They are refused at the schema anyway, because a
+    request that *contains* a traversal is a request nobody should have to
+    reason about twice.
+    """
+    prepared = _prepare(client, csrf_token, proof_task_id)
+    response = client.post(
+        f"{PROOF_PREFIX}/{proof_task_id}/artifact",
+        json={
+            "share_token": prepared["share_token"],
+            "name": name,
+            "acknowledged": True,
+        },
+        headers={CSRF: csrf_token},
+    )
+
+    assert response.status_code == 422
+
+
+def test_an_artifact_whose_body_was_left_out_is_a_stated_refusal(
+    client: TestClient, csrf_token: str, app: FastAPI
+) -> None:
+    """A canary in a produced file, refused at the download rather than served.
+
+    The secret scan excludes the body from the bundle; this asserts the second
+    half - that the separate download cannot be used to walk around the
+    exclusion. The refusal carries the sentence that says why, and never the
+    value that caused it.
+    """
+    task_id = _artifact_task(
+        app, name="rapor.json", body=f'{{"TEST_ONLY_canary": "{TEST_ONLY_HTTP_CANARY}"}}'
+    )
+
+    response = _take_artifact(client, csrf_token, task_id, "rapor.json")
+
+    assert response.status_code == 409
+    assert TEST_ONLY_HTTP_CANARY not in response.text
+    assert "govdesi pakete alinmadi" in response.json()["detail"]
+
+
+def test_an_artifact_from_another_task_is_not_reachable_with_this_approval(
+    client: TestClient, csrf_token: str, app: FastAPI
+) -> None:
+    """The approval is bound to a task, and the name is scoped by it.
+
+    Two tasks, each with a file of the same name and different contents. An
+    approval minted for one cannot be spent against the other, and the name
+    resolves inside the bundle it was minted for rather than against a
+    directory.
+    """
+    first = _artifact_task(app, name="rapor.json", body='{"TEST_ONLY": "first"}')
+    second = _artifact_task(app, name="rapor.json", body='{"TEST_ONLY": "second"}')
+    prepared = _prepare(client, csrf_token, first)
+
+    crossed = client.post(
+        f"{PROOF_PREFIX}/{second}/artifact",
+        json={
+            "share_token": prepared["share_token"],
+            "name": "rapor.json",
+            "acknowledged": True,
+        },
+        headers={CSRF: csrf_token},
+    )
+
+    assert crossed.status_code == 409
+    # The *sentence* is asserted, not only the code. Without the task binding
+    # the request would still be refused - the second task's bundle hashes
+    # differently, so the digest comparison catches it - and a test that read
+    # only the status could not tell the two refusals apart. Measured: deleting
+    # the task check left this test green until this line was added.
+    assert crossed.json()["detail"] == "Bu onay baska bir goreve ait."
+    assert _take_artifact(client, csrf_token, second, "rapor.json").json() == {
+        "TEST_ONLY": "second"
+    }
+
+
+def test_the_plain_read_still_hands_over_no_body(
+    client: TestClient, csrf_token: str, app: FastAPI
+) -> None:
+    """The one route with no approval in front of it stays an inventory.
+
+    ``GET /api/proof/{task_id}`` is a read: no acknowledgement, no single-use
+    token, nothing spent. The bodies are inside the document it builds now, so
+    the projection onto the wire is the only thing keeping them off this
+    response - and a projection is exactly the kind of thing a later edit
+    widens with ``**entry``.
+
+    What the read does carry is the *absence*: a body left out is named in
+    ``missing`` like every other gap, so a person can see what will not be in
+    their download before they ask for it.
+    """
+    body = f'{{"TEST_ONLY": "{TEST_ONLY_BODY_MARKER}"}}'
+    task_id = _artifact_task(app, name="rapor.json", body=body)
+
+    response = client.get(f"{PROOF_PREFIX}/{task_id}", headers={CSRF: csrf_token})
+
+    assert response.status_code == 200, response.text
+    assert TEST_ONLY_BODY_MARKER not in response.text
+    payload = response.json()
+    assert [item["name"] for item in payload["artifacts"]] == ["rapor.json"]
+    assert all("content" not in item for item in payload["artifacts"])
+
+
+def test_the_read_names_a_body_it_could_not_carry(
+    client: TestClient, csrf_token: str, app: FastAPI
+) -> None:
+    """An exclusion reaches the screen through the gap list that already exists.
+
+    Reusing ``missing`` rather than adding a field to the artifact row is the
+    point: this product already has one place where every absence is named,
+    and a second one would be a second thing to remember to read.
+    """
+    task_id = _artifact_task(
+        app,
+        name="rapor.json",
+        body=f'{{"TEST_ONLY_canary": "{TEST_ONLY_HTTP_CANARY}"}}',
+    )
+
+    response = client.get(f"{PROOF_PREFIX}/{task_id}", headers={CSRF: csrf_token})
+    keys = {item["key"] for item in response.json()["missing"]}
+
+    assert "artifact_body.rapor.json" in keys
+    assert TEST_ONLY_HTTP_CANARY not in response.text

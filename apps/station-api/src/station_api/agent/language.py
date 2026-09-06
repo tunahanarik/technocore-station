@@ -100,10 +100,19 @@ RUN_HONESTY_SENTENCE = (
 )
 
 #: The second half, about what a stop actually stops.
+#:
+#: The last clause used to read "and the file it produced is removed from the
+#: workspace", which was true of one of the two writes and false of the other.
+#: A cancelled ``update_workspace_file`` call does not delete its target - the
+#: target is an **earlier, completed** step's output - it puts the previous
+#: bytes back. The old sentence promised a user that stopping a run could
+#: destroy work the run had already shown them, and for a while the code did
+#: exactly that.
 STOP_HONESTY_SENTENCE = (
     "Durdur, sonraki arac cagrisini engeller. Baslamis bir cagri kendi "
-    "adimini bitirir; iptalden sonra donen sonucu kaydedilmez ve urettigi "
-    "dosya calisma alanindan kaldirilir."
+    "adimini bitirir; iptalden sonra donen sonucu kaydedilmez. Adim yeni bir "
+    "dosya olusturduysa o dosya kaldirilir; var olan bir dosyanin ustune "
+    "yazdiysa onceki baytlar geri yuklenir."
 )
 
 #: Precomputed once. Each entry is the folded form of a forbidden phrase.

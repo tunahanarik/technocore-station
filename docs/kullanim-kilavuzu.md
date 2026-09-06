@@ -335,12 +335,17 @@ literal'dir, kayıt fonksiyonu veya plugin yolu yoktur, ve `git`, `commit`,
 kayıt olsa uygulama **başlamaz**. Bir araca **adres verilemez**: `path` ve
 `url` diye bir parametre tipi yoktur.
 
-**Tavan üç birimdir ve derleme zamanındadır:** en çok 32 araç çağrısı, en
-çok 120 saniye duvar saati, eşzamanlılık **1**. Token ve para birimi
-**reddedilmiştir** ve reddedildikleri adıyla yayımlanır — model yolu kapalı
-olduğu için sağlayıcıdan gelen bir kullanım değeri yoktur ve ölçülemeyen bir
-birimle ifade edilen tavan ilk ihtiyaçta "sınırsız"a yuvarlanır. Agent'ın
-tavanı okuyan veya yazan bir aracı yoktur.
+**Tavan dört birimdir ve derleme zamanındadır:** en çok 32 araç çağrısı,
+en çok 8 model çağrısı, en çok 120 saniye duvar saati, eşzamanlılık **1**.
+
+Token ve para birimi **reddedilmiştir** ve reddedildikleri adıyla yayımlanır.
+Gerekçesi değişti ve sertleşti: eskiden "model yolu kapalı olduğu için
+sağlayıcıdan gelen bir kullanım değeri yok" idi; sağlayıcı artık hem `usage`
+hem `cost` gönderiyor ve ikisi de **kaydediliyor**. Yine de tavan olmuyorlar,
+çünkü **karşı tarafın bildirdiği bir sayıyla ifade edilen tavan, karşı tarafın
+koyduğu tavandır.** Sayılan şey Station'ın kendi yaptığı istek sayısıdır.
+
+Agent'ın tavanı okuyan veya yazan bir aracı yoktur.
 
 **Çalışma alanı** `<veri dizini>/workspace/v1/<görev kimliği>/` altındadır ve
 dört katman korur: dosya adı süzülmez, **yeniden kurulur**; her okuma ve her
@@ -359,17 +364,26 @@ arşivinizi bu ürünün dışında bir kez siz açarsınız.
   Dolayısıyla **bu sürüm kod çalıştıramaz** ve çalıştırma gerektiren iş
   `blocked`/`review_needed`'da **durur**. Bu bir eksiklik değil, kayıtlı bir
   karardır (ADR-0008 §1).
-- **Model çağrısı yoktur.** "Model çıktısı doğrudan yürütülmez" burada boş
-  bir vaat değil, yapısal bir gerçektir: bu sürümde model çıktısı diye bir
-  şey yoktur. Bir "adım", bir kişinin yazdığı, kayıtlı bir araç kimliği ve
-  tipleri denetlenmiş argümanlardır.
-- **Başarı ölçütü kaydedilir ama koşulmaz.** Bu yüzden `test_result` alanı
-  `not_implemented` kalır ve görev `ready_to_publish`'e **geçemez**.
-  Çalıştırılmış ama test edilmemiş kod, test edilmiş kod değildir.
-- **`ready_to_publish`'e HTTP üzerinden geçilemiyor.** Kullanıcı geçişleri
-  onu taşımıyor; bu kapatılmış bir karar değil, **açık bir boşluktur** ve
-  [`proof-workspace.md`](proof-workspace.md) §10'da yazılıdır. Kullanıcının
-  isteyebileceği beş geçiş şunlardır: onaya al, incelemeye al, engellendi,
+- **Model plan önerir, çalıştırmaz.** Bu üç madde önce "model çağrısı
+  yoktur", "test sonucu hep `not_implemented` kalır" ve
+  "`ready_to_publish`'e geçilemez" diyordu; **üçü de artık yanlış** ve
+  ölçülerek düzeltildi (ADR-0012). Bugünkü gerçek şudur: model **öneri**
+  üretir, ve önerdiği her araç adı **kapalı registry'de** aranır, her
+  argüman **tipli doğrulamadan** geçer, hiçbir araç `path`/`url` almaz.
+  Öneri, elle yazılmış bir planın geçtiği **aynı dört onaydan** geçer ve
+  **model kendi planını onaylayamaz**. Yani "model çıktısı doğrudan
+  yürütülmez" hâlâ yapısal bir gerçektir — ama artık "model çıktısı diye bir
+  şey yok" diyerek değil, çıktıyı kapalı bir registry'den geçirerek.
+- **Başarı ölçütü artık koşulabiliyor.** Planınız kabul koşulu taşıyorsa
+  çalışma sonrası **gerçekten değerlendirilir** ve `test_result`
+  `passed`/`failed` üretir. `not_implemented` yalnız **koşulsuz** bir plan
+  için kalır, ve gerekçesini söyler. Koşullar planın özetinin **içindedir**:
+  onaydan sonra bir koşulu düzenlemek planı geçersiz kılar.
+- **`ready_to_publish` erişilebilir, ama istenebilir değil.** Yayın
+  hazırlığını değerlendiren bir yol vardır; fakat o isteğin gövdesinde
+  **hedef alanı yoktur**, yani hiçbir istek bu durumu **adıyla
+  isteyemez** — kapı kanıttan türetir. Kullanıcının doğrudan
+  isteyebileceği geçişler değişmedi: onaya al, incelemeye al, engellendi,
   başarısız, yayımlandı olarak işaretle.
 - **Yeniden başlatma hiçbir şeyi sürdürmez.** Kesilen çalışmalar listelenir;
   devam etmek bir kişinin işidir ve yalnız zaten onaylanmış kapsamda ilerler.
@@ -563,16 +577,20 @@ Ama panelin kendisi de sınırlarını söyler ve bu kılavuz onları tekrarlar:
 - **Kimlik doğrulama başlığı doğrulanmamıştır.** `Authorization: Bearer`
   varsayımı resmî belgede doğrulanmamıştır ve panelde de böyle gösterilir.
   Gerçek bir anahtarın çalışıp çalışmadığı hesap sahibinindir.
-- **Akış ve araç çağrısı bu sürümde yoktur.** İkisi de birer değer değil,
-  birer **tip** olarak `false`'tur; yani bu cümleler bayatlayamaz. Bir
-  sağlayıcının aracı çağırmak için kullanacağı tel formatı yayımlanmadığı
-  için uydurulmamıştır.
+- **Akış (streaming) bu sürümde yoktur.** Bir değer değil, bir **tip**
+  olarak `false`'tur; yani bu cümle bayatlayamaz. Akış biçimi yayımlanmadı ve
+  ölçülmedi, bu yüzden uydurulmadı.
+- **Araç çağrısı artık vardır ve nedeni ölçümdür.** Bu cümle eskiden akışla
+  aynıydı; sözleşme hesap sahibinin kendi anahtarıyla `chat/completions`
+  ucunda ölçüldükten sonra değişti (ADR-0012). Panel `tool_calls_supported`
+  değerinin yanında **neyin ölçüldüğünü** de gösterir; ölçüm yalnız o
+  protokol ailesi içindir ve diğerleri için bir şey iddia edilmez.
 - **Anahtarın bağlı olması dosya paylaşımı demek değildir.** Kaydedilmiş bir
   anahtar, bilgisayarınızdaki dosyaların modele gönderilebileceği anlamına
   gelmez.
 - **Model kataloğu bayat olabilir** ve panel bunu söyler.
 
-**Kısacası: bu sürümde OpenCode ile model çalıştıramazsınız.** Model lane'i
+**Kısacası (H4 öncesi cümle, tarihsel):** bu sürümde OpenCode ile model çalıştıramazsınız. Model lane'i
 kapalıdır; bu panel bir bağlantı kaydı ve bir katalogdur, bir çalıştırma
 yüzeyi değil.
 

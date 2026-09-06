@@ -458,17 +458,36 @@ export function OpenCodeConnectionPanel() {
           <Alert status="default">
             <Alert.Indicator />
             <Alert.Content>
-              <Alert.Title>Akis ve arac cagrisi bu surumde yok</Alert.Title>
+              <Alert.Title>
+                {protocols.tool_calls_supported
+                  ? "Akis bu surumde yok; arac cagrisi olculdu"
+                  : "Akis ve arac cagrisi bu surumde yok"}
+              </Alert.Title>
               <Alert.Description>
                 <span className="flex flex-col gap-2">
                   <span>{protocols.deferral}</span>
                   <span>{protocols.shape_provenance}</span>
-                  {/* `streaming_supported` and `tool_calls_supported` are
-                      `false` as *types*, not as values that happened to
-                      arrive false, so the words below cannot drift. */}
-                  <span className="font-mono text-xs">
-                    {`Protokol aileleri: ${protocols.protocols.join(", ")} · akis: yok · arac cagrisi: yok`}
+                  {/* `streaming_supported` is `false` as a *type* and the
+                      word beside it therefore cannot drift. `tool_calls_supported`
+                      is a plain `bool` since ADR-0012 measured the contract, so
+                      its word is **read from the value** rather than written
+                      out: the panel used to print "arac cagrisi: yok"
+                      unconditionally, which stayed on screen after the wire
+                      started saying otherwise. */}
+                  <span className="font-mono text-xs" data-testid="opencode-protocol-summary">
+                    {`Protokol aileleri: ${protocols.protocols.join(", ")} · akis: yok · arac cagrisi: ${
+                      protocols.tool_calls_supported ? "olculdu" : "yok"
+                    }`}
                   </span>
+                  {/* Empty until something is measured. A supported format
+                      with no provenance beside it would be exactly the
+                      unsourced claim ADR-0005 1.2 refuses, so the sentence
+                      travels with the capability rather than under it. */}
+                  {protocols.tool_call_provenance !== "" && (
+                    <span data-testid="opencode-tool-call-provenance">
+                      {protocols.tool_call_provenance}
+                    </span>
+                  )}
                 </span>
               </Alert.Description>
             </Alert.Content>

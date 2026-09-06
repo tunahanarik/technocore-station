@@ -57,10 +57,18 @@ EXPECTED_PATHS = {
     "/api/tasks/surface",
     "/api/tasks/{task_id}",
     "/api/tasks/{task_id}/transition",
+    "/api/tasks/{task_id}/publish-readiness",
     "/api/tasks/{task_id}/runs",
     "/api/tasks/{task_id}/runs/{run_id}/start",
     "/api/tasks/{task_id}/runs/{run_id}/stop",
     "/api/tasks/{task_id}/runs/{run_id}/resume",
+    # Package H4's planning lane. It lives in its own router
+    # (``routes/planner.py``) because ``routes/agent.py`` may not import
+    # ``station_api.opencode`` - ``test_agent_boundary`` reads its syntax
+    # tree and refuses it - but the paths hang off ``/api/tasks``, so they
+    # are part of the surface this inventory covers and are listed here.
+    "/api/tasks/{task_id}/model-plan",
+    "/api/tasks/{task_id}/model-plan/forget",
     "/api/activity",
     "/api/activity/delete",
 }
@@ -69,7 +77,10 @@ EXPECTED_PATHS = {
 #: every one of them is behind CSRF rather than checking one and assuming.
 STATE_CHANGING = (
     ("/api/tasks/{task_id}/transition", {"target": "blocked"}),
+    ("/api/tasks/{task_id}/publish-readiness", {}),
     ("/api/tasks/{task_id}/runs", {"steps": [], "test_condition": "x"}),
+    ("/api/tasks/{task_id}/model-plan", {"instruction": "TEST-ONLY"}),
+    ("/api/tasks/{task_id}/model-plan/forget", None),
     ("/api/activity/delete", {}),
 )
 

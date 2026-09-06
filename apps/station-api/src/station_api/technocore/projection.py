@@ -288,12 +288,6 @@ UNDERSTOOD_FIELD_KEYS: Final = frozenset({"type", "pattern", "minLength", "maxLe
 #: Understood inside one ``anyOf`` branch.
 UNDERSTOOD_BRANCH_KEYS: Final = frozenset({"required"})
 
-#: The fields a signed request body carries. Used to decide whether an
-#: ``anyOf`` branch is one a signed body can satisfy. ``from`` is absent on
-#: purpose: the reference ignores it on the signed lane, so Station does not
-#: have to send it and must not depend on a branch that requires it.
-_SIGNED_BODY_FIELDS: Final = frozenset({"did", "sig", "nonce"})
-
 #: Words that deny a contract rather than restate it. A description is not
 #: accepted merely because the right words appear in it: "86 characters, but
 #: no longer unpadded" contains every token and means the opposite.
@@ -887,6 +881,15 @@ STATION_FIELD_LENGTHS: Final[dict[str, SentLength]] = {
 #: are the same on both; the payload field is not. Everything the evaluator
 #: judges is judged against this set: a schema that requires a name absent
 #: here is a schema our request cannot satisfy.
+#:
+#: ``from`` is absent on purpose: the reference ignores it on the signed lane,
+#: so Station does not have to send it and must not depend on a branch that
+#: requires it. That rationale used to live on a second, lane-blind constant
+#: (``_SIGNED_BODY_FIELDS``) that this table superseded and that nothing read
+#: any more. It was removed rather than left beside its replacement, because
+#: it also omitted the payload field and would have judged every ``anyOf``
+#: branch against the wrong set the moment anyone wired it back up - the two
+#: constants that agree today and drift quietly that ADR-0004 2 names.
 PLANNED_BODY_FIELDS: Final[dict[Lane, frozenset[str]]] = {
     Lane.MESSAGE_BODY: frozenset({"did", "sig", "nonce", "text"}),
     Lane.MESSAGE_SIGNED: frozenset({"did", "sig", "nonce", "text"}),

@@ -6,12 +6,15 @@ import {
   fetchProof,
   fetchTasks,
   prepareProofShare,
+  takeProofArtifact,
   takeProofBundle,
   toApiError,
 } from "../../api/client";
 import type {
+  ProofArtifactStatus,
   ProofBundleFormat,
   ProofClaimStatus,
+  ProofMissingStatus,
   ProofWorkspace,
   TaskListResponse,
 } from "../../api/types";
@@ -71,14 +74,43 @@ import { StatusPill } from "../StatusPill";
 // --- vocabulary ------------------------------------------------------------
 
 /** Which action a failure came from; only the plain reads repeat safely. */
-type Step = "read" | "proof" | "prepare" | "share";
+type Step = "read" | "proof" | "prepare" | "share" | "artifact";
 
 const ERROR_TITLE: Record<Step, string> = {
   read: "Gorev listesi okunamadi",
   proof: "Kanit calisma alani okunamadi",
   prepare: "Paylasim onayi hazirlanamadi",
   share: "Paket teslim edilemedi",
+  // Kept apart from `share`, because the two failures have different
+  // remedies: a bundle that could not be built and a *body* that was left out
+  // of one are different findings, and the second one names a ceiling, a
+  // secret-pattern hit or bytes that are not UTF-8.
+  artifact: "Dosya teslim edilemedi",
 };
+
+/**
+ * The prefix the bundle uses for a file whose **body** could not be carried.
+ *
+ * The entry itself carries the reason, and the document repeats it in its
+ * `missing` list under this key so a reader meets the absence instead of
+ * having to notice it. Reading it back out here is how the artifact table can
+ * say, per file, whether its contents travelled - the workspace response
+ * carries the exclusion as a named gap, and nowhere else.
+ */
+const ARTIFACT_BODY_PREFIX = "artifact_body.";
+
+/** The named exclusions, keyed by the file name they belong to. */
+function bodyExclusions(
+  missing: readonly ProofMissingStatus[],
+): ReadonlyMap<string, ProofMissingStatus> {
+  const byName = new Map<string, ProofMissingStatus>();
+  for (const entry of missing) {
+    if (entry.key.startsWith(ARTIFACT_BODY_PREFIX)) {
+      byName.set(entry.key.slice(ARTIFACT_BODY_PREFIX.length), entry);
+    }
+  }
+  return byName;
+}
 
 /**
  * The three claims, in the user's language.
@@ -132,6 +164,11 @@ export function ProofWorkspacePanel() {
   const [expiresIn, setExpiresIn] = useState(0);
   const [acknowledged, setAcknowledged] = useState(false);
   const [delivered, setDelivered] = useState<ProofBundleFormat | null>(null);
+  /** The one file handed over, and the digest the server sent beside it. */
+  const [deliveredFile, setDeliveredFile] = useState<{
+    readonly name: string;
+    readonly sha256: string;
+  } | null>(null);
   const [spent, setSpent] = useState(false);
 
   const loadTasks = useCallback(async (): Promise<void> => {
@@ -163,6 +200,7 @@ export function ProofWorkspacePanel() {
     setTokenDigest("");
     setExpiresIn(0);
     setDelivered(null);
+    setDeliveredFile(null);
     setSpent(false);
     setAcknowledged(false);
   }
@@ -210,6 +248,7 @@ export function ProofWorkspacePanel() {
       setTokenDigest(result.workspace.bundle_sha256);
       setExpiresIn(result.expires_in_seconds);
       setDelivered(null);
+      setDeliveredFile(null);
       setSpent(false);
     } catch (caught) {
       setError(toApiError(caught));
@@ -251,6 +290,49 @@ export function ProofWorkspacePanel() {
     } catch (caught) {
       setError(toApiError(caught));
       setStep("share");
+    } finally {
+      setShareToken("");
+      setBusy(null);
+    }
+  }
+
+  /**
+   * Spend the approval and take **one produced file**, as the file.
+   *
+   * The same approval the bundle download spends, and the same rule about
+   * spending it: `spent` is set before the request is awaited, because the
+   * token is spent by the *attempt*. Taking a file and taking the bundle are
+   * therefore alternatives rather than a sequence - one approval, one
+   * delivery - and the surface says so above the controls.
+   *
+   * The download name is the name from the listing on screen, which is the
+   * same value that was sent. It is not read back from the response: a
+   * server-chosen filename is a value this side would be writing to disk
+   * without having looked at it, and the workspace's own allow-list is what
+   * makes this one safe.
+   */
+  async function shareArtifact(name: string): Promise<void> {
+    if (busy !== null || selected === "" || shareToken === "" || !acknowledged) return;
+    setBusy("artifact");
+    setError(null);
+    setSpent(true);
+    try {
+      const { blob, sha256 } = await takeProofArtifact({
+        taskId: selected,
+        shareToken,
+        name,
+        acknowledged: true,
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = name;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setDeliveredFile({ name, sha256 });
+    } catch (caught) {
+      setError(toApiError(caught));
+      setStep("artifact");
     } finally {
       setShareToken("");
       setBusy(null);
@@ -326,10 +408,12 @@ export function ProofWorkspacePanel() {
             acknowledged={acknowledged}
             busy={busy}
             delivered={delivered}
+            deliveredFile={deliveredFile}
             expiresIn={expiresIn}
             onAcknowledge={setAcknowledged}
             onPrepare={() => void prepare()}
             onShare={(format) => void share(format)}
+            onShareArtifact={(name) => void shareArtifact(name)}
             proof={proof}
             shareToken={shareToken}
             spent={spent}
@@ -427,6 +511,10 @@ function HashScope({ proof }: { readonly proof: ProofWorkspace }) {
 // --- the produced files ----------------------------------------------------
 
 function ArtifactRegion({ proof }: { readonly proof: ProofWorkspace }) {
+  const exclusions = bodyExclusions(proof.missing);
+  const embedded = proof.artifacts.filter((file) => !exclusions.has(file.name));
+  const embeddedBytes = embedded.reduce((total, file) => total + file.byte_count, 0);
+
   return (
     <section aria-label="Uretilen dosyalar" className="flex flex-col gap-2">
       <h4 className="text-xs font-semibold text-foreground">Uretilen dosyalar</h4>
@@ -463,16 +551,64 @@ function ArtifactRegion({ proof }: { readonly proof: ProofWorkspace }) {
           olmadigi anlamina gelir ve eksikler asagida adiyla listelenir.
         </p>
       ) : (
-        <ul className="flex flex-col gap-1" data-testid="proof-artifacts">
-          {proof.artifacts.map((file) => (
-            <li className="flex flex-col gap-1 rounded-lg border border-border p-2" key={file.name}>
-              <span className="text-xs font-medium text-foreground">{file.name}</span>
-              <span className="font-mono text-xs text-muted">
-                {`${String(file.byte_count)} bayt · ozet ${shortDigest(file.sha256)}`}
-              </span>
-            </li>
-          ))}
-        </ul>
+        <>
+          {/* Two counts, and where they come from, in the same breath. The
+              workspace response carries the listing and the named exclusions;
+              it does not carry an embedded total, so these are derived here
+              and say so rather than being presented as the document's own
+              numbers. */}
+          <p className="font-mono text-xs text-muted" data-testid="proof-embedded-count">
+            {`Govdesi pakete alinan dosya: ${String(embedded.length)} / ${String(
+              proof.artifacts.length,
+            )} · govdesi pakete alinan bayt: ${String(embeddedBytes)}`}
+          </p>
+          <p className="text-xs text-muted" data-testid="proof-embedded-derivation">
+            Bu iki sayi paketin kendi ozet satirindan degil, yukaridaki dosya
+            listesi ile asagida adiyla yazilan dislama gerekcelerinden
+            turetilmistir. Govdesi disarida birakilan bir dosya adiyla, bayt
+            sayisiyla ve ozetiyle listede kalir: dislama dosyayi degil, yalnizca
+            icerigin pakete alinmasini engeller.
+          </p>
+
+          <ul className="flex flex-col gap-1" data-testid="proof-artifacts">
+            {proof.artifacts.map((file) => {
+              const excluded = exclusions.get(file.name);
+              return (
+                <li
+                  className="flex flex-col gap-1 rounded-lg border border-border p-2"
+                  data-testid={`proof-artifact-${file.name}`}
+                  key={file.name}
+                >
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-medium text-foreground">{file.name}</span>
+                    {/* `inactive`, never `problem`: a body left out of the
+                        bundle is a stated decision with a reason, not a
+                        failure of the file. */}
+                    <StatusPill
+                      label={
+                        excluded === undefined
+                          ? "govdesi pakette"
+                          : "govdesi pakete alinmadi"
+                      }
+                      tone={excluded === undefined ? "ok" : "inactive"}
+                    />
+                  </span>
+                  <span className="font-mono text-xs text-muted">
+                    {`${String(file.byte_count)} bayt · ozet ${shortDigest(file.sha256)}`}
+                  </span>
+                  {excluded !== undefined && (
+                    <span
+                      className="text-xs text-muted"
+                      data-testid={`proof-artifact-excluded-${file.name}`}
+                    >
+                      {excluded.detail}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </>
       )}
     </section>
   );
@@ -571,11 +707,16 @@ function ClaimRegion({ proof }: { readonly proof: ProofWorkspace }) {
         yukarida yazilidir.
       </p>
 
+      {/* The sentence changed when the derivation route arrived; the rule it
+          protects did not. What was missing was a way to *reach* the state,
+          and what is still absent - here and everywhere - is a way to *ask*
+          for it (SI-222). */}
       <p className="text-xs text-muted" data-testid="proof-publish-unreachable">
-        Uc yayim alani ayri ayri dogrulanmis olsa bile gorevi &quot;Yayima
-        hazir&quot; durumuna tasiyan bir kullanici yolu bu surumde yoktur.
-        &quot;Yayima hazir&quot; kanittan turetilir, istenemez; bu ekranda onu
-        isteyen bir dugme bulunmamasinin sebebi budur.
+        &quot;Yayima hazir&quot; kanittan turetilir ve istenemez; bu ekranda onu
+        isteyen bir dugme bulunmamasinin sebebi budur. Yayin hazirligini
+        degerlendiren islem &quot;Gorevler&quot; bolumundedir ve o da durumu
+        adiyla hedefleyemez: istegi bir hedef alani tasimaz, uc kanit alanini
+        yeniden okutur ve karari kapi verir.
       </p>
     </section>
   );
@@ -591,10 +732,12 @@ function ShareRegion({
   acknowledged,
   busy,
   delivered,
+  deliveredFile,
   spent,
   onAcknowledge,
   onPrepare,
   onShare,
+  onShareArtifact,
 }: {
   readonly proof: ProofWorkspace;
   readonly shareToken: string;
@@ -603,12 +746,18 @@ function ShareRegion({
   readonly acknowledged: boolean;
   readonly busy: Step | null;
   readonly delivered: ProofBundleFormat | null;
+  readonly deliveredFile: { readonly name: string; readonly sha256: string } | null;
   readonly spent: boolean;
   readonly onAcknowledge: (next: boolean) => void;
   readonly onPrepare: () => void;
   readonly onShare: (format: ProofBundleFormat) => void;
+  readonly onShareArtifact: (name: string) => void;
 }) {
   const stale = tokenDigest !== "" && tokenDigest !== proof.bundle_sha256;
+  const exclusions = bodyExclusions(proof.missing);
+  const deliverable: readonly ProofArtifactStatus[] = proof.artifacts.filter(
+    (file) => !exclusions.has(file.name),
+  );
 
   return (
     <section aria-label="Paketi disariya al" className="flex flex-col gap-3">
@@ -642,6 +791,12 @@ function ShareRegion({
                 tarayiciniza teslim edilir. Paylasilan dosya bu istasyonun
                 topladigi malzemeyi tasir ve icindeki eksikler adiyla
                 yazilidir.
+              </span>
+              <span data-testid="proof-share-one-delivery">
+                Bir onay bir teslim eder. Paketi indirmek ile tek bir dosyayi
+                indirmek ayni onayi harcayan iki secenektir, art arda yapilan
+                iki islem degil: ikincisi icin yeniden onay hazirlamaniz
+                gerekir.
               </span>
             </span>
           </Alert.Description>
@@ -682,6 +837,43 @@ function ShareRegion({
         ))}
       </div>
 
+      {/* --- one produced file, as the file ---------------------------- */}
+      <div className="flex flex-col gap-2" data-testid="proof-artifact-delivery">
+        <h5 className="text-xs font-semibold text-foreground">Tek dosya indir</h5>
+        <p className="text-xs text-muted" data-testid="proof-artifact-delivery-rule">
+          Paket, gorev hakkindaki belgedir; bu ise dosyanin kendisidir. Ayni
+          tek kullanimlik onaydan gecer, ayni sekilde hicbir yola yazilmaz ve
+          dosya duz metin olarak, ek olarak teslim edilir - tarayicida
+          calistirilabilecek bir bicimde degil. Sunucu dosyanin kendi SHA-256
+          ozetini yanit basliginda gonderir; asagida gorunen sayi odur, bu
+          ekranin hesapladigi bir sey degil.
+        </p>
+
+        {deliverable.length === 0 ? (
+          <p className="text-xs text-muted" data-testid="proof-artifact-delivery-none">
+            Govdesi teslim edilebilecek bir dosya yok. Bu, dosya olmadigi
+            anlamina gelmeyebilir: yukarida govdesi pakete alinmamis dosyalar
+            varsa gerekcesi orada adiyla yazilidir ve o dosyalarin icerigi bu
+            surumde teslim edilemez.
+          </p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {deliverable.map((file) => (
+              <Button
+                data-testid={`proof-take-${file.name}`}
+                isDisabled={busy !== null || shareToken === "" || !acknowledged}
+                key={file.name}
+                onPress={() => onShareArtifact(file.name)}
+                size="sm"
+                variant="secondary"
+              >
+                {busy === "artifact" ? "Teslim ediliyor..." : `${file.name} dosyasini indir`}
+              </Button>
+            ))}
+          </div>
+        )}
+      </div>
+
       <p className="text-xs text-muted" data-testid="proof-share-state">
         {shareToken !== ""
           ? `Onay hazir ve harcanmadi. ${String(
@@ -696,6 +888,14 @@ function ShareRegion({
         <p className="text-xs text-muted" data-testid="proof-share-stale">
           Ekrandaki paketin ozeti, onayin bagli oldugu ozetten farkli. Bu onay
           artik eslesmez; yeni paketi okuyup yeni bir onay hazirlayin.
+        </p>
+      )}
+
+      {deliveredFile !== null && (
+        <p className="text-xs text-muted" data-testid="proof-artifact-result">
+          {`Dosya tarayiciya verildi: ${deliveredFile.name}. Sunucunun bildirdigi dosya ozeti: ${
+            deliveredFile.sha256 === "" ? "(baslik gelmedi)" : shortDigest(deliveredFile.sha256)
+          }. Bir ozet dosyanin bayt bakimindan ayni oldugunu tanimlar; icerigin dogrulugu hakkinda hicbir sey soylemez.`}
         </p>
       )}
 

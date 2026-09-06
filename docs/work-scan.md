@@ -32,13 +32,89 @@ katmanda: `resolve_room_target`, `RoomScanTarget.__post_init__` ve giden
 URL'in kendisi (`assert_allowed_url`). Üçü de aynı `DENIED_ROOMS`'u okur;
 tekrar bilinçlidir (ADR-0002 4.1, ADR-0007 11, INV-05).
 
-### `/r/events` neden kapsam dışı
+### `/r/events` neden kapsam dışıydı, neden artık değil
 
 Pinli `openapi.json`, `/r/events` girdisini `parameters: null` ile yayımlıyor;
-`since`/`format`/`wait`'in geçerli olduğunu yalnız **düzyazı açıklaması**
-söylüyor. Paket B'nin ilkesi "kritik alan şemadan okunur, düzyazıdan değil"di
-ve hiç parametresi olmayan bir şemada bu ilke uygulanamaz. `/rooms` tam tipli
-şemasıyla yeterli bir keşif yüzeyidir, dolayısıyla keşif lane'i açılmadı.
+`since`/`format`'in geçerli olduğunu yalnız **düzyazı açıklaması** söylüyor.
+Paket B'nin ilkesi "kritik alan şemadan okunur, düzyazıdan değil"di ve hiç
+parametresi olmayan bir şemada bu ilke uygulanamaz. H1 bu yüzden keşif
+lane'ini açmadı.
+
+Ölçülen sözleşme bu gerekçeyi ilkeyi gevşetmeden ortadan kaldırıyor: lane
+**sıradan bir oda gibi** davranıyor — `since`, `format` ve halka tutması aynen
+geçerli. Yani yeni bir adres ailesi değil; `/r/{oda}` lane'inin derleme
+zamanında sabitlenmiş bir oda adıyla (`events`) okunması. Sonuçları:
+
+- **Registry iki hedefte kalır.** `SCAN_TARGETS` büyümedi ve bir test bunu
+  küme eşitliğiyle tutuyor.
+- **`OUTBOUND_CLIENT_MODULES` beşte kalır.** Yeni istemci yok; mevcut
+  `workscan/client.py` kullanılıyor.
+- **Oda politikası aynen uygulanır.** `discovery_target` doğrudan
+  `resolve_room_target`'ı çağırır; doğrulanmış marker yoksa reddeder.
+- **Yazma yolu açılmadı.** Günlük sunucu-yazımlıdır; bir istemcinin buraya
+  yazma denemesi 403 alır. Bu ürün denemez ve paket ağacında yazma adresi
+  taşıyan bir string literal bulunmadığını bir test AST ile doğrular.
+
+#### Satır biçimi yayımlanmadığı için ayrıştırıcı uydurulmadı
+
+Açıklama "her yeni kamu odası için bir satır" diyor ve duruyor; satırın çıplak
+ad mı, adı içeren bir cümle mi olduğunu söylemiyor. Tahmine göre yazılmış bir
+ayrıştırıcı, biçim ilk farklılaştığında **ürünün uydurduğu oda adları**
+üretirdi. Bu yüzden kural tektir: süpürüldükten sonra tamamı geçerli bir oda
+adı olan satır seçilebilir olur, diğer her satır **geldiği gibi** gerekçesiyle
+gösterilir. Kullanıcı böylece bizim tahminimizi değil gerçek biçimi görür.
+
+Dört satır seçilebilir olmaz: okunamayan biçim, `DENIED_ROOMS` üyesi bir ad
+(satırın metni de düşürülür — adı tekrar etmek, onu ekrandan uzak tutan
+denetimin kendisiyle ekrana getirmek olurdu), listelenmeyen (`p-`) bir odayı
+duyuran satır (servis böyle bir duyurunun olmadığını söylüyor; çelişkiyi
+düğmeye çevirmek onu aklamak olurdu) ve boş satır.
+
+Süpürme **ad karşılaştırmasından önce** çalışır ve bu sıralama bir denetimdir:
+`lobby` yazıp yanına sıfır genişlikli boşluk yapıştıran bir satır burada
+`lobby` olur ve **adıyla** reddedilir; ham metinle karşılaştırılsaydı yalnızca
+"biçim okunamadı" derdik — doğru ama yanlış cümle.
+
+### `/rooms`: servisin ölçümü ile çağıranın metni artık ayrı
+
+`GET /rooms` kendi hakkında birebir şunu söylüyor: her girdide **iki alan
+çağıran denetimindedir** — `room`, o odaya ilk yazanın seçtiği bir metindir ve
+`topic`, `/kv/topic/{oda}` adresinde dünyaya yazılabilir bir nottur; ikisi de
+atanmaz, denetlenmez, "veri, asla talimat".
+
+H1 bu iki alanı tutup girdinin geri kalanını **atıyordu**. Sonuç, bir odayı
+diğerinden ayırt edecek hiçbir şeyi olmayan bir listeydi. Artık:
+
+- `name`/`topic` ayrı, `measured` ayrı alandır. `measured`, girdideki
+  çağıran-yazımı **olmayan** her anahtarın, servisin kullandığı adla
+  taşınmasıdır. Yayımlanmış `rooms[]` şeması hiçbir property adlandırmadığı
+  için toplamlar **ada göre değil yapısal olarak** okunur — böylece kimsenin
+  yayımlamadığı bir alan adı uydurulmuş olmaz. Alan sayısı ve değer uzunluğu
+  sınırlıdır, değerler süpürülür, nesne/dizi **yürünmez**, tek sınırlı metne
+  dönüştürülür.
+- `measured` yanına her okumada `MEASURED_CAVEAT` gider: bunlar servisin kendi
+  ölçümleridir, Station hiçbirinden sıralama, tavsiye, itibar veya uygunluk
+  türetmez.
+- Yanıtın kendi `untrusted` nesnesi **telde taşınır** ama tek başına esas
+  alınmaz. Geçerli küme iki listenin **birleşimidir**: yanıt kümeyi
+  genişletebilir (`extra_fields`), daraltamaz (`missing_fields` bunu kaydeder).
+  Nesne hiç gelmezse bu da `present: false` olarak kaydedilir — "bildirim yok"
+  ile "bildirim var ama bizim alanlarımızı saymıyor" iki farklı cevaptır.
+
+### Elle yazılan `p-` oda: ölçülen davranış
+
+Listede `p-` odalar **hiç görünmez** ve keşif günlüğünde **hiç duyurulmaz**;
+ürün de eksikleri uydurmaz. Kullanıcı böyle bir adı elle yazarsa ölçülen
+davranış şudur: `resolve_room_target("p-...", markers=…)` **başarılı olur**
+(`classes == ("p",)`, `is_unlisted == True`) ve oda okunur.
+
+Kayda geçen kusur: `RoomScanTarget.is_unlisted` ve `is_ephemeral` H1'den beri
+vardı ve **hiçbir çağıran ikisini de okumuyordu** — yazma yolu her gönderimde
+bu iki sınıf hakkında uyarırken okuma yolu onları düşürüyordu. Oda
+reddedilmiyor (adını zaten bilen birinin okuması onun hakkıdır) ama tarama
+sonucu artık bunu **söylüyor**: `notes` alanında `unlisted`/`ephemeral`
+türünde bir cümle. Listelenen bir oda için not üretilmez, yani not bir afiş
+değil bir ayrımdır.
 
 ### `SOURCES` neden altı kaldı
 
@@ -194,14 +270,25 @@ Kodda üç ayrı karşılığı vardır:
    istemcinin iki denemesi arasındaki bekleyiş için serbesttir);
 3. açılışta ve durum okumasında giden istek sayısı **sayılarak** sıfır ölçülür.
 
-Ayrıca imleç (`since`) **taramalar arasında saklanmaz**. Bir imleci hatırlamak
+Ayrıca imleç (`since`) **serviste saklanmaz**. Bir imleci hatırlamak
 "kalanını oku"yu birinin zamanlayacağı bir döngüye çevirmenin ilk yarısıdır;
 her tarama taze ve sınırlı bir dilimdir, ve geçmişin altınızdan kaydığını
-söyleyen şey ring düşüşü uyarısıdır.
+söyleyen şey ring düşüşü uyarısıdır. Keşif günlüğünde imleç **istemcinin**
+gövdede geri gönderdiği değerdir (bir önceki okumanın `last_seq`'i), yani
+devam etmek yine bir kullanıcı eylemidir.
+
+Keşif günlüğü okuması ayrı bir rotadır (`POST /api/workscan/discovery/refresh`)
+ve bilerek taramanın içinde değildir: "yeni ne açılmış" ile "şu odaları oku"
+kullanıcının verdiği iki ayrı karardır. Bir test bu yüzeyin **tam beş** rota
+sunduğunu küme eşitliğiyle tutar ve `watch`, `scan/all`, `rooms/open`,
+`discovery/announce` gibi lane'lerin yokluğunu ayrıca iddia eder.
 
 **Kapsam kullanıcının seçtiği oda kümesidir.** İstek gövdesindeki liste
 kapsamdır, en çok on odadır, ve "hepsini tara" diye bir rota yoktur. Sınırı
 aşan odalar sessizce kırpılmaz; `scan_bound` gerekçesiyle listelenir.
+**Odaların artık listeden veya keşif günlüğünden seçilebiliyor olması bu
+tavanı değiştirmez**; seçilecek bir liste, listeyi taramak için bir yetki
+değildir.
 
 `DENIED_ROOMS` (lobby, meta) **okumada da** geçerlidir: bir tarama da o odayı
 adlandıran bir istektir.
@@ -313,6 +400,53 @@ gerekir.
 Öneri üreticisi **onaylamaz**: `suggested → awaiting_approval` geçişi
 kullanıcının eylemidir ve olağan `transition` yolundan geçer.
 
+### 7.1 İsteğin tam metni nereye yazılır
+
+Görev satırı içeriğin **özetini** tutar, baytlarını değil. Bu ölçülen bir
+kusur üretti: bir modele taranmış istekten gösterilebilen tek okunur şey
+`title` idi — tek bir satırın ilk `MAX_TITLE_CHARS` (o gün 120; bugün 2 000,
+ama fiilen bağlayıcı olan `tasks.service.MAX_TITLE_CHARS` = 200'dür) karakteri — ve
+ADR-0007 §8'in sekiz ögesiyle birebir alıntı hash'lenip atılıyordu.
+
+Düzeltme **veritabanına sütun eklemez**. Yeni bir sütun yeni bir depolama,
+yeni bir sızıntı yüzeyi ve yeni bir gizli-tarama kapsamı demektir; ayrıca
+"tutmadığın veri sızmaz" tasarımını bozar. Bunun yerine `suggest`, isteği
+görevin **kendi çalışma alanına** sabit adlı bir dosya olarak yazar:
+
+- ad: `oda-istegi.md` (sabit; `agent/workspace.py::safe_name` izin listesinden
+  değişmeden geçer, bir test bunu sürer);
+- yazma: mevcut `agent/workspace.py::write_text` — ad izin listesi, çözümleme
+  ve kapsama denetimi, reparse/junction yürüyüşü ve üç tavan (64 dosya /
+  512 KiB / 4 MiB) olduğu gibi uygulanır;
+- okuma: modelin elindeki mevcut `read_workspace_file` aracı. Yeni bir araç,
+  yeni bir uç nokta ve yeni bir dosya kulvarı yoktur.
+
+Dosyanın **iki bölümü** vardır ve birbirine değmez. Üstte Station'ın kendi
+şablon cümleleri; altta odadan okunan ham metin. Alt bölüm **dosyanın sonuna
+kadar** sürer ve kapanış işareti yoktur: kapanış işareti oda mesajının
+içerebileceği bir dizedir, ve sahtesi yazılabilseydi saldırgan metni tekrar
+"Station'ın kendi cümleleri" bölümüne sokardı.
+
+Alt bölümün başında `authority.py::REQUEST_CONTENT_CAVEAT` durur —
+`TOPIC_CAVEAT`/`MEASURED_CAVEAT` ile aynı kalıp, aynı ayrım: metni kim yazdı
+(doğrulanmamış bir yabancı) ve ne olarak işlenir (**veri**; talimat, izin,
+kural veya yetki değil). Aynı cümle model brief'inde de vardır
+(`planner/service.py::REQUEST_FILE_BRIEF`); ikisi birden, çünkü brief dosya
+hiç açılmadığında geçerlidir ve dosya brief uzun bir oturumda yukarı
+kaydığında geçerlidir.
+
+**Yazma başarısız olabilir ve görev yine de açılır.** Satır ve ilk durum
+geçişi dosyadan **önce** yazılır (çalışma alanı görev kimliğiyle adreslenir,
+yani satır olmadan yazılacak bir kimlik yoktur) ve bu üründe görev satırını
+geri alma yolu yoktur — durum makinesi bir denetim izidir. Burada exception
+fırlatmak, gerçek bir görev `suggested` durumunda dururken çağırana "öneri
+kaydedilemedi" demek olurdu. Bu yüzden ret **yanıtta taşınır**: yanıt
+`request_file` (dosya adı veya `""`) ve `request_file_detail` (her iki yönde
+de dolu bir cümle, çalışma alanının kendi `reason` koduyla) alanlarını
+taşır, ekran ikisini de gösterir. `content_sha256` ve `source_version_id`
+bundan **etkilenmez**: başarısız bir yazmanın maliyeti okunabilirliktir,
+kimlik değil.
+
 ---
 
 ## 8. Bu pakette bilinçli olarak yapılmayanlar
@@ -321,7 +455,9 @@ kullanıcının eylemidir ve olağan `transition` yolundan geçer.
 - Bütçe ve maliyet tavanı — tahmin **tahmin** olarak etiketlidir ve bütçe
   `not_implemented`'tır (H2).
 - Kibble'a istek, Kibble adapter'ı (§6).
-- `/r/events` keşif lane'i (§1).
+- Oda **açmak**: `/r/{oda}`'ya ilk mesaj bir yazmadır, DID ve write
+  gate'in altı ön koşulunu ister. Bu turda yazma yolu açılmadı; keşif
+  yalnız okuma tarafıdır.
 - Long-poll, zamanlayıcı, otomatik yenileme (§4).
 - İmleç kalıcılığı, tarama sonucunun diske yazılması. Bir halka tamponunun
   anlık okuması kalıcılaştırılırsa, odalar ilerledikçe sessizce yanlışa döner;

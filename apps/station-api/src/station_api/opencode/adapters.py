@@ -58,20 +58,91 @@ SHAPE_PROVENANCE = (
     "hesabin sahibine aittir."
 )
 
-#: Cap on a request body. Small on purpose: this lane carries a credential
-#: and a metered call, and neither benefits from an unbounded body.
-MAX_REQUEST_BYTES = 256 * 1024
+#: Cap on a request body. Bounded on purpose: this lane carries a credential
+#: and a metered call, and neither benefits from an *unbounded* body.
+#:
+#: It was ``256 KiB``, and that stopped being a bound on nothing the day the
+#: planner's own truncation guards were raised. **Measured** with the raised
+#: guards in place: a session's second turn - one full-size instruction plus
+#: the eight tool results one turn may produce - builds a body of about
+#: 293 000 bytes and was refused here, which is a hard
+#: ``OpenCodeResponseError`` in the middle of a working session rather than
+#: any kind of protection. A cap that fires on ordinary use is a defect
+#: wearing a limit's clothes.
+#:
+#: 2 MiB is derived from the worst case the ceilings above it permit rather
+#: than picked: eight turns at ``MAX_INSTRUCTION_CHARS`` (32 000) plus the
+#: 32 tool results ``RunCeiling.max_tool_calls`` allows at
+#: ``MAX_TOOL_RESULT_CHARS`` (32 000) plus the tool-registry envelope is
+#: about 1.3 MB, and 2 MiB is the next power of two above it with room for
+#: the JSON escaping of non-ASCII text. It stays below
+#: :data:`MAX_RESPONSE_BYTES` (4 MiB), which is the ordering that was already
+#: here.
+#:
+#: What did **not** change: this is still the only thing that keeps a body
+#: bounded at all, it is still checked before a single byte leaves, and the
+#: ceilings that decide what a session may *spend* - ``max_model_calls`` and
+#: ``max_wall_clock_seconds`` - are untouched.
+MAX_REQUEST_BYTES = 2 * 1024 * 1024
 
 #: Cap on a parsed response document.
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
 #: Default output ceiling for the family that requires one. Named rather than
 #: inlined so a reader sees that a bound exists at all.
-DEFAULT_MAX_OUTPUT_TOKENS = 1024
+#:
+#: **This is a truncation guard, not a spend control.** The ceiling that
+#: bounds what a session may cost is the model-call count
+#: (``station_api.agent.budget.RunCeiling.max_model_calls``): ADR-0008 4
+#: refused token and currency as ceiling units, and ADR-0012 3 kept that
+#: refusal after the provider began reporting ``usage`` and ``cost``, because
+#: both are the provider's statement rather than our measurement. What this
+#: number does is keep an answer from being cut off before it finishes. A
+#: reader who takes it for a budget will lower it to save money and
+#: reintroduce the defect it was raised to fix.
+#:
+#: It was ``1024``, and ``1024`` was **measured** to be too small. One live
+#: planning turn against this provider - the whole tool registry offered, a
+#: real task brief - answered with ``completion_tokens`` of exactly 1024 and
+#: ``finish_reason: "length"``. The model spent the entire ceiling and was
+#: cut off before it could name a tool. These models emit
+#: ``reasoning_content`` (ADR-0012; it is discarded in
+#: :func:`station_api.opencode.planner.parse_plan_response`) and that
+#: reasoning is charged against this same ceiling, so the budget was gone
+#: before the part we asked for began.
+#:
+#: It was then ``4096``, derived by adding the observed 1024 of reasoning to
+#: the token-equivalent of one full-size ``arguments`` string and rounding up
+#: to a power of two. That arithmetic was sound and the number it produced was
+#: still a guess dressed as a derivation - it assumed one call, of the
+#: maximum size, after the amount of reasoning that happened to be measured
+#: once.
+#:
+#: **It is now ``131072``, and the reason is that this number should stop
+#: being interesting.** ``max_tokens: 200000`` was sent to this provider and
+#: accepted (``200``), so the request is not refused for asking; unused output
+#: tokens are not billed, so asking for headroom costs nothing; and a ceiling
+#: whose only job is to keep an answer from being cut off mid-sentence does
+#: that job best when it is far above any answer. 131072 is the largest power
+#: of two below the accepted 200000.
+#:
+#: **Past this point the number is not the binding constraint and should not
+#: be read as one.** What actually stops a runaway turn is the 120-second read
+#: timeout in :data:`station_api.opencode.client.TIMEOUT`: a response still
+#: arriving after two minutes is abandoned whatever this says. What bounds
+#: spend is still ``max_model_calls``, unchanged at 8. Lowering this constant
+#: buys nothing and reintroduces the truncation it was raised to remove.
+DEFAULT_MAX_OUTPUT_TOKENS = 131_072
 
 #: Status codes we can name. Anything else is ``PROVIDER_ERROR``: an error we
 #: can see and will not pretend to have classified.
-_STATUS_FAILURES: dict[int, FailureKind] = {
+#:
+#: Public rather than private since Package H4, because the tool-call adapter
+#: in :mod:`station_api.opencode.planner` reads the **same** mapping. Two
+#: copies of "which HTTP status means which failure" is the duplication
+#: ADR-0004 2 named, and the version that drifts is always the one on the
+#: newer lane.
+STATUS_FAILURES: dict[int, FailureKind] = {
     401: FailureKind.INVALID_CREDENTIAL,
     403: FailureKind.FORBIDDEN_MODEL,
     404: FailureKind.MODEL_NOT_FOUND,
@@ -201,7 +272,7 @@ def parse_response(
     # The status line first, but the body still parsed above so a named
     # failure can carry the provider's own words as data.
     if raw.status_code != 200:
-        kind = _STATUS_FAILURES.get(raw.status_code)
+        kind = STATUS_FAILURES.get(raw.status_code)
         if kind is None:
             kind = (
                 FailureKind.SERVER_ERROR
@@ -445,6 +516,7 @@ __all__ = [
     "MAX_REQUEST_BYTES",
     "MAX_RESPONSE_BYTES",
     "SHAPE_PROVENANCE",
+    "STATUS_FAILURES",
     "build_request",
     "parse_response",
 ]
