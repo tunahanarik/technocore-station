@@ -1,0 +1,1 @@
+Gece otomasyonu bağlantı testi.
